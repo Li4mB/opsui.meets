@@ -1,0 +1,23 @@
+{
+  "name": "@opsui/shared-types",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./analytics": "./src/analytics.ts",
+    "./audit": "./src/audit.ts",
+    "./auth": "./src/auth.ts",
+    "./events": "./src/events.ts",
+    "./meetings": "./src/meetings.ts",
+    "./participants": "./src/participants.ts",
+    "./policies": "./src/policies.ts",
+    "./permissions": "./src/permissions.ts",
+    "./recordings": "./src/recordings.ts",
+    "./rooms": "./src/rooms.ts",
+    "./templates": "./src/templates.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

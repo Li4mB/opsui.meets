@@ -1,0 +1,33 @@
+{
+  "name": "opsui-meets-auth",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-26",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "auth.opsuimeets.com",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "COOKIE_DOMAIN": ".opsuimeets.com",
+    "ALLOW_MOCK_AUTH": "false",
+    "APP_ENV": "production",
+    "DEFAULT_WORKSPACE_ID": "workspace_local",
+    "MOCK_SESSION_SIGNING_SECRET": "replace-me-in-real-envs",
+    "MOCK_AUTH_DEFAULT_EMAIL": "",
+    "AUTH_MEMBERSHIP_DIRECTORY_JSON": "{\"users\":[]}",
+    "AUTH_ENFORCE_MEMBERSHIP_DIRECTORY": "true",
+    "OIDC_SCOPE": "openid profile email",
+    "OIDC_WORKSPACE_CLAIM": "workspace_id",
+    "OIDC_EMAIL_DOMAIN_WORKSPACE_MAP": "{}",
+    "OIDC_ALLOWED_WORKSPACE_IDS": "",
+    "OIDC_ROLE_CLAIM": "role",
+    "OIDC_DEFAULT_ROLE": "participant"
+  },
+  "analytics_engine_datasets": [
+    {
+      "binding": "ANALYTICS"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+export interface Env {
+  COOKIE_DOMAIN: string;
+  ALLOW_MOCK_AUTH?: string;
+  APP_ENV?: string;
+  DEFAULT_WORKSPACE_ID?: string;
+  MOCK_SESSION_SIGNING_SECRET?: string;
+  MOCK_AUTH_DEFAULT_EMAIL?: string;
+  AUTH_MEMBERSHIP_DIRECTORY_JSON?: string;
+  AUTH_ENFORCE_MEMBERSHIP_DIRECTORY?: string;
+  OIDC_ISSUER_URL?: string;
+  OIDC_CLIENT_ID?: string;
+  OIDC_CLIENT_SECRET?: string;
+  OIDC_REDIRECT_URI?: string;
+  OIDC_SCOPE?: string;
+  OIDC_AUTHORIZATION_ENDPOINT?: string;
+  OIDC_TOKEN_ENDPOINT?: string;
+  OIDC_USERINFO_ENDPOINT?: string;
+  OIDC_WORKSPACE_CLAIM?: string;
+  OIDC_EMAIL_DOMAIN_WORKSPACE_MAP?: string;
+  OIDC_ALLOWED_WORKSPACE_IDS?: string;
+  OIDC_ROLE_CLAIM?: string;
+  OIDC_DEFAULT_ROLE?: string;
+  ANALYTICS?: AnalyticsEngineDataset;
+}

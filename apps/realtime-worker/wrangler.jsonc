@@ -1,0 +1,26 @@
+{
+  "name": "opsui-meets-realtime",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-26",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "ws.opsuimeets.com",
+      "custom_domain": true
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ROOM_COORDINATOR",
+        "class_name": "RoomCoordinator"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["RoomCoordinator"]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@opsui/realtime-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {
+    "@opsui/shared-types": "workspace:*"
+  },
+  "scripts": {
+    "build": "wrangler deploy --dry-run",
+    "dev": "wrangler dev",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

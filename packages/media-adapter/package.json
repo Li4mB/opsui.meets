@@ -1,0 +1,15 @@
+{
+  "name": "@opsui/media-adapter",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts",
+    "./cloudflare-realtime": "./src/cloudflare-realtime.ts",
+    "./control-auth": "./src/control-auth.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

@@ -1,0 +1,1957 @@
+# OpsUI Meets Foundation
+
+## 1. Executive summary
+
+OpsUI Meets should be built as an operationally clean meetings platform, not as another generic video-call UI. The product vision is simple: join faster, control rooms faster, moderate faster, and leave every meeting with operational outputs instead of a dead recording link. The product should feel purpose-built for staff operations, classrooms, moderated sessions, and recurring institutional workflows. That means rejecting clutter, rejecting role ambiguity, and rejecting the Google Meet habit of hiding important controls behind transient menus. OpsUI Meets should make room state obvious, host actions immediate, and post-meeting follow-up first-class.
+
+The domain architecture is correct because it creates hard product boundaries without fragmenting the user experience. `opsuimeets.com` is the public gateway and brand surface. `app.opsuimeets.com` is the authenticated product shell. `api.opsuimeets.com`, `ws.opsuimeets.com`, and `auth.opsuimeets.com` separate control-plane concerns so the system can scale and be secured independently. `media.opsuimeets.com` isolates large-object delivery and upload policy. `admin.opsuimeets.com`, `docs.opsuimeets.com`, and `preview.opsuimeets.com` keep internal operations, documentation, and staging off the main user flow.
+
+The Cloudflare-native deployment strategy should be opinionated:
+
+- Use Cloudflare Pages for public and SPA surfaces.
+- Use Cloudflare Workers for routing, auth/session glue, API orchestration, webhooks, signed URL issuance, and edge enforcement.
+- Use Durable Objects for per-room hot state and WebSocket coordination.
+- Use Queues and Workflows for asynchronous follow-up and recording pipelines.
+- Use R2 for controlled media/object storage.
+- Use Workers Analytics Engine for high-cardinality operational analytics.
+- Use Cloudflare DNS and custom domains for the full namespace.
+
+Do not force the media plane into Workers. Workers are the right place for control and orchestration, not for SFU media routing, transcoding, or heavy recording workloads. For live audio/video, use Cloudflare RealtimeKit Core SDK on top of Cloudflare Realtime SFU if the team accepts a beta dependency. If that beta risk is not acceptable, keep the same control-plane contract and swap in a dedicated media provider behind an adapter layer. The boundary stays the same either way.
+
+## 2. Final domain and routing architecture
+
+| Hostname | Purpose | Suggested Cloudflare product | Origin/backend target | Notes |
+| --- | --- | --- | --- | --- |
+| `opsuimeets.com` | Public entry, landing, join gateway | Pages + Worker route | Pages app with gateway Worker in front of join/create actions | Public brand surface. Handles marketing, join code resolution, deep links, and redirects to auth/app without exposing backend topology. |
+| `app.opsuimeets.com` | Main user application | Pages | SPA frontend bundle | Authenticated product shell for dashboard, scheduling, live room, and post-meeting workflows. Keeps app cache policy separate from marketing surface. |
+| `api.opsuimeets.com` | REST/JSON backend API | Workers custom domain | `opsui-meets-api` Worker bound to Durable Objects, Hyperdrive, Queues, R2, Analytics Engine | All room, meeting, attendance, template, analytics, and admin APIs. Idempotent writes, tenant enforcement, signed URL issuing, webhook fan-out. |
+| `ws.opsuimeets.com` | Realtime signaling and room state sync | Workers + Durable Objects | `opsui-meets-realtime` Worker dispatching to room-scoped Durable Objects | WebSocket control plane only. Presence, hand raise, chat sequencing, moderation events, lobby queue state, breakout coordination. No media transport here. |
+| `media.opsuimeets.com` | Recordings, uploads, media delivery | R2 custom domain + Worker auth wrapper | R2 bucket plus media access Worker | Use for recording files, exports, whiteboard assets, attachments, thumbnails. Private assets should be served through signed Worker-mediated access, not public bucket URLs. |
+| `auth.opsuimeets.com` | Authentication and session services | Workers custom domain | `opsui-meets-auth` Worker + session store + IdP integrations | Owns login, magic links, passkeys, SSO callbacks, device trust, session refresh, and signed join tokens. Shared cookie domain should be `.opsuimeets.com`. |
+| `admin.opsuimeets.com` | Internal admin and tenant operations | Pages + Worker API + Cloudflare Access | Admin SPA plus admin API routes | Restrict with Cloudflare Access and product RBAC. Separate operational surface prevents accidental leakage into user app navigation. |
+| `docs.opsuimeets.com` | Product docs and API docs | Pages | Static docs site | Public docs, help center, implementation guides, API references, room policy documentation. Good candidate for versioned content. |
+| `preview.opsuimeets.com` | Staging and preview deployments | Pages preview + isolated Workers env | Preview frontend and preview Worker stack | Use branch-based previews and isolated databases/secrets. Protect with Cloudflare Access or preview auth gate. Never point preview at production media or auth secrets. |
+
+Reasoning by subdomain:
+
+- `opsuimeets.com` must stay lightweight and conversion-oriented. It should answer two questions fast: "join" and "create".
+- `app.opsuimeets.com` deserves its own asset pipeline and caching because the main app will ship richer JS, route data, and authenticated UX.
+- `api.opsuimeets.com` should remain path-stable and provider-agnostic so the frontend never needs to know whether a request hits Postgres, Durable Objects, or a media vendor.
+- `ws.opsuimeets.com` deserves its own hostname because WebSocket connection management, rate limits, and observability differ from REST.
+- `media.opsuimeets.com` keeps large-object caching and auth policy out of the API domain.
+- `auth.opsuimeets.com` isolates auth risk, cookies, and callback handling.
+- `admin.opsuimeets.com` must be operationally separated because admin UX and permissions are fundamentally different from end-user UX.
+- `docs.opsuimeets.com` should be indexable and deployable independently of the app.
+- `preview.opsuimeets.com` is mandatory for safe rollout of room-state, auth, and realtime changes.
+
+## 3. System architecture
+
+### Frontend
+
+Build three web frontends:
+
+- Public gateway on `opsuimeets.com`
+- Main app on `app.opsuimeets.com`
+- Admin console on `admin.opsuimeets.com`
+
+Recommended stack:
+
+- React + TypeScript + Vite
+- React Router for route-level code splitting
+- TanStack Query for server state
+- WebSocket client for control-plane events
+- WebRTC client via Cloudflare RealtimeKit Core SDK for audio/video if the beta dependency is accepted
+
+The frontend should treat the meeting experience as three layers:
+
+- Product shell: dashboard, scheduling, settings, summaries
+- Room control plane: room metadata, people, permissions, chat, state
+- Media plane: camera, microphone, screenshare, speaker selection, recording UI
+
+### Edge layer
+
+Cloudflare Workers should own the control plane:
+
+- request routing
+- auth/session validation
+- tenant resolution
+- join-link verification
+- room creation
+- meeting lifecycle APIs
+- webhook intake
+- signed upload/download URLs
+- async job dispatch
+- analytics event writes
+
+Use one logical Worker codebase with multiple deployed entrypoints if needed:
+
+- `gateway-worker`
+- `api-worker`
+- `auth-worker`
+- `realtime-worker`
+- `media-worker`
+
+### Auth
+
+Auth should run through `auth.opsuimeets.com` on Workers and support:
+
+- email magic links for low-friction guest/internal join
+- passkeys for returning users
+- OIDC/SAML bridge for enterprise workspaces
+- one-time signed join tokens for invite links
+- device trust and session continuation
+
+Session model:
+
+- HttpOnly, Secure, SameSite=Lax session cookie on `.opsuimeets.com`
+- short-lived access token for frontend API calls
+- refresh handled server-side through auth Worker
+- session table in primary database
+- device/session revocation list cached at edge
+
+### Realtime signaling
+
+Use `ws.opsuimeets.com` with Durable Objects keyed by `meeting_instance_id`.
+
+Each room Durable Object is authoritative for:
+
+- who is connected
+- current participant role assignment for the live session
+- lobby queue
+- hand raise queue
+- mute state commands
+- ephemeral chat fan-out
+- poll state
+- breakout assignment state
+- room lock state
+- recording status mirror
+
+Durable Objects are the right primitive because the room needs strongly ordered state transitions and a single authority for live control-plane events.
+
+### Media path
+
+The media path must be separate from the control plane.
+
+Recommended:
+
+- Browser clients publish/subscribe media over WebRTC
+- Cloudflare Realtime SFU handles track routing
+- Cloudflare TURN service handles relay fallback
+- Frontend uses RealtimeKit Core SDK, not a prebuilt UI kit
+
+Why this boundary is correct:
+
+- Workers and WebSockets are good for control messages, not continuous media transport
+- SFU routing, track adaptation, and recording export belong to dedicated media infrastructure
+- keeping the media provider behind an adapter lets OpsUI preserve product differentiation even if the media vendor changes
+
+### Recording pipeline
+
+Recording should not be implemented as a Worker-side screen capture hack. Use the media provider's server-side recording/export capability.
+
+Recommended recording path:
+
+1. Host hits record in the live room.
+2. `api.opsuimeets.com` validates role/policy and calls the media provider recording API.
+3. Recording state is mirrored into the room Durable Object.
+4. Provider sends webhook events to `api.opsuimeets.com/webhooks/media`.
+5. Worker writes durable recording metadata, emits Analytics Engine events, and pushes post-processing jobs to Queues.
+6. Workflow copies or verifies artifacts into R2 under controlled tenancy paths.
+7. Summary pipeline attaches transcript, attendance, and action items to the meeting instance.
+
+### Storage
+
+Use the following storage model:
+
+- Primary relational data: managed PostgreSQL
+- Worker-to-database access: Hyperdrive
+- Hot room state: Durable Objects
+- Edge cache and non-critical read-through config: KV
+- Large media/object storage: R2
+- High-cardinality event analytics: Workers Analytics Engine
+
+Strong recommendation: use PostgreSQL as the system of record, not D1, for this product.
+
+Why:
+
+- meetings products generate relational reporting and export demands fast
+- multi-tenant admin tooling is easier on Postgres
+- audit, attendance, templates, scheduled recurrence, webhook history, and summaries all fit naturally
+- external BI, admin scripts, and compliance workflows remain straightforward
+
+Use D1 only if the team wants an explicitly Cloudflare-only metadata footprint and accepts tighter operational constraints. For this product, that tradeoff is not worth it on day one.
+
+### Analytics
+
+Split analytics into two layers:
+
+- real-time operational analytics in Workers Analytics Engine
+- durable business reporting aggregates in PostgreSQL
+
+Analytics Engine should capture:
+
+- join attempts
+- lobby wait times
+- device failures
+- role actions
+- moderation actions
+- recording start/stop
+- participant counts
+- disconnect causes
+- breakout usage
+- summary completion
+
+### Admin
+
+The admin console should be a separate app with:
+
+- workspace management
+- user/role policy
+- template management
+- room presets
+- recording policy
+- compliance exports
+- tenant analytics
+- audit log search
+
+Restrict admin with both:
+
+- Cloudflare Access at the edge
+- application RBAC inside the app
+
+### What should run on Cloudflare Workers
+
+- gateway routing and join-code resolution
+- auth and session glue
+- public and internal APIs
+- signed join-link verification
+- per-request tenant enforcement
+- webhook receivers
+- room creation and lifecycle orchestration
+- Durable Object room coordination
+- signed R2 URL generation
+- queue producers/consumers
+- workflow orchestration
+- analytics writes
+
+### What should not run on Workers
+
+- SFU media routing
+- continuous media relay
+- recording transcoding/mixing
+- large transcript batch processing jobs that exceed Worker economics
+- long-running export/video processing
+
+### What should be separate services
+
+- managed PostgreSQL
+- media/SFU layer
+- optional transcript/AI summarization provider if Workers AI quality is not sufficient
+- email delivery provider
+- enterprise SSO identity providers
+
+### Data flow: creating a room
+
+1. User clicks `Create now` or `Schedule` from `app.opsuimeets.com`.
+2. Frontend calls `POST /v1/rooms` or `POST /v1/meetings`.
+3. API Worker validates workspace membership and template permissions.
+4. API writes canonical room/meeting records to PostgreSQL through Hyperdrive.
+5. API seeds default room policy and generates a human-readable join slug.
+6. API pre-warms a room Durable Object only if the room is immediate-start or lobby-enabled.
+7. API returns room metadata, join URL, host URL, and policy summary.
+
+### Data flow: joining a room
+
+1. User opens invite link on `opsuimeets.com`.
+2. Gateway Worker resolves slug and determines whether the user is authenticated, invited, guest-allowed, or needs SSO.
+3. User completes the prejoin screen with device preview and display name.
+4. Frontend requests a signed join token from `auth.opsuimeets.com`.
+5. API validates room state, workspace policy, capacity, lock state, and waiting room rules.
+6. If admitted directly, the frontend opens a WebSocket to `ws.opsuimeets.com` and joins the room Durable Object.
+7. Frontend then joins the media session via WebRTC to the SFU.
+8. Attendance and analytics events are written asynchronously.
+
+### Data flow: moderating a live room
+
+1. Host action is triggered from the host console.
+2. Frontend sends an API mutation for durable audit and policy validation.
+3. API checks live role plus workspace/room overrides.
+4. API sends the authoritative state change to the room Durable Object.
+5. Durable Object sequences the event and broadcasts control updates to connected clients.
+6. If the action affects media, frontend clients or provider APIs execute the actual media-side change.
+7. Audit log and analytics events are written asynchronously.
+
+### Data flow: ending a room
+
+1. Host or owner sends `End meeting`.
+2. API validates terminal permissions and end policy.
+3. Durable Object switches room state to `ending`, blocks new joins, and broadcasts closure.
+4. Recording stop is triggered if active.
+5. Attendance finalization job is queued.
+6. Meeting instance is marked complete in PostgreSQL.
+7. Post-meeting Workflow starts summary, export, and follow-up processing.
+
+### Data flow: post-meeting processing
+
+1. Recording/transcript webhooks arrive.
+2. Queue consumer normalizes provider payloads into internal events.
+3. Workflow assembles transcript, attendance, polls, chat metadata, and moderator actions.
+4. Summary/hook service creates meeting summary, action items, and follow-up tasks.
+5. Media metadata and artifact links are stored.
+6. Dashboard and post-meeting pages read from durable summary records, not raw provider payloads.
+
+## 4. Product information architecture
+
+### Primary app sections
+
+- Landing
+- Dashboard
+- Schedule
+- Rooms
+- Live Room
+- Post-Meeting Summary
+- Templates
+- Admin Portal
+
+### Navigation structure
+
+Public navigation on `opsuimeets.com`:
+
+- Home
+- Join meeting
+- Create instant meeting
+- Product overview
+- Classroom
+- Business
+- Docs
+- Sign in
+
+Authenticated app navigation on `app.opsuimeets.com`:
+
+- Dashboard
+- Schedule
+- Rooms
+- Templates
+- Recordings
+- Summaries
+- Activity
+- Settings
+
+Contextual live-room navigation:
+
+- Room
+- People
+- Chat
+- Polls
+- Notes
+- Breakouts
+- Host Console
+
+Admin navigation on `admin.opsuimeets.com`:
+
+- Overview
+- Workspaces
+- Users
+- Roles and policies
+- Templates
+- Rooms
+- Recordings
+- Analytics
+- Audit
+- Integrations
+- Settings
+
+### User journeys
+
+Landing:
+
+- Primary actions: `Join`, `Create now`, `Book demo`, `Explore templates`
+- Secondary actions: docs, sign in
+- Public join path must accept a room link or short code immediately
+
+Dashboard:
+
+- Today strip with next sessions, recent rooms, quick create, quick join
+- Persistent rooms grid
+- Scheduled meetings list
+- Follow-up queue: summaries, action items, attendance exports
+
+Schedule:
+
+- Calendar view
+- agenda view
+- recurring series editor
+- template picker
+- participant and role presets
+
+Live room:
+
+- stage area
+- host control strip
+- side rail for people/chat/activity
+- breakout and polls panel
+- notes/whiteboard access
+
+Post-meeting summary:
+
+- summary
+- attendance
+- recording
+- chat recap
+- polls
+- action items
+- export/share
+
+Admin portal:
+
+- workspace governance
+- permission presets
+- domain allowlists
+- default lobby policy
+- recording retention
+- analytics and audit
+
+### Information architecture principles
+
+- Make creation and joining first-class, not buried under generic dashboard furniture.
+- Separate persistent rooms from scheduled instances so recurring use cases stay fast.
+- Put post-meeting outputs alongside live-room history so the product feels operational, not disposable.
+- Reject the Google Meet pattern of making hosts hunt across multiple side panels for state. OpsUI should centralize host state in one obvious control surface.
+
+## 5. Feature blueprint
+
+| Feature | User value | Complexity | Phase | Technical notes |
+| --- | --- | --- | --- | --- |
+| Instant meeting creation | Fastest path from intent to live room | Low | MVP | Single API call, default template, immediate host token, optional guest join. |
+| Invite-by-link join | Reduces onboarding friction | Low | MVP | Signed links with short-lived join tokens and optional display-name capture. |
+| Prejoin device check | Prevents failed starts | Medium | MVP | Device preview, mic/cam permission test, speaker test, fallback join-without-media. |
+| Waiting room/lobby | Safer moderated entry | Medium | MVP | Durable Object queue state, admit/deny events, policy-based bypass. |
+| Role model and permissions matrix | Clean moderation | Medium | MVP | Separate workspace roles from live meeting roles. Session-scoped delegation only. |
+| One-click host dashboard | Core differentiator | Medium | MVP | Persistent host console with room state, hands, lobby, lock, record, mute-all. |
+| Chat | Essential collaboration | Medium | MVP | Persist messages selectively; ephemeral fan-out via Durable Object, durable write on policy. |
+| Raised hand and reactions | Fast live feedback | Low | MVP | WebSocket events, lightweight ordering, analytics capture. |
+| Participant list and quick actions | Operational clarity | Medium | MVP | Surface role, device, hand, join time, mute state, network status, admit status. |
+| Attendance tracking | Required for classrooms and training | Medium | MVP | Join/leave and focus events; durable rollup on meeting end. |
+| Scheduled meetings | Core planning workflow | Medium | MVP | Calendar + agenda + reminder hooks. |
+| Recurring meetings/rooms | Major differentiation over ad hoc tools | Medium | MVP | Series model plus instance generation. Persistent room slug remains stable. |
+| Room templates | Faster setup and consistency | Low | MVP | Template presets for standup, sales demo, training, lecture, webinar. |
+| Recording triggers and metadata | Required for follow-up | Medium | MVP | Provider-backed recording start/stop plus durable metadata and retention policy. |
+| Post-meeting summary shell | Makes the product operational | Medium | MVP | Start with structured placeholders, not AI-first promises. |
+| Action items and follow-up tasks | Turns meetings into work | Medium | MVP | Internal task list and webhook/export hooks. |
+| Admin analytics baseline | Governance and adoption visibility | Medium | MVP | Analytics Engine + admin read models. |
+| Breakout rooms | Important for classrooms/training | High | V2 | Separate room segments with coordinated reassignment and timed return. |
+| Polls | High-value engagement feature | Medium | V2 | Real-time state, vote aggregation, result release policy. |
+| Whiteboard/notes | Useful but not day-one critical | High | V2 | Prefer collaborative notes first, whiteboard second. Whiteboard asset storage in R2. |
+| Late-joiner policy presets | Strong moderator control | Medium | V2 | Auto-mute, video-off, lobby-on, role-restricted entry policies. |
+| Co-host delegation workflow | Better shared moderation | Medium | V2 | Controlled temporary elevation with audit trail. |
+| Viewer/webinar mode | Expands moderated event use cases | Medium | V2 | One-way audience defaults, optional chat restrictions, hand-raise requests. |
+| Meeting summary automation | Post-meeting acceleration | High | V3 | Depends on transcript quality and reliable prompts/provider strategy. |
+| Transcript search and snippets | Better institutional recall | High | V3 | Requires transcript storage, speaker mapping, retention policy. |
+| Advanced compliance retention | Enterprise readiness | High | V3 | Per-workspace policy, legal hold, export controls, access logs. |
+| Tenant-level integrations | Institutional workflow hooks | High | V3 | LMS/HR/CRM/calendar connectors. |
+
+Product stance:
+
+- Do not chase full parity with every collaboration tool in MVP.
+- Build the clean control plane first.
+- Delay whiteboard complexity unless notes and moderation are already excellent.
+- Reject Google Meet style "everyone gets the same generic room". Templates and room presets should be foundational.
+
+## 6. Role and permissions system
+
+### Role model
+
+- `owner`: workspace-level authority, policy and analytics authority, can act as host in any meeting
+- `host`: primary live-room operator for a meeting instance
+- `co_host`: delegated live-room operator with almost all host actions
+- `presenter`: can present content but cannot govern the room
+- `moderator`: can control people and chat but not meeting-wide ownership settings
+- `participant`: normal interactive attendee
+- `viewer`: watch-only or limited-interaction attendee
+
+### Permission codes
+
+- `Y`: allowed
+- `S`: self-only
+- `D`: delegated or policy-scoped
+- `R`: request-only
+- `N`: not allowed
+
+### Permissions matrix
+
+| Action | Owner | Host | Co-host | Presenter | Moderator | Participant | Viewer | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Create instant meeting | Y | Y | D | N | D | N | N | Workspace policy can allow moderators to create moderated sessions. |
+| Schedule meeting | Y | Y | D | N | D | N | N | Scheduling is usually workspace-scoped. |
+| Start meeting | Y | Y | Y | N | D | N | N | Moderator start is optional by template policy. |
+| End meeting for all | Y | Y | Y | N | N | N | N | Deliberately restricted. |
+| Join before host | Y | D | D | D | D | D | D | Controlled by room policy. |
+| Admit users from lobby | Y | Y | Y | N | Y | N | N | High-frequency moderation action. |
+| Deny users from lobby | Y | Y | Y | N | Y | N | N | Same as admit. |
+| Bypass lobby | Y | Y | Y | D | D | N | N | Can be granted to presenter/moderator by template. |
+| Lock or unlock room | Y | Y | Y | N | D | N | N | Moderator lock should be template-dependent. |
+| Mute self / unmute self | Y | S | S | S | S | S | N | Viewer does not publish audio by default. |
+| Mute individual participant | Y | Y | Y | N | Y | N | N | Includes temporary hard mute. |
+| Mute all | Y | Y | Y | N | Y | N | N | One-click host dashboard action. |
+| Disable participant camera | Y | Y | Y | N | D | N | N | Strong moderation; log every action. |
+| Remove user from meeting | Y | Y | Y | N | Y | N | N | Optionally add timed rejoin block. |
+| Promote or demote live role | Y | Y | Y | N | N | N | N | Host/co-host cannot create owner. |
+| Start recording | Y | Y | Y | N | D | N | N | Depends on workspace recording policy. |
+| Stop recording | Y | Y | Y | N | D | N | N | Same as above. |
+| Share screen | Y | Y | Y | Y | D | D | N | Participants may be disallowed in moderated templates. |
+| Share camera/mic | Y | Y | Y | Y | Y | D | N | Participant publish rights are room-policy driven. |
+| Launch polls | Y | Y | Y | D | Y | N | N | Presenter poll launch is useful in training templates. |
+| Close polls / release results | Y | Y | Y | N | Y | N | N | Keep result release controlled. |
+| Assign breakout rooms | Y | Y | Y | N | D | N | N | Breakout orchestration is host-heavy. |
+| Open/close breakout rooms | Y | Y | Y | N | D | N | N | Session-wide state change. |
+| Use whiteboard/notes | Y | Y | Y | Y | Y | D | D | Separate edit and view policy if needed. |
+| Manage chat settings | Y | Y | Y | N | Y | N | N | Includes chat-on/off, host-only, moderated mode. |
+| Send chat message | Y | Y | Y | Y | Y | D | D | Viewer send rights are template-specific. |
+| Delete or moderate chat message | Y | Y | Y | N | Y | N | N | Audit every deletion. |
+| Raise hand | Y | Y | Y | Y | Y | Y | D | Viewers may be allowed to request to speak. |
+| View participant diagnostics | Y | Y | Y | N | Y | N | N | Useful for support/moderation. |
+| Export attendance | Y | Y | Y | N | D | N | N | Often allowed for moderator in education. |
+| View recording metadata | Y | Y | Y | D | D | N | N | Separate from downloading the file. |
+| Download recording | Y | D | D | N | N | N | N | Usually owner/host only, policy-controlled. |
+| View meeting analytics | Y | D | D | N | N | N | N | Tenant policy may allow host reports. |
+| Edit recurring room settings | Y | Y | N | N | N | N | N | Treated as room governance, not live moderation. |
+
+### Escalation rules
+
+1. Workspace authority outranks live-session delegation. An `owner` can always recover control.
+2. `host` is the highest meeting-instance role. `co_host` is nearly equal operationally but cannot change room governance or workspace policy.
+3. `moderator` is for people control, not room ownership. Do not overload moderator with scheduling or recurring settings.
+4. `presenter` is for content sharing, not discipline.
+5. `participant` and `viewer` never gain destructive controls by inheritance.
+
+### Inheritance rules
+
+1. `owner` inherits every host capability plus workspace governance.
+2. `host` inherits co-host, moderator, and presenter capabilities.
+3. `co_host` inherits moderator and presenter capabilities.
+4. `moderator` does not inherit presenter by default unless template policy enables it.
+5. `viewer` is not just a muted participant. It is a distinct low-rights role.
+
+### Guardrails
+
+- Policy overrides may reduce permissions, never silently increase them.
+- Temporary elevation must be time-bounded and audited.
+- Recording permissions should be controlled by both role and workspace policy.
+- Live role changes must take effect immediately in Durable Object state and be written durably for audit.
+
+## 7. Live room UX spec
+
+### Design goal
+
+The live room should feel faster and cleaner than Google Meet and Blackboard Collaborate Ultra by making room state visible without forcing users to open three different panels. The UI should bias toward confident operation:
+
+- one obvious place to join
+- one obvious place to control the room
+- one obvious place to see people state
+
+### Desktop layout
+
+Use a three-zone layout:
+
+- top state strip
+- central stage
+- right operations rail
+
+Top state strip:
+
+- room name
+- live timer
+- recording status
+- lobby count
+- raised hand count
+- breakout status
+- lock state
+- quick actions: admit all, mute all, lock, record
+
+Central stage:
+
+- active speaker or presentation-focused layout
+- filmstrip docked bottom or left
+- stage priority order: screenshare, active presenter, selected participant, grid fallback
+
+Right operations rail:
+
+- tabbed but persistent width
+- tabs: People, Chat, Polls, Notes, Activity
+- host-only pinned section at top of rail with moderation shortcuts
+
+Bottom control dock:
+
+- mic
+- camera
+- share
+- reactions
+- hand raise
+- more
+- leave/end
+
+This is a deliberate rejection of the Google Meet style of burying host actions inside floating dialogs and participant row menus. Host control should be visible, not discoverable by accident.
+
+### Host panel
+
+Hosts need a dedicated panel, not just extra buttons in the participant list.
+
+Host panel sections:
+
+- Room status
+- Lobby
+- People requiring attention
+- Permissions preset
+- Recording
+- Breakouts
+- Quick actions
+
+Priority actions must be one-click:
+
+- admit next
+- admit all
+- mute all
+- lock room
+- switch chat mode
+- start/stop recording
+- push participants to breakout
+
+### Participant management
+
+Participant rows should show:
+
+- name
+- role badge
+- audio/video state
+- hand raised
+- join source
+- join time
+- network quality indicator
+- current room location
+
+Participant quick actions should appear inline for hosts:
+
+- mute
+- remove
+- role change
+- move to breakout
+- admit/deny
+- pin on stage
+
+### Low-friction join flow
+
+Join flow should be four steps maximum:
+
+1. Open link
+2. Confirm identity or enter display name
+3. Quick device preview
+4. Join or request entry
+
+Rules:
+
+- Do not force account creation for invited guests.
+- Do not put device settings on a separate settings page before join.
+- Do not require calendar context to join a room.
+- If the user is a returning trusted user, prefill device and name settings.
+- If the room allows browser audio-only fallback, expose that immediately.
+
+### Tablet UX
+
+Tablet should preserve the same mental model with tighter choreography:
+
+- stage remains dominant
+- right rail becomes a slide-over drawer
+- host controls remain pinned in a compact top strip
+- participant list and chat become bottom/side sheets
+
+Tablet host mode should default to a condensed `Ops` drawer with:
+
+- lobby
+- hands
+- people
+- room actions
+
+### Mobile UX
+
+Mobile should not try to mirror desktop density. It needs two modes:
+
+- attendee mode
+- host mode
+
+Mobile attendee:
+
+- full-screen stage
+- bottom nav: Room, People, Chat, Controls
+- floating hand raise/reaction action
+
+Mobile host:
+
+- bottom nav: Room, Ops, People, Chat
+- `Ops` opens a full-height sheet with admit, mute, lock, record, and role actions
+- host state strip remains pinned at top with lobby and hands counts
+
+### Breakpoints
+
+- `>= 1280px`: full desktop ops layout
+- `1024px - 1279px`: compact desktop, narrower right rail
+- `640px - 1023px`: tablet drawer layout
+- `< 640px`: mobile stacked/sheet layout
+
+### Design principles
+
+- Prioritize room-state awareness over visual novelty.
+- Make destructive actions deliberate but not slow.
+- Use fewer icons, clearer labels.
+- Keep host controls visible for hosts only.
+- Keep participant controls contextual, not modal-heavy.
+- Prefer one persistent control surface over multiple hidden menus.
+
+## 8. Backend service design
+
+| Service/module | Responsibility | Key endpoints/events | Data owned | Scaling concerns |
+| --- | --- | --- | --- | --- |
+| Room service | Room lifecycle, room settings, join slugs, persistent room state | `POST /v1/rooms`, `GET /v1/rooms/:id`, `PATCH /v1/rooms/:id`, `POST /v1/rooms/:id/lock` | rooms, room policies, room join aliases | High read volume on recurring rooms; cache read models, keep writes durable in Postgres. |
+| User/session service | Identity, session issuance, guest handling, device trust | `POST /v1/auth/login`, `POST /v1/auth/magic-link`, `POST /v1/auth/join-token`, `POST /v1/auth/logout` | users, sessions, identities, device trust records | Auth bursts during class start times; edge validation and short session tokens reduce origin pressure. |
+| Permissions service | Workspace, room, and live-session permission resolution | `GET /v1/permissions/me`, `POST /v1/meetings/:id/roles`, event `role.changed` | workspace roles, room overrides, session grants | Must be fast and deterministic; cache effective permissions but compute authoritative writes centrally. |
+| Notifications service | Email, reminders, invite delivery, follow-up notifications | `POST /v1/notifications/invite`, queue `meeting.reminder`, queue `meeting.followup` | notification logs, delivery attempts, templates | Spiky scheduled sends; offload to Queues and provider webhooks. |
+| Chat service | Chat ingestion, moderation, retention policy, replay | WS event `chat.send`, `POST /v1/meetings/:id/chat/moderate`, `GET /v1/meetings/:id/chat` | chat messages, moderation flags, retention settings | High fan-out in live rooms; ephemeral broadcast through Durable Objects, durable persistence async or policy-driven sync. |
+| Attendance service | Join/leave/focus tracking and rollups | event `participant.joined`, `participant.left`, `participant.focus`, `GET /v1/meetings/:id/attendance/export` | attendance events, rollups, export snapshots | High event volume; write compact events, aggregate after room end. |
+| Recording service | Recording control, webhook normalization, artifact linking | `POST /v1/meetings/:id/recordings/start`, `POST /webhooks/media`, `GET /v1/recordings/:id` | recording jobs, provider metadata, artifact links | Provider latency and webhook retries; use idempotency keys and queues. |
+| Summaries/hooks service | Post-meeting summaries, action items, outbound hooks | workflow `meeting.postprocess`, `POST /v1/meetings/:id/hooks`, `GET /v1/meetings/:id/summary` | summaries, action items, outbound delivery logs | Long-running tasks; best handled with Workflows and queue-backed retries. |
+| Analytics service | Product telemetry, room operations analytics, tenant dashboards | event `analytics.write`, `GET /v1/admin/analytics/*` | Analytics Engine datasets, report snapshots | Very high cardinality; write non-blocking to Analytics Engine and roll up for dashboard reads. |
+
+Service boundary rules:
+
+- Durable Objects own hot live coordination, not long-term persistence.
+- API Worker owns policy validation and durable writes.
+- Async consumers own retries and normalization.
+- Admin reads should come from optimized read models, not raw transactional tables.
+
+## 9. Data model
+
+| Entity | Suggested fields | Notes |
+| --- | --- | --- |
+| `users` | `id`, `workspace_id`, `email`, `display_name`, `avatar_url`, `status`, `default_role`, `timezone`, `last_active_at`, `created_at`, `updated_at` | One user may belong to multiple workspaces through membership tables if needed later. |
+| `workspaces` | `id`, `name`, `slug`, `domain_allowlist`, `plan_tier`, `default_room_policy_json`, `recording_policy_json`, `created_at`, `updated_at` | Tenant root. Keep policy JSON versioned. |
+| `rooms` | `id`, `workspace_id`, `template_id`, `name`, `slug`, `room_type`, `is_persistent`, `default_join_policy`, `default_roles_json`, `settings_json`, `created_by`, `created_at`, `updated_at` | Logical meeting space. Persistent classrooms and team rooms live here. |
+| `meetings` | `id`, `workspace_id`, `room_id`, `title`, `meeting_kind`, `schedule_type`, `starts_at`, `ends_at`, `recurrence_rule`, `timezone`, `status`, `created_by`, `created_at`, `updated_at` | Scheduled intent. Can represent one-time or recurring series. |
+| `meeting_instances` | `id`, `meeting_id`, `room_id`, `workspace_id`, `instance_key`, `starts_at`, `ended_at`, `status`, `host_user_id`, `live_policy_snapshot_json`, `media_session_id`, `room_do_id`, `created_at` | Actual runtime occurrence. Instant meetings create an ad hoc `meeting` plus one instance. |
+| `participants` | `id`, `meeting_instance_id`, `user_id`, `guest_email`, `display_name`, `role`, `join_state`, `admitted_by`, `joined_at`, `left_at`, `device_meta_json`, `network_meta_json` | One row per participant per meeting instance. |
+| `permissions` | `id`, `workspace_id`, `room_id`, `meeting_instance_id`, `subject_type`, `subject_id`, `permission_key`, `effect`, `source`, `expires_at`, `created_at` | Supports overrides and temporary grants. |
+| `chat_messages` | `id`, `meeting_instance_id`, `sender_participant_id`, `message_type`, `body`, `mentions_json`, `is_deleted`, `moderation_state`, `sent_at`, `deleted_at` | Keep chat model simple and append-friendly. |
+| `recordings` | `id`, `meeting_instance_id`, `provider`, `provider_recording_id`, `status`, `storage_path`, `download_url`, `duration_seconds`, `started_at`, `stopped_at`, `metadata_json`, `created_at` | Store internal path even if provider also stores copies. |
+| `attendance` | `id`, `meeting_instance_id`, `participant_id`, `first_joined_at`, `last_left_at`, `total_seconds`, `focus_seconds`, `device_failures_count`, `attendance_status`, `created_at`, `updated_at` | Derived rollup table for exports and summary pages. |
+| `templates` | `id`, `workspace_id`, `name`, `template_type`, `description`, `default_roles_json`, `default_policy_json`, `default_layout_json`, `is_system`, `created_at`, `updated_at` | Templates drive repeatability and faster room creation. |
+| `action_items` | `id`, `meeting_instance_id`, `source_type`, `title`, `description`, `owner_user_id`, `status`, `due_at`, `external_ref`, `created_at`, `updated_at` | Can be manual first, AI-assisted later. |
+
+Supporting tables to add early:
+
+- `workspace_memberships`
+- `meeting_invites`
+- `polls`
+- `poll_responses`
+- `audit_logs`
+- `webhook_deliveries`
+- `breakout_assignments`
+- `notes_documents`
+
+Schema guidance:
+
+- Use UUIDs or ULIDs for primary IDs.
+- Use explicit `workspace_id` on all tenant-bound tables.
+- Snapshot room policy onto `meeting_instances` so live sessions remain historically correct even if room defaults change later.
+- Keep provider identifiers isolated from internal identifiers.
+
+## 10. Realtime and media strategy
+
+### Control plane vs media plane
+
+Control plane:
+
+- room join authorization
+- participant presence
+- role changes
+- lobby state
+- chat events
+- hand raises
+- reactions
+- polls
+- breakouts
+- recording state
+
+Media plane:
+
+- audio tracks
+- video tracks
+- screenshare tracks
+- bitrate adaptation
+- TURN relay fallback
+- server-side recording/export
+
+These must remain separate. WebSockets are for coordination. WebRTC is for media.
+
+### Signaling
+
+Use WebSockets to `ws.opsuimeets.com`, dispatched into a room Durable Object.
+
+Signaling payloads should include:
+
+- `participant.join`
+- `participant.leave`
+- `role.change`
+- `lobby.update`
+- `chat.message`
+- `chat.delete`
+- `hand.raise`
+- `reaction`
+- `poll.launch`
+- `poll.vote`
+- `breakout.assign`
+- `recording.state`
+- `room.lock`
+
+Sequence every message in the Durable Object with a monotonic room event number for replay and dedupe.
+
+### Session state sync
+
+Room Durable Object should maintain:
+
+- connection map
+- participant live state
+- lobby queue
+- current room policy
+- active poll state
+- breakout map
+- current recording status
+
+On reconnect:
+
+- client sends last seen event number
+- Durable Object sends missed deltas if still available
+- otherwise client refetches room snapshot from API and resumes event stream
+
+### Presence
+
+Presence should be heartbeat-light:
+
+- WebSocket connect/disconnect is primary signal
+- optional 15-30 second client heartbeat for stale connection cleanup
+- API should not be the source of live presence truth
+
+Presence states:
+
+- `prejoin`
+- `lobby`
+- `active`
+- `breakout`
+- `reconnecting`
+- `left`
+- `removed`
+
+### Chat events
+
+Chat should fan out through the room Durable Object for order consistency.
+
+Recommended model:
+
+- optimistic local echo
+- authoritative DO timestamp and event number
+- durable persistence either sync or async depending on room retention policy
+
+### Hand raise and reactions
+
+Hand raises:
+
+- durable within the meeting instance
+- ordered queue visible in host panel
+- explicit lower/clear action
+
+Reactions:
+
+- ephemeral, time-decaying, not all need durable storage
+- aggregate counts can be written to analytics rather than full event retention
+
+### Recording triggers
+
+Recording commands should be durable control-plane events:
+
+- `recording.start.requested`
+- `recording.started`
+- `recording.stop.requested`
+- `recording.stopped`
+- `recording.uploaded`
+- `recording.failed`
+
+Never infer recording state from client UI alone.
+
+### Where WebRTC is involved
+
+WebRTC is required for:
+
+- camera publishing
+- microphone publishing
+- screen sharing
+- remote media subscription
+- device switching during a session
+
+WebRTC is not required for:
+
+- chat
+- lobby
+- role changes
+- polls
+- attendance events
+- summary generation
+
+### External media infrastructure requirement
+
+Even in a Cloudflare-native architecture, dedicated media infrastructure is still required. The right choice is:
+
+- Cloudflare Realtime SFU and TURN via RealtimeKit Core SDK if the team accepts the current product maturity
+
+If that is rejected, keep this same contract:
+
+- OpsUI Workers own auth, room state, permissions, and APIs
+- media adapter service owns session creation and recording API calls
+- frontend media client speaks a provider-specific SDK behind an internal abstraction
+
+Do not build your own SFU as part of this foundation.
+
+## 11. Security and compliance baseline
+
+### Session security
+
+- Use HttpOnly, Secure cookies scoped to `.opsuimeets.com`
+- Rotate access tokens aggressively
+- Bind refresh/session records to device fingerprint metadata and IP heuristics
+- Require revalidation for destructive host actions when risk signals change
+
+### Role enforcement
+
+- Enforce roles server-side for every mutation
+- Mirror effective live permissions into Durable Object state for low-latency checks
+- Treat frontend gating as convenience only, never authority
+
+### Signed join links
+
+- Use short-lived signed join tokens
+- Include room scope, invite scope, and optional email binding
+- Support revocation by invite ID, not just expiration
+- Do not expose provider session credentials in the raw invite URL
+
+### Waiting room controls
+
+- Support domain allowlist auto-admit
+- Support invited-user auto-admit
+- Support host/co-host/moderator controlled admit/deny
+- Support lock-after-start policy
+- Support late-joiner presets: muted, camera-off, lobby-forced
+
+### Audit logging
+
+Audit log every sensitive action:
+
+- role changes
+- admits/denies
+- removals
+- mute-all
+- recording start/stop
+- room lock/unlock
+- breakout assignment
+- chat moderation
+- download/export actions
+
+Store:
+
+- actor
+- target
+- action
+- timestamp
+- workspace
+- meeting instance
+- source IP/user agent snapshot
+
+### Rate limiting
+
+Apply per-route rate limits at the edge:
+
+- auth endpoints
+- join-token issuance
+- invite creation
+- webhook endpoints
+- WebSocket connection churn
+- chat spam
+
+Use Cloudflare WAF and Worker-level application throttles together.
+
+### Abuse prevention
+
+- captcha or challenge on suspicious guest join bursts
+- join-attempt anomaly detection
+- disposable-email restrictions for certain tenants
+- abuse-score gating for public webinar rooms
+- moderator-controlled rejoin cooldown after removal
+
+### Privacy considerations
+
+- Make recording and transcript status unmissable in-room
+- Store only necessary device/network diagnostics
+- expose tenant retention controls
+- support guest display name changes without polluting permanent user records
+- segregate workspace data strongly by `workspace_id`
+
+Compliance posture:
+
+- Start with practical auditability and retention controls
+- Do not claim formal compliance scopes until legal and infrastructure review is complete
+- Keep export and deletion paths explicit from day one
+
+## 12. MVP build plan
+
+### Phase 0 = architecture/foundation
+
+Scope:
+
+- domain and DNS setup
+- Pages projects for public app and admin
+- Workers projects for api/auth/ws/media
+- PostgreSQL + Hyperdrive connectivity
+- Durable Object room skeleton
+- shared auth/session model
+- basic design system and route scaffolding
+
+Dependencies:
+
+- lock media provider strategy
+- lock database strategy
+- lock auth pattern and cookie domain
+
+### Phase 1 = MVP
+
+Scope:
+
+- instant meeting creation
+- scheduled meetings
+- recurring rooms
+- prejoin flow
+- waiting room
+- live room with video/audio/screen share
+- participant list
+- chat
+- raised hand/reactions
+- host dashboard
+- role and moderation basics
+- attendance tracking
+- recording controls
+- post-meeting summary shell
+- admin analytics baseline
+
+Dependencies:
+
+- Phase 0 complete
+- media adapter functioning
+- auth/session stable
+- room DO event model stable
+
+### Phase 2 = advanced moderation and classroom features
+
+Scope:
+
+- breakout rooms
+- polls
+- moderated webinar mode
+- co-host delegation controls
+- late-joiner presets
+- collaborative notes
+- template expansion
+- stronger admin policy controls
+
+Dependencies:
+
+- reliable live role mutation
+- stable attendance model
+- event replay/recovery path
+
+### Phase 3 = post-meeting intelligence and enterprise controls
+
+Scope:
+
+- transcript ingestion
+- automated summary generation
+- action item extraction
+- workflow hooks and integrations
+- compliance retention controls
+- advanced analytics and exports
+- institutional tenant controls
+
+Dependencies:
+
+- durable recording/transcript pipeline
+- clear retention/legal review
+- summary provider quality benchmark
+
+Sequencing principle:
+
+- build the operational room core before collaboration sprawl
+- build summaries after you trust the underlying attendance, chat, and recording metadata
+
+## 13. Codex implementation plan
+
+### Recommended repo structure
+
+Use one monorepo:
+
+- `apps/web`
+- `apps/admin`
+- `apps/gateway-worker`
+- `apps/api-worker`
+- `apps/auth-worker`
+- `apps/realtime-worker`
+- `apps/media-worker`
+- `packages/shared-types`
+- `packages/shared-ui`
+- `packages/config`
+- `packages/media-adapter`
+- `packages/db`
+
+### Recommended apps/packages/services layout
+
+- `apps/web`: public landing, join flow, authenticated app shell, live room UI
+- `apps/admin`: internal admin console
+- `apps/gateway-worker`: public host-based routing, join slug resolution, redirects
+- `apps/api-worker`: REST API, webhook intake, queue producers
+- `apps/auth-worker`: login/session/passkeys/SSO/magic links
+- `apps/realtime-worker`: WebSocket upgrade and Durable Object dispatch
+- `apps/media-worker`: signed media access, upload/download mediation, provider webhook helpers if separated
+- `packages/shared-types`: domain contracts, DTOs, event types, permission enums
+- `packages/shared-ui`: common UI primitives and room-state badges
+- `packages/config`: env schema, route constants, feature flags
+- `packages/media-adapter`: provider abstraction for meeting session, recording, participant actions
+- `packages/db`: schema, migrations, repositories
+
+### First files to create
+
+- root `package.json`
+- root `pnpm-workspace.yaml` or npm workspaces config
+- root `tsconfig.base.json`
+- `wrangler.jsonc` files for each Worker app
+- `packages/shared-types/src/*.ts`
+- `packages/db/src/schema/*.ts`
+- `apps/web/src/routes/*`
+- `apps/api-worker/src/index.ts`
+- `apps/auth-worker/src/index.ts`
+- `apps/realtime-worker/src/index.ts`
+- `apps/realtime-worker/src/durable/RoomCoordinator.ts`
+
+### Recommended task order
+
+1. workspace and tooling
+2. shared domain model
+3. database schema and repositories
+4. auth/session worker
+5. API worker for rooms/meetings
+6. realtime worker and room Durable Object
+7. web app routes and prejoin flow
+8. live room host dashboard shell
+9. media adapter integration
+10. recording, attendance, analytics
+11. admin console
+
+### What Codex should implement first, second, third
+
+First:
+
+- monorepo scaffold
+- shared types
+- Worker entrypoints
+- database schema
+
+Second:
+
+- auth/session flow
+- room and meeting CRUD
+- join-token issuance
+
+Third:
+
+- realtime room coordinator
+- prejoin flow
+- live room shell with host console
+
+Then:
+
+- media adapter
+- chat/attendance
+- recording hooks
+- admin analytics
+
+## 14. First-pass scaffold
+
+### Folder tree
+
+```text
+opsui-meets/
+  apps/
+    web/
+      src/
+        app/
+        routes/
+          index.tsx
+          join.tsx
+          dashboard.tsx
+          schedule.tsx
+          rooms.tsx
+          room.$roomSlug.tsx
+          meeting.$meetingInstanceId.summary.tsx
+        features/
+          auth/
+          rooms/
+          meetings/
+          live-room/
+          summaries/
+        components/
+        lib/
+        styles/
+      public/
+      package.json
+      vite.config.ts
+    admin/
+      src/
+        routes/
+          index.tsx
+          workspaces.tsx
+          users.tsx
+          policies.tsx
+          templates.tsx
+          analytics.tsx
+          audit.tsx
+      package.json
+      vite.config.ts
+    gateway-worker/
+      src/
+        index.ts
+        routes/
+          join.ts
+          create.ts
+          redirects.ts
+    api-worker/
+      src/
+        index.ts
+        routes/
+          rooms.ts
+          meetings.ts
+          participants.ts
+          recordings.ts
+          attendance.ts
+          summaries.ts
+          webhooks.media.ts
+        services/
+        middleware/
+    auth-worker/
+      src/
+        index.ts
+        routes/
+          login.ts
+          magic-link.ts
+          passkeys.ts
+          sessions.ts
+          join-token.ts
+        services/
+    realtime-worker/
+      src/
+        index.ts
+        durable/
+          RoomCoordinator.ts
+        protocol/
+          events.ts
+          commands.ts
+    media-worker/
+      src/
+        index.ts
+        routes/
+          uploads.ts
+          downloads.ts
+  packages/
+    shared-types/
+      src/
+        auth.ts
+        rooms.ts
+        meetings.ts
+        permissions.ts
+        participants.ts
+        events.ts
+        templates.ts
+        recordings.ts
+        analytics.ts
+    shared-ui/
+      src/
+        components/
+        tokens/
+    config/
+      src/
+        env.ts
+        routes.ts
+        flags.ts
+    db/
+      src/
+        client.ts
+        schema/
+          users.ts
+          workspaces.ts
+          rooms.ts
+          meetings.ts
+          meeting-instances.ts
+          participants.ts
+          permissions.ts
+          chat.ts
+          recordings.ts
+          attendance.ts
+          templates.ts
+          action-items.ts
+        migrations/
+    media-adapter/
+      src/
+        index.ts
+        types.ts
+        cloudflare-realtime.ts
+```
+
+### Starter route map
+
+Public/app routes:
+
+- `/`
+- `/join`
+- `/new`
+- `/dashboard`
+- `/schedule`
+- `/rooms`
+- `/rooms/:roomSlug`
+- `/meetings/:meetingInstanceId/live`
+- `/meetings/:meetingInstanceId/summary`
+- `/templates`
+- `/recordings`
+- `/settings`
+
+Admin routes:
+
+- `/`
+- `/workspaces`
+- `/users`
+- `/policies`
+- `/templates`
+- `/rooms`
+- `/recordings`
+- `/analytics`
+- `/audit`
+- `/integrations`
+- `/settings`
+
+API routes:
+
+- `POST /v1/rooms`
+- `GET /v1/rooms/:id`
+- `PATCH /v1/rooms/:id`
+- `POST /v1/meetings`
+- `GET /v1/meetings/:id`
+- `POST /v1/meetings/:id/join-token`
+- `POST /v1/meetings/:id/admit`
+- `POST /v1/meetings/:id/remove`
+- `POST /v1/meetings/:id/recordings/start`
+- `POST /v1/meetings/:id/recordings/stop`
+- `GET /v1/meetings/:id/attendance`
+- `GET /v1/meetings/:id/summary`
+- `POST /v1/webhooks/media`
+
+WebSocket route:
+
+- `GET /v1/rooms/:meetingInstanceId/ws`
+
+### Key interfaces/types to define first
+
+```ts
+export type WorkspaceId = string;
+export type RoomId = string;
+export type MeetingId = string;
+export type MeetingInstanceId = string;
+export type ParticipantId = string;
+export type UserId = string;
+
+export type LiveRole =
+  | "owner"
+  | "host"
+  | "co_host"
+  | "presenter"
+  | "moderator"
+  | "participant"
+  | "viewer";
+
+export interface RoomPolicy {
+  lobbyEnabled: boolean;
+  allowGuestJoin: boolean;
+  joinBeforeHost: boolean;
+  mutedOnEntry: boolean;
+  cameraOffOnEntry: boolean;
+  chatMode: "open" | "host_only" | "moderated" | "disabled";
+  recordingMode: "manual" | "auto_on_start" | "disabled";
+  screenShareMode: "hosts_only" | "presenters" | "everyone";
+}
+
+export interface RoomSummary {
+  id: RoomId;
+  workspaceId: WorkspaceId;
+  name: string;
+  slug: string;
+  roomType: "instant" | "scheduled" | "recurring" | "persistent";
+  policy: RoomPolicy;
+}
+
+export interface MeetingInstanceSummary {
+  id: MeetingInstanceId;
+  roomId: RoomId;
+  workspaceId: WorkspaceId;
+  title: string;
+  status: "scheduled" | "prejoin" | "live" | "ending" | "ended";
+  startsAt: string;
+  hostUserId: UserId | null;
+}
+
+export interface ParticipantState {
+  participantId: ParticipantId;
+  userId?: UserId;
+  displayName: string;
+  role: LiveRole;
+  presence: "lobby" | "active" | "breakout" | "reconnecting" | "left";
+  audio: "muted" | "unmuted" | "blocked";
+  video: "off" | "on" | "blocked";
+  handRaised: boolean;
+  joinedAt?: string;
+}
+
+export interface RoomEventEnvelope<TType extends string, TPayload> {
+  eventId: string;
+  roomEventNumber: number;
+  type: TType;
+  meetingInstanceId: MeetingInstanceId;
+  occurredAt: string;
+  actorParticipantId?: ParticipantId;
+  payload: TPayload;
+}
+```
+
+Scaffold rule:
+
+- define contracts before implementation
+- keep provider-specific media fields out of core domain types
+
+## 15. Risks and decisions
+
+### Biggest technical risks
+
+- Media provider maturity risk. Cloudflare RealtimeKit pricing docs state the product is still in beta as of January 13, 2026. If you depend on it, you must test recording, breakout, moderation, and session recovery thoroughly before committing.
+- Overloading Workers with media-adjacent tasks. The control plane belongs at the edge; the media plane does not.
+- Weak role semantics. If moderator, presenter, and co-host overlap too much, host UX collapses into confusion.
+- Treating chat, attendance, and summaries as afterthoughts. Those are part of the product differentiator.
+- Using eventual-consistency stores for live authorization. KV is not the authority for live room state.
+- Building too much whiteboard/collaboration surface before core join and moderation are excellent.
+
+### Decisions that must be locked early
+
+- Primary media strategy: Cloudflare RealtimeKit now, or provider abstraction with fallback from day one.
+- Primary database: PostgreSQL via Hyperdrive, or a more constrained Cloudflare-only metadata stack.
+- Auth model: guest-friendly magic links plus passkeys, and whether enterprise SSO is MVP or V2.
+- Cookie domain and subdomain auth sharing model.
+- Role semantics and which actions moderators may perform.
+- Recording retention and download policy.
+- Whether persistent rooms are first-class in MVP. They should be.
+- Whether viewer mode ships in MVP or V2.
+
+### Tradeoffs
+
+- Cloudflare-native control plane gives excellent latency and operational simplicity, but it does not eliminate the need for a proper media service.
+- PostgreSQL is less pure Cloudflare than D1, but it is a stronger system of record for this product.
+- Guest join without mandatory account creation improves adoption, but it increases abuse and moderation pressure.
+- Persistent rooms improve recurring workflows, but they require stronger governance, policy inheritance, and audit discipline.
+- One-click host controls improve speed, but destructive actions need confirmation thresholds and audit logging.
+
+## Build This First
+
+1. Create the monorepo workspace with `apps/web`, `apps/admin`, `apps/api-worker`, `apps/auth-worker`, `apps/realtime-worker`, `apps/gateway-worker`, `apps/media-worker`, and shared packages.
+2. Define the core domain contracts in `packages/shared-types` for rooms, meetings, meeting instances, live roles, room policy, participants, and room events.
+3. Stand up the PostgreSQL schema and migration set for workspaces, users, rooms, meetings, meeting instances, participants, permissions, recordings, attendance, templates, and audit logs.
+4. Build `auth.opsuimeets.com` first: session cookies, magic-link flow, join-token issuance, and middleware for workspace-aware auth resolution.
+5. Build `api.opsuimeets.com` CRUD for room creation, scheduled meetings, recurring meetings, join-token validation, and host policy retrieval.
+6. Build `ws.opsuimeets.com` with a room-scoped Durable Object that handles connect, disconnect, participant presence, lobby state, role changes, and ordered room events.
+7. Build the public gateway and prejoin flow on `opsuimeets.com` and `app.opsuimeets.com`, including join-by-link, display-name capture, device preview, and request-entry flow.
+8. Build the live room shell with the top state strip, participant rail, and one-click host dashboard before adding advanced collaboration features.
+9. Integrate the media adapter for WebRTC session join, mic/camera/screen share, and recording start/stop, keeping provider-specific code isolated behind `packages/media-adapter`.
+10. Add attendance rollups, recording webhooks, analytics event writes, and the first post-meeting summary page so every meeting already produces operational output.
+
+## Appendix A. Bootstrap files
+
+### Root `package.json`
+
+```json
+{
+  "name": "@opsui/meets",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev:web": "pnpm --filter @opsui/web dev",
+    "dev:admin": "pnpm --filter @opsui/admin dev",
+    "dev:api": "pnpm --filter @opsui/api-worker dev",
+    "dev:auth": "pnpm --filter @opsui/auth-worker dev",
+    "dev:realtime": "pnpm --filter @opsui/realtime-worker dev",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  }
+}
+```
+
+### Root `pnpm-workspace.yaml`
+
+```yaml
+packages:
+  - apps/*
+  - packages/*
+```
+
+### Root `tsconfig.base.json`
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": []
+  }
+}
+```
+
+### Root `.gitignore`
+
+```gitignore
+node_modules
+dist
+.wrangler
+.turbo
+coverage
+.env
+.env.*
+!.env.example
+```
+
+## Appendix B. Worker deployment shape
+
+### `apps/api-worker/wrangler.jsonc`
+
+```jsonc
+{
+  "name": "opsui-meets-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-26",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "api.opsuimeets.com/*",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "APP_ENV": "production"
+  },
+  "analytics_engine_datasets": [
+    {
+      "binding": "ANALYTICS"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "POST_PROCESSING_QUEUE",
+        "queue": "opsui-meets-post-processing"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "opsui-meets-webhooks"
+      }
+    ]
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ROOM_COORDINATOR",
+        "class_name": "RoomCoordinator"
+      }
+    ]
+  },
+  "r2_buckets": [
+    {
+      "binding": "MEDIA_BUCKET",
+      "bucket_name": "opsui-meets-media"
+    }
+  ],
+  "hyperdrive": [
+    {
+      "binding": "DB",
+      "id": "REPLACE_WITH_HYPERDRIVE_ID"
+    }
+  ]
+}
+```
+
+### `apps/realtime-worker/wrangler.jsonc`
+
+```jsonc
+{
+  "name": "opsui-meets-realtime",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-26",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "ws.opsuimeets.com/*",
+      "custom_domain": true
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ROOM_COORDINATOR",
+        "class_name": "RoomCoordinator"
+      }
+    ]
+  }
+}
+```
+
+### `apps/auth-worker/wrangler.jsonc`
+
+```jsonc
+{
+  "name": "opsui-meets-auth",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-26",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "auth.opsuimeets.com/*",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "COOKIE_DOMAIN": ".opsuimeets.com"
+  },
+  "hyperdrive": [
+    {
+      "binding": "DB",
+      "id": "REPLACE_WITH_HYPERDRIVE_ID"
+    }
+  ]
+}
+```
+
+## Appendix C. First package ownership
+
+| Package/app | First implementation responsibility |
+| --- | --- |
+| `packages/shared-types` | Core enums, DTOs, event contracts, route-safe identifiers |
+| `packages/config` | Environment parsing, route maps, feature flags |
+| `packages/db` | Schema, migration runner, repositories |
+| `apps/auth-worker` | Session lifecycle, join-token issuing, magic-link flow |
+| `apps/api-worker` | Rooms, meetings, attendance, recordings APIs |
+| `apps/realtime-worker` | WebSocket upgrade, room Durable Object dispatch |
+| `apps/web` | Public gateway, prejoin, dashboard, live-room shell |
+| `apps/admin` | Workspace policies, analytics, audit views |
+| `packages/media-adapter` | Provider-facing media session and recording abstraction |
+
+## Appendix D. First shared contracts
+
+### `packages/shared-types/src/permissions.ts`
+
+```ts
+export const LIVE_ROLES = [
+  "owner",
+  "host",
+  "co_host",
+  "presenter",
+  "moderator",
+  "participant",
+  "viewer",
+] as const;
+
+export type LiveRole = (typeof LIVE_ROLES)[number];
+
+export const PERMISSION_KEYS = [
+  "meeting.start",
+  "meeting.end",
+  "lobby.admit",
+  "lobby.deny",
+  "room.lock",
+  "participants.mute_all",
+  "participants.remove",
+  "recording.start",
+  "recording.stop",
+  "breakouts.assign",
+  "polls.launch",
+  "chat.manage",
+  "attendance.export",
+] as const;
+
+export type PermissionKey = (typeof PERMISSION_KEYS)[number];
+```
+
+### `packages/shared-types/src/events.ts`
+
+```ts
+export type RoomEventType =
+  | "participant.join"
+  | "participant.leave"
+  | "participant.role_changed"
+  | "participant.hand_raised"
+  | "participant.hand_lowered"
+  | "lobby.updated"
+  | "chat.message_sent"
+  | "chat.message_deleted"
+  | "room.locked"
+  | "room.unlocked"
+  | "recording.started"
+  | "recording.stopped";
+
+export interface RoomEvent<TPayload = unknown> {
+  eventId: string;
+  roomEventNumber: number;
+  type: RoomEventType;
+  meetingInstanceId: string;
+  occurredAt: string;
+  actorParticipantId?: string;
+  payload: TPayload;
+}
+```
+
+### `packages/shared-types/src/rooms.ts`
+
+```ts
+export interface RoomPolicy {
+  lobbyEnabled: boolean;
+  allowGuestJoin: boolean;
+  joinBeforeHost: boolean;
+  mutedOnEntry: boolean;
+  cameraOffOnEntry: boolean;
+  lockAfterStart: boolean;
+  chatMode: "open" | "host_only" | "moderated" | "disabled";
+  screenShareMode: "hosts_only" | "presenters" | "everyone";
+  recordingMode: "manual" | "auto_on_start" | "disabled";
+}
+
+export interface RoomSummary {
+  id: string;
+  workspaceId: string;
+  name: string;
+  slug: string;
+  roomType: "instant" | "scheduled" | "recurring" | "persistent";
+  policy: RoomPolicy;
+}
+```
+
+## Appendix E. First database shape
+
+### Migration order
+
+1. `001_workspaces.sql`
+2. `002_users.sql`
+3. `003_workspace_memberships.sql`
+4. `004_templates.sql`
+5. `005_rooms.sql`
+6. `006_meetings.sql`
+7. `007_meeting_instances.sql`
+8. `008_participants.sql`
+9. `009_permissions.sql`
+10. `010_chat_messages.sql`
+11. `011_recordings.sql`
+12. `012_attendance.sql`
+13. `013_audit_logs.sql`
+
+### `013_audit_logs.sql` fields
+
+```sql
+id uuid primary key,
+workspace_id uuid not null,
+meeting_instance_id uuid null,
+actor_user_id uuid null,
+actor_participant_id uuid null,
+target_type text not null,
+target_id text null,
+action text not null,
+payload_json jsonb not null default '{}'::jsonb,
+ip_address inet null,
+user_agent text null,
+created_at timestamptz not null default now()
+```
+
+## Appendix F. Durable Object contract
+
+### `apps/realtime-worker/src/durable/RoomCoordinator.ts`
+
+```ts
+import type { RoomEvent } from "@opsui/shared-types/events";
+
+interface ConnectionState {
+  participantId: string;
+  meetingInstanceId: string;
+  role: string;
+  displayName: string;
+  lastSeenAt: string;
+}
+
+interface RoomSnapshot {
+  meetingInstanceId: string;
+  lockState: "locked" | "unlocked";
+  recordingState: "idle" | "starting" | "recording" | "stopping";
+  participants: Record<string, ConnectionState>;
+  lobby: string[];
+  handsRaised: string[];
+  lastEventNumber: number;
+}
+
+export class RoomCoordinator extends DurableObject<Env> {
+  async fetch(request: Request): Promise<Response> {
+    if (request.headers.get("Upgrade") !== "websocket") {
+      return new Response("Expected websocket", { status: 426 });
+    }
+
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    server.accept();
+
+    server.addEventListener("message", async (event) => {
+      await this.handleIncoming(server, String(event.data));
+    });
+
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+    });
+  }
+
+  private async handleIncoming(ws: WebSocket, raw: string): Promise<void> {
+    const message = JSON.parse(raw) as { type: string; payload?: unknown };
+    if (message.type === "ping") {
+      ws.send(JSON.stringify({ type: "pong" }));
+      return;
+    }
+  }
+
+  private broadcast(event: RoomEvent): void {
+    const payload = JSON.stringify(event);
+    for (const socket of this.ctx.getWebSockets()) {
+      socket.send(payload);
+    }
+  }
+}
+```
+
+Implementation rule:
+
+- the Durable Object owns event ordering and fan-out
+- the API Worker owns policy validation and durable persistence
+- do not let frontend clients invent authoritative room state
+
+## Appendix G. First API surface
+
+### `apps/api-worker/src/index.ts`
+
+```ts
+export interface Env {
+  DB: Hyperdrive;
+  ROOM_COORDINATOR: DurableObjectNamespace;
+  MEDIA_BUCKET: R2Bucket;
+  ANALYTICS: AnalyticsEngineDataset;
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+
+    if (url.pathname === "/v1/health") {
+      return Response.json({ ok: true, service: "opsui-meets-api" });
+    }
+
+    if (url.pathname === "/v1/rooms" && request.method === "POST") {
+      return createRoom(request, env);
+    }
+
+    if (url.pathname === "/v1/meetings" && request.method === "POST") {
+      return createMeeting(request, env);
+    }
+
+    return new Response("Not found", { status: 404 });
+  },
+};
+```
+
+### API handler rule set
+
+- every mutation requires `workspace_id`
+- every mutation requires authenticated actor context or valid invite context
+- every mutation writes an audit event on success
+- every idempotent endpoint accepts an `Idempotency-Key` header
+
+## Appendix H. First frontend route priorities
+
+### `apps/web` route order
+
+1. `/`
+2. `/join`
+3. `/dashboard`
+4. `/schedule`
+5. `/rooms/:roomSlug`
+6. `/meetings/:meetingInstanceId/live`
+7. `/meetings/:meetingInstanceId/summary`
+
+### UI shell order
+
+1. public landing with `Join` and `Create now`
+2. prejoin screen
+3. dashboard with quick create and upcoming sessions
+4. live room shell with host console placeholder
+5. summary screen with recording, attendance, and action-items placeholders
+
+## Appendix I. Decisions to freeze before coding
+
+- Use PostgreSQL via Hyperdrive as the system of record.
+- Treat Durable Objects as hot room state only.
+- Keep media provider logic behind `packages/media-adapter`.
+- Ship guest join in MVP, but gate it with workspace policy and rate limiting.
+- Ship persistent rooms in MVP.
+- Keep whiteboard out of the first implementation pass.
+- Make the host console a first-class layout region, not a modal or overflow menu.
+
+## Appendix J. Recommended next coding pass
+
+If Codex continues from this document into actual repository creation, the next pass should create only these first files and nothing more:
+
+1. root `package.json`
+2. root `pnpm-workspace.yaml`
+3. root `tsconfig.base.json`
+4. `apps/api-worker/package.json`
+5. `apps/api-worker/wrangler.jsonc`
+6. `apps/realtime-worker/package.json`
+7. `apps/realtime-worker/wrangler.jsonc`
+8. `packages/shared-types/package.json`
+9. `packages/shared-types/src/permissions.ts`
+10. `packages/shared-types/src/events.ts`
+11. `packages/shared-types/src/rooms.ts`
+12. `apps/realtime-worker/src/durable/RoomCoordinator.ts`

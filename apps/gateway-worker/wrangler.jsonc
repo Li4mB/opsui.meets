@@ -1,0 +1,22 @@
+{
+  "name": "opsui-meets-gateway",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-26",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "opsuimeets.com",
+      "custom_domain": true
+    }
+  ],
+  "services": [
+    {
+      "binding": "AUTH_SERVICE",
+      "service": "opsui-meets-auth"
+    },
+    {
+      "binding": "API_SERVICE",
+      "service": "opsui-meets-api"
+    }
+  ]
+}

@@ -1,0 +1,66 @@
+name: opsui-meets-ci
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    env:
+      PREVIEW_SMOKE_PUBLIC_GATEWAY_URL: ${{ secrets.PREVIEW_SMOKE_PUBLIC_GATEWAY_URL }}
+      PREVIEW_SMOKE_API_URL: ${{ secrets.PREVIEW_SMOKE_API_URL }}
+      PREVIEW_SMOKE_AUTH_URL: ${{ secrets.PREVIEW_SMOKE_AUTH_URL }}
+      PREVIEW_SMOKE_DOCS_URL: ${{ secrets.PREVIEW_SMOKE_DOCS_URL }}
+      PREVIEW_SMOKE_PREVIEW_URL: ${{ secrets.PREVIEW_SMOKE_PREVIEW_URL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install dependencies
+        run: corepack pnpm install --frozen-lockfile
+
+      - name: Verify workspace
+        run: corepack pnpm verify
+
+      - name: Export topology artifacts
+        run: corepack pnpm export:topology
+
+      - name: Export readiness artifacts
+        run: corepack pnpm export:readiness
+
+      - name: Smoke preview deployment
+        if: ${{ env.PREVIEW_SMOKE_PUBLIC_GATEWAY_URL != '' || env.PREVIEW_SMOKE_API_URL != '' || env.PREVIEW_SMOKE_AUTH_URL != '' || env.PREVIEW_SMOKE_DOCS_URL != '' || env.PREVIEW_SMOKE_PREVIEW_URL != '' }}
+        run: corepack pnpm smoke:preview
+
+      - name: Upload topology artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: opsui-meets-topology
+          path: |
+            opsui-meets.topology.json
+            opsui-meets.topology.md
+            opsui-meets.topology.csv
+            opsui-meets.topology.sha256
+            opsui-meets.topology.bundle.json
+
+      - name: Upload readiness artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: opsui-meets-readiness
+          path: |
+            opsui-meets.readiness.json
+            opsui-meets.readiness.md

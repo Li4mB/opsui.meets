@@ -1,0 +1,177 @@
+{
+  "product": "OpsUI Meets",
+  "source": "packages/config/src/topology.ts",
+  "surfaces": [
+    {
+      "kind": "public-gateway",
+      "hostname": "opsuimeets.com",
+      "cloudflareProduct": "workers",
+      "wranglerName": "opsui-meets-gateway",
+      "workspaceTarget": "apps/gateway-worker",
+      "purpose": "Public landing, room join routing, and app gateway.",
+      "rolloutStatus": "ready",
+      "healthUrl": "https://opsuimeets.com/v1/health",
+      "requiredEnvVars": [],
+      "serviceBindings": [
+        {
+          "binding": "AUTH_SERVICE",
+          "service": "opsui-meets-auth"
+        },
+        {
+          "binding": "API_SERVICE",
+          "service": "opsui-meets-api"
+        }
+      ],
+      "analyticsBindings": [],
+      "durableObjectBindings": []
+    },
+    {
+      "kind": "app",
+      "hostname": "app.opsuimeets.com",
+      "cloudflareProduct": "pages",
+      "wranglerName": "opsui-meets-web",
+      "workspaceTarget": "apps/web",
+      "purpose": "Primary meeting dashboard, prejoin, and live-room app shell.",
+      "rolloutStatus": "ready",
+      "healthUrl": null,
+      "requiredEnvVars": [],
+      "serviceBindings": [],
+      "analyticsBindings": [],
+      "durableObjectBindings": []
+    },
+    {
+      "kind": "api",
+      "hostname": "api.opsuimeets.com",
+      "cloudflareProduct": "workers",
+      "wranglerName": "opsui-meets-api",
+      "workspaceTarget": "apps/api-worker",
+      "purpose": "Edge API for rooms, meetings, moderation, summaries, and exports.",
+      "rolloutStatus": "ready",
+      "healthUrl": "https://api.opsuimeets.com/v1/health",
+      "requiredEnvVars": [
+        "APP_ENV",
+        "APP_DATA_MODE",
+        "DATABASE_URL",
+        "MEDIA_CONTROL_SHARED_SECRET"
+      ],
+      "serviceBindings": [
+        {
+          "binding": "REALTIME_SERVICE",
+          "service": "opsui-meets-realtime"
+        },
+        {
+          "binding": "MEDIA_SERVICE",
+          "service": "opsui-meets-media"
+        }
+      ],
+      "analyticsBindings": [
+        {
+          "binding": "ANALYTICS"
+        }
+      ],
+      "durableObjectBindings": []
+    },
+    {
+      "kind": "realtime",
+      "hostname": "ws.opsuimeets.com",
+      "cloudflareProduct": "workers",
+      "wranglerName": "opsui-meets-realtime",
+      "workspaceTarget": "apps/realtime-worker",
+      "purpose": "Realtime signaling and room coordination boundary.",
+      "rolloutStatus": "ready",
+      "healthUrl": "https://ws.opsuimeets.com/v1/health",
+      "requiredEnvVars": [],
+      "serviceBindings": [],
+      "analyticsBindings": [],
+      "durableObjectBindings": [
+        {
+          "name": "ROOM_COORDINATOR",
+          "className": "RoomCoordinator"
+        }
+      ]
+    },
+    {
+      "kind": "media",
+      "hostname": "media.opsuimeets.com",
+      "cloudflareProduct": "workers",
+      "wranglerName": "opsui-meets-media",
+      "workspaceTarget": "apps/media-worker",
+      "purpose": "Media delivery, upload, and recording service boundary.",
+      "rolloutStatus": "ready",
+      "healthUrl": "https://media.opsuimeets.com/v1/health",
+      "requiredEnvVars": [
+        "MEDIA_BACKEND_BASE_URL",
+        "MEDIA_CONTROL_SHARED_SECRET"
+      ],
+      "serviceBindings": [],
+      "analyticsBindings": [],
+      "durableObjectBindings": []
+    },
+    {
+      "kind": "auth",
+      "hostname": "auth.opsuimeets.com",
+      "cloudflareProduct": "workers",
+      "wranglerName": "opsui-meets-auth",
+      "workspaceTarget": "apps/auth-worker",
+      "purpose": "Session, join-token, and authentication glue services.",
+      "rolloutStatus": "ready",
+      "healthUrl": "https://auth.opsuimeets.com/v1/health",
+      "requiredEnvVars": [
+        "COOKIE_DOMAIN",
+        "MOCK_SESSION_SIGNING_SECRET",
+        "AUTH_ENFORCE_MEMBERSHIP_DIRECTORY",
+        "AUTH_MEMBERSHIP_DIRECTORY_JSON"
+      ],
+      "serviceBindings": [],
+      "analyticsBindings": [
+        {
+          "binding": "ANALYTICS"
+        }
+      ],
+      "durableObjectBindings": []
+    },
+    {
+      "kind": "admin",
+      "hostname": "admin.opsuimeets.com",
+      "cloudflareProduct": "pages",
+      "wranglerName": "opsui-meets-admin",
+      "workspaceTarget": "apps/admin",
+      "purpose": "Internal governance, policy, audit, and delivery operations UI.",
+      "rolloutStatus": "ready",
+      "healthUrl": null,
+      "requiredEnvVars": [],
+      "serviceBindings": [],
+      "analyticsBindings": [],
+      "durableObjectBindings": []
+    },
+    {
+      "kind": "docs",
+      "hostname": "docs.opsuimeets.com",
+      "cloudflareProduct": "pages",
+      "wranglerName": "opsui-meets-docs",
+      "workspaceTarget": "apps/docs",
+      "purpose": "Product, platform, and deployment documentation surface.",
+      "rolloutStatus": "ready",
+      "healthUrl": null,
+      "requiredEnvVars": [],
+      "serviceBindings": [],
+      "analyticsBindings": [],
+      "durableObjectBindings": []
+    },
+    {
+      "kind": "preview",
+      "hostname": "preview.opsuimeets.com",
+      "cloudflareProduct": "pages",
+      "wranglerName": "opsui-meets-preview",
+      "workspaceTarget": "apps/preview",
+      "purpose": "Staging and preview lane for rollout validation.",
+      "rolloutStatus": "active",
+      "healthUrl": null,
+      "requiredEnvVars": [],
+      "serviceBindings": [],
+      "analyticsBindings": [],
+      "durableObjectBindings": []
+    }
+  ],
+  "generatedAt": "2026-03-27T21:07:05.328Z"
+}

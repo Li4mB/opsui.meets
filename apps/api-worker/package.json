@@ -1,0 +1,16 @@
+{
+  "name": "@opsui/api-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {
+    "@opsui/db": "workspace:*",
+    "@opsui/media-adapter": "workspace:*",
+    "@opsui/shared-types": "workspace:*"
+  },
+  "scripts": {
+    "build": "wrangler deploy --dry-run",
+    "dev": "wrangler dev",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

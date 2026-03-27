@@ -1,0 +1,34 @@
+{
+  "name": "opsui-meets-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "api.opsuimeets.com",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "APP_ENV": "production",
+    "APP_DATA_MODE": "postgres",
+    "DATABASE_URL": "",
+    "MEDIA_CONTROL_SHARED_SECRET": ""
+  },
+  "services": [
+    {
+      "binding": "REALTIME_SERVICE",
+      "service": "opsui-meets-realtime"
+    },
+    {
+      "binding": "MEDIA_SERVICE",
+      "service": "opsui-meets-media"
+    }
+  ],
+  "analytics_engine_datasets": [
+    {
+      "binding": "ANALYTICS"
+    }
+  ]
+}

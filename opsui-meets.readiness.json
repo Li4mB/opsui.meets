@@ -1,0 +1,755 @@
+{
+  "generatedAt": "2026-03-27T21:07:05.079Z",
+  "overallStatus": "not_ready",
+  "recommendedNextStep": "Bind DATABASE_URL to a real Postgres service, apply packages/db/src/migrations/016_runtime_state.sql, and rerun preview smoke before public launch.",
+  "summary": {
+    "readyFoundations": 18,
+    "blockers": 3,
+    "prelaunchHardening": 2
+  },
+  "readyFoundations": [
+    {
+      "id": "verified-workspace-guardrails",
+      "title": "Workspace verification and deployment artifacts",
+      "status": "ready",
+      "summary": "The repo already has an enforced verification path, CI execution, and exported topology artifacts for deployment handoff.",
+      "details": [
+        "Local verification is codified in the root verify script.",
+        "CI runs the same verify path before exporting deployment artifacts.",
+        "Topology artifacts are published into docs and preview public assets for direct download."
+      ],
+      "evidence": [
+        {
+          "path": "package.json",
+          "line": 31,
+          "note": "Root verify script is defined."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 37,
+          "note": "CI runs the verify workflow."
+        },
+        {
+          "path": "scripts/export-topology.mjs",
+          "line": 17,
+          "note": "Topology export publishes docs assets."
+        },
+        {
+          "path": "scripts/export-topology.mjs",
+          "line": 18,
+          "note": "Topology export publishes preview assets."
+        }
+      ]
+    },
+    {
+      "id": "worker-analytics-baseline",
+      "title": "Worker analytics baseline",
+      "status": "ready",
+      "summary": "The auth and API workers now emit baseline request analytics for health, join, session, recording, moderation, and follow-up flows, which closes the previous zero-telemetry gap at the edge.",
+      "details": [
+        "Both Workers now declare Cloudflare Analytics Engine bindings.",
+        "Shared helpers emit low-overhead route metrics with route, outcome, and client metadata.",
+        "This is a baseline telemetry layer; external alert routing is still separate launch work."
+      ],
+      "evidence": [
+        {
+          "path": "apps/auth-worker/wrangler.jsonc",
+          "line": 30,
+          "note": "Auth worker declares an analytics dataset binding."
+        },
+        {
+          "path": "apps/api-worker/wrangler.jsonc",
+          "line": 31,
+          "note": "API worker declares an analytics dataset binding."
+        },
+        {
+          "path": "apps/auth-worker/src/lib/analytics.ts",
+          "line": 12,
+          "note": "Auth worker emits Analytics Engine datapoints."
+        },
+        {
+          "path": "apps/api-worker/src/lib/analytics.ts",
+          "line": 12,
+          "note": "API worker emits Analytics Engine datapoints."
+        }
+      ]
+    },
+    {
+      "id": "fail-closed-auth-media-guards",
+      "title": "Fail-closed auth and media guardrails",
+      "status": "ready",
+      "summary": "Mock auth is disabled by default in production config, and the media worker now fails closed when upload or download bases are not configured.",
+      "details": [
+        "The auth worker no longer exposes the mock session path in production mode by default.",
+        "Media download and upload routes return explicit configuration errors instead of placeholder URLs."
+      ],
+      "evidence": [
+        {
+          "path": "apps/auth-worker/wrangler.jsonc",
+          "line": 14,
+          "note": "Mock auth is disabled by default."
+        },
+        {
+          "path": "apps/media-worker/src/index.ts",
+          "line": 47,
+          "note": "Download route fails closed when not configured."
+        },
+        {
+          "path": "apps/media-worker/src/index.ts",
+          "line": 68,
+          "note": "Upload route fails closed when not configured."
+        }
+      ]
+    },
+    {
+      "id": "media-control-service-boundary",
+      "title": "Media control-service boundary",
+      "status": "ready",
+      "summary": "The API worker now talks to the media worker over an explicit service binding, and the media worker proxies control requests to a dedicated backend only when configured.",
+      "details": [
+        "Recording control no longer returns synthetic ids inside the adapter itself.",
+        "The media worker fails closed when no dedicated backend is configured.",
+        "This is the correct architectural boundary for a real media plane, even though the backend is still not live."
+      ],
+      "evidence": [
+        {
+          "path": "apps/api-worker/wrangler.jsonc",
+          "line": 25,
+          "note": "API worker now binds to the media worker."
+        },
+        {
+          "path": "apps/media-worker/src/index.ts",
+          "line": 34,
+          "note": "Media worker exposes explicit control-plane routes."
+        },
+        {
+          "path": "apps/media-worker/src/index.ts",
+          "line": 123,
+          "note": "Media control fails closed when no backend is configured."
+        },
+        {
+          "path": "packages/media-adapter/src/cloudflare-realtime.ts",
+          "line": 24,
+          "note": "Media adapter now calls the control boundary instead of generating ids locally."
+        }
+      ]
+    },
+    {
+      "id": "media-control-plane-auth",
+      "title": "Signed media control-plane auth",
+      "status": "ready",
+      "summary": "Media control requests are now signed from the API boundary and verified by the media worker instead of leaving those public control routes effectively open.",
+      "details": [
+        "The shared media adapter now signs control-plane payloads with a timestamped HMAC.",
+        "The media worker rejects unsigned or invalid control requests before proxying to a backend.",
+        "This closes an important control-plane trust gap even though the real backend is still not configured."
+      ],
+      "evidence": [
+        {
+          "path": "packages/media-adapter/src/control-auth.ts",
+          "line": 12,
+          "note": "Media adapter now creates signed control-plane headers."
+        },
+        {
+          "path": "packages/media-adapter/src/control-auth.ts",
+          "line": 31,
+          "note": "Media worker can verify signed control-plane requests."
+        },
+        {
+          "path": "apps/media-worker/src/index.ts",
+          "line": 95,
+          "note": "Media worker now verifies signed control-plane requests before proxying."
+        },
+        {
+          "path": "apps/api-worker/wrangler.jsonc",
+          "line": 17,
+          "note": "API scaffold now carries a dedicated shared secret for media control signing."
+        }
+      ]
+    },
+    {
+      "id": "persistence-runtime-signals",
+      "title": "Persistence runtime signals",
+      "status": "ready",
+      "summary": "The API now exposes whether durable persistence is selected, configured, and launch-ready, which makes preview and docs much more honest about the database rollout state.",
+      "details": [
+        "Health now reports the active data mode.",
+        "Health distinguishes between database configuration and actual persistence readiness.",
+        "This reduces ambiguity before the full Postgres repository implementation lands."
+      ],
+      "evidence": [
+        {
+          "path": "apps/api-worker/wrangler.jsonc",
+          "line": 16,
+          "note": "API scaffold now carries an explicit database connection placeholder."
+        },
+        {
+          "path": "apps/api-worker/src/routes/health.ts",
+          "line": 13,
+          "note": "API health reports whether database connectivity is configured."
+        },
+        {
+          "path": "apps/api-worker/src/routes/health.ts",
+          "line": 14,
+          "note": "API health reports whether persistence is actually ready for launch."
+        }
+      ]
+    },
+    {
+      "id": "persistence-mode-guardrails",
+      "title": "Persistence mode guardrails",
+      "status": "ready",
+      "summary": "If Postgres mode is selected before the durable adapter exists, the API now fails early with a clear 503 instead of leaking that mismatch through arbitrary route failures.",
+      "details": [
+        "The persistence availability decision now lives in one shared helper.",
+        "The main router blocks non-health traffic before route execution when Postgres mode is unavailable.",
+        "Repository access uses the same guard, which keeps direct route-level data access aligned with the top-level worker behavior."
+      ],
+      "evidence": [
+        {
+          "path": "apps/api-worker/src/lib/data-status.ts",
+          "line": 41,
+          "note": "API exposes a shared persistence-availability helper."
+        },
+        {
+          "path": "apps/api-worker/src/lib/data-status.ts",
+          "line": 51,
+          "note": "Unavailable Postgres mode now maps to a clear 503 error code."
+        },
+        {
+          "path": "apps/api-worker/src/lib/data.ts",
+          "line": 11,
+          "note": "Repository access uses the shared persistence guard."
+        },
+        {
+          "path": "apps/api-worker/src/index.ts",
+          "line": 65,
+          "note": "Top-level API routing blocks unavailable persistence mode before executing routes."
+        }
+      ]
+    },
+    {
+      "id": "postgres-runtime-state-adapter",
+      "title": "Postgres runtime-state adapter",
+      "status": "ready",
+      "summary": "The DB package now has a real Postgres-backed persistence path that loads and commits request-scoped state instead of throwing not-implemented errors.",
+      "details": [
+        "The adapter now loads a runtime-state snapshot from Postgres and commits back through a versioned row.",
+        "Existing repository behavior is reused against that request-scoped state, which keeps the product logic aligned between memory and Postgres modes.",
+        "A dedicated migration now creates the runtime-state table required by the adapter."
+      ],
+      "evidence": [
+        {
+          "path": "packages/db/src/adapters/postgres.ts",
+          "line": 39,
+          "note": "Postgres adapter now loads persisted runtime state."
+        },
+        {
+          "path": "packages/db/src/adapters/postgres.ts",
+          "line": 129,
+          "note": "Postgres adapter now commits runtime state back to Postgres."
+        },
+        {
+          "path": "packages/db/src/adapters/postgres.ts",
+          "line": 141,
+          "note": "Adapter targets the runtime-state table instead of throwing not-implemented errors."
+        },
+        {
+          "path": "packages/db/src/migrations/016_runtime_state.sql",
+          "line": 1,
+          "note": "A dedicated migration now creates the runtime-state table."
+        }
+      ]
+    },
+    {
+      "id": "database-migration-tooling",
+      "title": "Database migration tooling",
+      "status": "ready",
+      "summary": "The repo now has a concrete migration workflow for provisioning the Postgres schema instead of leaving database bring-up as a manual, undocumented step.",
+      "details": [
+        "Root commands now expose database status and migration execution.",
+        "The DB package tracks applied migrations in opsui_schema_migrations.",
+        "This turns DATABASE_URL activation into an operational procedure instead of an ad hoc task."
+      ],
+      "evidence": [
+        {
+          "path": "package.json",
+          "line": 19,
+          "note": "Root workspace now exposes a database migration command."
+        },
+        {
+          "path": "package.json",
+          "line": 20,
+          "note": "Root workspace now exposes a database status command."
+        },
+        {
+          "path": "packages/db/scripts/migrate.mjs",
+          "line": 22,
+          "note": "Database migrations are tracked in a schema-migrations table."
+        },
+        {
+          "path": "packages/db/scripts/status.mjs",
+          "line": 51,
+          "note": "DB status command reports applied vs pending migrations."
+        }
+      ]
+    },
+    {
+      "id": "signed-mock-session-cookies",
+      "title": "Signed scaffold session cookies",
+      "status": "ready",
+      "summary": "The auth scaffold no longer trusts any opaque cookie value. Mock sessions are now signed and verified before actor data is accepted by the app surfaces.",
+      "details": [
+        "Session issuance now creates a signed cookie payload instead of storing only a random id.",
+        "Session reads verify the signature before treating the actor as authenticated.",
+        "This is stronger than the original scaffold, even though a real identity provider is still required."
+      ],
+      "evidence": [
+        {
+          "path": "apps/auth-worker/src/routes/session.ts",
+          "line": 8,
+          "note": "Mock session issuance now signs the cookie payload."
+        },
+        {
+          "path": "apps/auth-worker/src/routes/session-info.ts",
+          "line": 4,
+          "note": "Session reads verify the signed cookie before authenticating."
+        },
+        {
+          "path": "apps/auth-worker/wrangler.jsonc",
+          "line": 17,
+          "note": "Auth worker now carries a signing secret setting."
+        }
+      ]
+    },
+    {
+      "id": "oidc-provider-boundary",
+      "title": "OIDC provider boundary",
+      "status": "ready",
+      "summary": "The auth worker now exposes provider-aware login, callback, and logout routes, with generic OIDC token and userinfo exchange scaffolding instead of only a local mock-session lane.",
+      "details": [
+        "The auth surface now has explicit OIDC login and callback routes.",
+        "Callback handling exchanges an authorization code for tokens and derives a session from userinfo claims.",
+        "Workspace mapping is still scaffolded, but the provider boundary is no longer missing."
+      ],
+      "evidence": [
+        {
+          "path": "apps/auth-worker/src/index.ts",
+          "line": 45,
+          "note": "Auth worker exposes an OIDC login route."
+        },
+        {
+          "path": "apps/auth-worker/src/index.ts",
+          "line": 57,
+          "note": "Auth worker exposes an OIDC callback route."
+        },
+        {
+          "path": "apps/auth-worker/src/routes/oidc.ts",
+          "line": 125,
+          "note": "OIDC callback performs an authorization-code exchange."
+        },
+        {
+          "path": "apps/auth-worker/wrangler.jsonc",
+          "line": 21,
+          "note": "Auth worker now carries OIDC configuration variables."
+        }
+      ]
+    },
+    {
+      "id": "auth-membership-directory-boundary",
+      "title": "Authoritative auth membership directory boundary",
+      "status": "ready",
+      "summary": "The auth worker now has an explicit membership directory boundary for OIDC and mock session issuance, instead of trusting provider claims and defaults alone.",
+      "details": [
+        "OIDC callback can now fail closed when a user has no configured membership entry.",
+        "Mock session issuance can also require a configured membership record.",
+        "Auth health now reports whether the membership directory exists and whether enforcement is active."
+      ],
+      "evidence": [
+        {
+          "path": "apps/auth-worker/src/lib/membership-directory.ts",
+          "line": 45,
+          "note": "Auth worker now resolves membership through a dedicated directory helper."
+        },
+        {
+          "path": "apps/auth-worker/src/lib/membership-directory.ts",
+          "line": 33,
+          "note": "Membership enforcement policy is centralized in the auth worker."
+        },
+        {
+          "path": "apps/auth-worker/wrangler.jsonc",
+          "line": 19,
+          "note": "Auth worker scaffold now carries a membership directory variable."
+        },
+        {
+          "path": "apps/auth-worker/src/routes/oidc.ts",
+          "line": 228,
+          "note": "OIDC callback now fails closed when no membership entry exists."
+        },
+        {
+          "path": "apps/auth-worker/src/routes/health.ts",
+          "line": 21,
+          "note": "Auth health now reports directory configuration and enforcement state."
+        }
+      ]
+    },
+    {
+      "id": "oidc-workspace-resolution",
+      "title": "Configurable OIDC workspace resolution",
+      "status": "ready",
+      "summary": "OIDC callback handling can now derive the workspace from a configured claim or email-domain map instead of always forcing every authenticated user into the default workspace.",
+      "details": [
+        "Workspace resolution can come from an explicit OIDC claim.",
+        "A domain-to-workspace map can be used when claim-based routing is unavailable.",
+        "This reduces tenant coupling, even though full membership and role enforcement are still not complete."
+      ],
+      "evidence": [
+        {
+          "path": "apps/auth-worker/src/routes/oidc.ts",
+          "line": 395,
+          "note": "OIDC callback now resolves workspace through a helper instead of hardcoding the default workspace."
+        },
+        {
+          "path": "apps/auth-worker/src/routes/oidc.ts",
+          "line": 408,
+          "note": "Workspace resolution can use a configured OIDC claim."
+        },
+        {
+          "path": "apps/auth-worker/src/routes/oidc.ts",
+          "line": 454,
+          "note": "Workspace resolution can fall back to an email-domain map."
+        }
+      ]
+    },
+    {
+      "id": "oidc-workspace-role-guards",
+      "title": "OIDC workspace and role guardrails",
+      "status": "ready",
+      "summary": "OIDC callback handling now fails closed for disallowed workspaces and carries a mapped workspace role into the signed session instead of treating every authenticated user as equally trusted.",
+      "details": [
+        "Workspace access can now be restricted to an explicit allowlist.",
+        "A role claim or default role can be normalized into the session actor.",
+        "This is still not a substitute for database-backed membership enforcement, but it is much closer to a real production boundary."
+      ],
+      "evidence": [
+        {
+          "path": "apps/auth-worker/src/routes/oidc.ts",
+          "line": 244,
+          "note": "OIDC callback now checks an explicit workspace allowlist."
+        },
+        {
+          "path": "apps/auth-worker/src/routes/oidc.ts",
+          "line": 399,
+          "note": "OIDC callback now maps a workspace role into the session actor."
+        },
+        {
+          "path": "apps/auth-worker/src/routes/oidc.ts",
+          "line": 253,
+          "note": "Disallowed workspace resolution now fails closed."
+        },
+        {
+          "path": "apps/auth-worker/wrangler.jsonc",
+          "line": 24,
+          "note": "Auth worker config exposes allowed workspace ids."
+        }
+      ]
+    },
+    {
+      "id": "realtime-signaling-primitives",
+      "title": "Realtime signaling and room-state primitives",
+      "status": "ready",
+      "summary": "The realtime worker now supports direct offer/answer/ICE relay plus room snapshot propagation, which moves it beyond a pure hand-raise presence channel.",
+      "details": [
+        "Participants can relay WebRTC signaling messages through the Durable Object.",
+        "Room snapshots now include lock and recording state and can be requested or broadcast on change.",
+        "This is still not a full production media plane, but it is a more credible realtime control foundation."
+      ],
+      "evidence": [
+        {
+          "path": "apps/realtime-worker/src/durable/RoomCoordinator.ts",
+          "line": 28,
+          "note": "Realtime coordinator can relay offer messages."
+        },
+        {
+          "path": "apps/realtime-worker/src/durable/RoomCoordinator.ts",
+          "line": 29,
+          "note": "Realtime coordinator can relay answer messages."
+        },
+        {
+          "path": "apps/realtime-worker/src/durable/RoomCoordinator.ts",
+          "line": 30,
+          "note": "Realtime coordinator can relay ICE candidates."
+        },
+        {
+          "path": "apps/realtime-worker/src/durable/RoomCoordinator.ts",
+          "line": 105,
+          "note": "Realtime coordinator can publish room snapshots."
+        }
+      ]
+    },
+    {
+      "id": "realtime-control-sync",
+      "title": "Realtime backend control sync",
+      "status": "ready",
+      "summary": "The realtime worker can now accept backend room-state patches and the API pushes join, moderation, recording, and lifecycle updates into it, so websocket room state no longer drifts as easily from backend truth.",
+      "details": [
+        "The Durable Object now exposes an internal state-sync route in addition to websocket handling.",
+        "API room lifecycle routes now best-effort sync lock, lobby, admit, remove, recording, and end-meeting state into realtime.",
+        "Realtime health now reports control-sync readiness separately from raw websocket availability."
+      ],
+      "evidence": [
+        {
+          "path": "apps/realtime-worker/src/durable/RoomCoordinator.ts",
+          "line": 60,
+          "note": "Realtime coordinator now accepts internal state-sync requests."
+        },
+        {
+          "path": "apps/realtime-worker/src/durable/RoomCoordinator.ts",
+          "line": 72,
+          "note": "Realtime coordinator can merge backend room-state patches into the live snapshot."
+        },
+        {
+          "path": "apps/api-worker/src/lib/realtime.ts",
+          "line": 4,
+          "note": "API worker now has a helper for syncing backend state into realtime."
+        },
+        {
+          "path": "apps/realtime-worker/src/index.ts",
+          "line": 19,
+          "note": "Realtime health now reports control-sync readiness."
+        }
+      ]
+    },
+    {
+      "id": "edge-rate-limit-baseline",
+      "title": "Edge rate-limit baseline",
+      "status": "ready",
+      "summary": "The public auth and API edges now have explicit request throttles for join, mock session, and hook-trigger surfaces instead of relying on no abuse controls at all.",
+      "details": [
+        "Join-token and mock-session issuance are rate limited in the auth worker.",
+        "Meeting join and hook-trigger routes are rate limited in the API worker.",
+        "This is still a local fixed-window baseline, but it closes the previous zero-control gap."
+      ],
+      "evidence": [
+        {
+          "path": "apps/auth-worker/src/lib/rate-limit.ts",
+          "line": 37,
+          "note": "Auth worker now exposes a shared rate-limit helper."
+        },
+        {
+          "path": "apps/auth-worker/src/index.ts",
+          "line": 20,
+          "note": "Auth join-token issuance is rate limited."
+        },
+        {
+          "path": "apps/api-worker/src/lib/rate-limit.ts",
+          "line": 32,
+          "note": "API worker now exposes a shared rate-limit helper."
+        },
+        {
+          "path": "apps/api-worker/src/routes/join.ts",
+          "line": 18,
+          "note": "Meeting join is rate limited."
+        }
+      ]
+    },
+    {
+      "id": "preview-smoke-runner",
+      "title": "Preview smoke runner",
+      "status": "ready",
+      "summary": "The repo now includes an env-driven smoke runner for deployed preview surfaces, so ops can validate bound hostnames and published artifacts without inventing one-off checks.",
+      "details": [
+        "Worker surfaces are checked through their health endpoints.",
+        "Docs and preview Pages surfaces are checked for both page response and published topology/readiness assets.",
+        "The runner is optional until preview host URLs are configured, which keeps local verification stable while still allowing CI execution."
+      ],
+      "evidence": [
+        {
+          "path": "package.json",
+          "line": 25,
+          "note": "Root package now exposes a preview smoke script."
+        },
+        {
+          "path": "scripts/smoke-preview.mjs",
+          "line": 25,
+          "note": "Preview smoke runner uses env-configured targets."
+        },
+        {
+          "path": "scripts/smoke-preview.mjs",
+          "line": 99,
+          "note": "Preview smoke runner verifies published readiness assets."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 47,
+          "note": "CI can execute preview smoke checks when preview URLs are configured."
+        }
+      ]
+    }
+  ],
+  "blockers": [
+    {
+      "id": "persistence-not-production-ready",
+      "title": "Durable persistence is not production-ready",
+      "status": "blocked",
+      "summary": "The Postgres code path now exists, but the checked-in API deployment scaffold still does not carry a real database connection string. Durable persistence still needs an actual bound database secret before production traffic should rely on it.",
+      "details": [
+        "The repository adapter is now wired to a real Postgres-backed runtime-state table.",
+        "The checked-in worker config now selects Postgres mode, but still leaves DATABASE_URL empty for safety.",
+        "The runtime health surface can prove whether database connectivity is configured and whether persistence is ready.",
+        "Production launch should not proceed until DATABASE_URL is bound to a real durable database."
+      ],
+      "evidence": [
+        {
+          "path": "apps/api-worker/wrangler.jsonc",
+          "line": 15,
+          "note": "API worker now targets Postgres mode in the deployment scaffold."
+        },
+        {
+          "path": "apps/api-worker/wrangler.jsonc",
+          "line": 16,
+          "note": "The checked-in deployment scaffold still leaves the database connection unset."
+        },
+        {
+          "path": "apps/api-worker/src/routes/health.ts",
+          "line": 14,
+          "note": "API runtime health still reflects that persistence is not ready."
+        },
+        {
+          "path": "packages/db/src/adapters/postgres.ts",
+          "line": 141,
+          "note": "Postgres adapter now persists runtime state into a database table."
+        }
+      ]
+    },
+    {
+      "id": "auth-session-still-synthetic",
+      "title": "Authoritative auth membership still needs production binding",
+      "status": "blocked",
+      "summary": "The auth layer now has signed sessions, an OIDC boundary, and a real membership-directory enforcement path, but the checked-in production scaffold still leaves that directory empty and the live identity provider still needs to be bound.",
+      "details": [
+        "Session integrity is stronger now because the cookie is signed and verified.",
+        "OIDC callback can now fail closed on missing membership instead of trusting provider claims by default.",
+        "The checked-in auth worker scaffold still leaves AUTH_MEMBERSHIP_DIRECTORY_JSON empty for safety.",
+        "Production launch still needs live OIDC provider configuration and a real membership directory binding."
+      ],
+      "evidence": [
+        {
+          "path": "apps/auth-worker/src/lib/membership-directory.ts",
+          "line": 45,
+          "note": "Auth worker now has an authoritative membership directory helper."
+        },
+        {
+          "path": "apps/auth-worker/src/routes/oidc.ts",
+          "line": 228,
+          "note": "OIDC callback can now reject users without configured membership."
+        },
+        {
+          "path": "apps/auth-worker/wrangler.jsonc",
+          "line": 19,
+          "note": "The checked-in auth scaffold still leaves the membership directory empty."
+        },
+        {
+          "path": "apps/auth-worker/wrangler.jsonc",
+          "line": 21,
+          "note": "OIDC config knobs exist, but live provider values still need deployment-time binding."
+        },
+        {
+          "path": "apps/auth-worker/src/index.ts",
+          "line": 30,
+          "note": "Mock session route still exists behind an explicit flag for non-production testing."
+        }
+      ]
+    },
+    {
+      "id": "media-provider-not-integrated",
+      "title": "Media session and recording provider integration is still synthetic",
+      "status": "blocked",
+      "summary": "The media boundary and signed control-plane auth now exist, but the checked-in scaffold still leaves both the backend base URL and the shared control secret unset, so real session and recording operations cannot run yet.",
+      "details": [
+        "The API worker now calls the media worker over a real service binding instead of fabricating provider ids.",
+        "The media worker now rejects unsigned control traffic and still fails closed until `MEDIA_BACKEND_BASE_URL` points at a real backend.",
+        "The checked-in scaffolds still leave `MEDIA_CONTROL_SHARED_SECRET` empty in both API and media worker config.",
+        "Screen share, recording, and playback cannot be treated as production-capable until that backend is live."
+      ],
+      "evidence": [
+        {
+          "path": "apps/media-worker/src/index.ts",
+          "line": 123,
+          "note": "Media worker still blocks control operations until a backend is configured."
+        },
+        {
+          "path": "apps/media-worker/wrangler.jsonc",
+          "line": 15,
+          "note": "Media backend base URL is still empty in the worker scaffold."
+        },
+        {
+          "path": "apps/media-worker/wrangler.jsonc",
+          "line": 16,
+          "note": "Media worker shared control secret is still empty in the worker scaffold."
+        },
+        {
+          "path": "apps/api-worker/wrangler.jsonc",
+          "line": 17,
+          "note": "API worker shared control secret is still empty in the worker scaffold."
+        }
+      ]
+    }
+  ],
+  "prelaunchHardening": [
+    {
+      "id": "preview-smoke-tests-missing",
+      "title": "Deployed preview smoke execution still needs rollout wiring",
+      "status": "pending",
+      "summary": "The smoke runner now exists, but deployed preview host URLs and regular execution still need to be wired into an environment where those domains are actually live.",
+      "details": [
+        "Local and CI verification now support deployed preview smoke execution when preview URLs are configured.",
+        "Launch readiness still needs those preview URLs to be provisioned and maintained against live preview domains."
+      ],
+      "evidence": [
+        {
+          "path": "package.json",
+          "line": 25,
+          "note": "Preview smoke runner now exists in the root package."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 47,
+          "note": "CI can run preview smoke checks, but only after preview URLs are configured."
+        }
+      ]
+    },
+    {
+      "id": "observability-and-alerting",
+      "title": "External alerting and SLO rollout still need first-class work",
+      "status": "pending",
+      "summary": "Worker telemetry and in-product audit visibility now exist, but production launch still needs alert routing, thresholds, and SLO ownership outside the product UI.",
+      "details": [
+        "The product already exposes useful admin and room activity surfaces, and the Workers now emit baseline analytics datapoints.",
+        "Production readiness still needs external alert routing, thresholding, dashboards, and on-call ownership outside the app surfaces."
+      ],
+      "evidence": [
+        {
+          "path": "apps/auth-worker/src/lib/analytics.ts",
+          "line": 12,
+          "note": "Auth worker telemetry baseline now exists."
+        },
+        {
+          "path": "apps/api-worker/src/lib/analytics.ts",
+          "line": 12,
+          "note": "API worker telemetry baseline now exists."
+        },
+        {
+          "path": "apps/admin/src/FollowUpHooksPanel.tsx",
+          "line": 113,
+          "note": "Admin UI already exposes failure triage."
+        },
+        {
+          "path": "apps/admin/src/AuditList.tsx",
+          "line": 1,
+          "note": "Admin audit view exists, but external monitoring is still separate work."
+        }
+      ]
+    }
+  ]
+}

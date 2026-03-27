@@ -1,0 +1,18 @@
+{
+  "name": "@opsui/db",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {
+    "@opsui/shared-types": "workspace:*",
+    "postgres": "^3.4.7"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:status": "node scripts/status.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}
