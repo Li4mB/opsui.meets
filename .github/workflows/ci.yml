@@ -33,6 +33,12 @@ jobs:
       - name: Install dependencies
         run: corepack pnpm install --frozen-lockfile
 
+      - name: Install Playwright browser
+        run: corepack pnpm test:e2e:install
+
+      - name: Run browser regression suite
+        run: corepack pnpm test:e2e
+
       - name: Verify workspace
         run: corepack pnpm verify
 
@@ -64,3 +70,11 @@ jobs:
           path: |
             opsui-meets.readiness.json
             opsui-meets.readiness.md
+
+      - name: Upload Playwright artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: opsui-meets-playwright
+          if-no-files-found: ignore
+          path: output/playwright

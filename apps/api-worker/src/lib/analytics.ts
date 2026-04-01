@@ -19,7 +19,7 @@ export function recordApiMetric(env: Env, input: ApiMetricInput): void {
       getClientAddress(input.request),
     ],
     doubles: [input.status, Date.now()],
-    indexes: [input.route, String(input.status)],
+    indexes: [input.route],
   });
 }
 

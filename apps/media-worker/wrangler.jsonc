@@ -9,10 +9,10 @@
       "custom_domain": true
     }
   ],
-  "vars": {
-    "MEDIA_DOWNLOAD_BASE_URL": "",
-    "MEDIA_UPLOAD_BASE_URL": "",
-    "MEDIA_BACKEND_BASE_URL": "",
-    "MEDIA_CONTROL_SHARED_SECRET": ""
-  }
+  "services": [
+    {
+      "binding": "MEDIA_CONTROL_SERVICE",
+      "service": "opsui-meets-media-control"
+    }
+  ]
 }

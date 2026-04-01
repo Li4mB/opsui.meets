@@ -5,3 +5,10 @@ coverage
 .env
 .env.*
 !.env.example
+*.log
+.playwright-mcp/
+output/playwright/
+qa-*.png
+api-dev.env
+playwright-report/
+test-results/

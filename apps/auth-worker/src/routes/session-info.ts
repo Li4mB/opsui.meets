@@ -19,12 +19,19 @@ export async function getSessionInfo(request: Request, env: Env): Promise<Respon
   const authenticated = actor.userId !== "guest_anonymous";
   const provider = authenticated ? (session?.provider ?? "mock") : "anonymous";
 
-  const response = json({
-    authenticated,
-    sessionType: authenticated ? "user" : "guest",
-    actor,
-    provider,
-  } satisfies SessionInfo);
+  const response = json(
+    {
+      authenticated,
+      sessionType: authenticated ? "user" : "guest",
+      actor,
+      provider,
+    } satisfies SessionInfo,
+    {
+      headers: {
+        "Cache-Control": "no-store",
+      },
+    },
+  );
   recordAuthMetric(env, {
     route: "session-info",
     status: response.status,

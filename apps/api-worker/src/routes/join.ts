@@ -46,6 +46,10 @@ export async function joinMeeting(
   );
   const sessionType = typeof payload.sessionType === "string" ? payload.sessionType : "guest";
   const isGuest = sessionType !== "user";
+  const elevatedRole = actor.workspaceRole ?? (meeting.hostUserId === actor.userId ? "host" : undefined);
+  const canBypassLobby = Boolean(
+    elevatedRole && ["owner", "host", "co_host", "moderator", "presenter"].includes(elevatedRole),
+  );
 
   let joinState: JoinMeetingResult["joinState"] = "direct";
   let reason: JoinMeetingResult["reason"];
@@ -57,9 +61,12 @@ export async function joinMeeting(
     joinState = "blocked";
     reason = "guest_join_disabled";
   } else if (
-    room.policy.lobbyEnabled ||
-    optionalBoolean(payload.lobbyPreferred, false) ||
-    (isGuest && workspacePolicy?.guestJoinMode === "restricted")
+    !canBypassLobby &&
+    (
+      room.policy.lobbyEnabled ||
+      optionalBoolean(payload.lobbyPreferred, false) ||
+      (isGuest && workspacePolicy?.guestJoinMode === "restricted")
+    )
   ) {
     joinState = "lobby";
   }
@@ -71,6 +78,7 @@ export async function joinMeeting(
           meetingInstanceId,
           displayName,
           presence: joinState === "lobby" ? "lobby" : "active",
+          role: elevatedRole,
         });
 
   const result: JoinMeetingResult = {

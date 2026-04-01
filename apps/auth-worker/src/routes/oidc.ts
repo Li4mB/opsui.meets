@@ -277,7 +277,7 @@ export async function handleOidcCallback(request: Request, env: Env): Promise<Re
   );
 
   const headers = new Headers();
-  headers.set("Location", verifiedState.redirectTo ?? "/");
+  headers.set("Location", buildPostAuthRedirectUrl(verifiedState.redirectTo, env));
   headers.append(
     "Set-Cookie",
     [
@@ -318,19 +318,24 @@ export async function handleOidcCallback(request: Request, env: Env): Promise<Re
 }
 
 export function clearSession(request: Request, env: Env): Response {
-  const headers = new Headers();
-  headers.append(
-    "Set-Cookie",
-    [
-      `${SESSION_COOKIE_NAME}=`,
-      `Domain=${env.COOKIE_DOMAIN}`,
-      "Path=/",
-      "HttpOnly",
-      "Secure",
-      "SameSite=Lax",
-      "Max-Age=0",
-    ].join("; "),
-  );
+  const headers = buildClearedSessionHeaders(env);
+  headers.set("Cache-Control", "no-store");
+
+  const url = new URL(request.url);
+  if (request.method === "GET") {
+    headers.set("Location", buildPostAuthRedirectUrl(url.searchParams.get("redirectTo"), env));
+    const response = new Response(null, {
+      status: 302,
+      headers,
+    });
+    recordAuthMetric(env, {
+      route: "session-logout",
+      status: response.status,
+      request,
+      outcome: "cleared",
+    });
+    return response;
+  }
 
   const response = json(
     {
@@ -361,22 +366,76 @@ interface OidcConfiguration {
   userInfoEndpoint: string;
 }
 
-function getOidcConfiguration(env: Env): OidcConfiguration | null {
+export function isOidcConfigured(env: Env): boolean {
   if (!env.OIDC_ISSUER_URL || !env.OIDC_CLIENT_ID || !env.OIDC_CLIENT_SECRET || !env.OIDC_REDIRECT_URI) {
+    return false;
+  }
+
+  try {
+    const issuerUrl = new URL(env.OIDC_ISSUER_URL);
+    return issuerUrl.hostname.toLowerCase() !== "manage.auth0.com";
+  } catch {
+    return false;
+  }
+}
+
+function getOidcConfiguration(env: Env): OidcConfiguration | null {
+  if (!isOidcConfigured(env)) {
     return null;
   }
 
-  const issuerBase = env.OIDC_ISSUER_URL.replace(/\/+$/, "");
+  const issuerBase = env.OIDC_ISSUER_URL!.replace(/\/+$/, "");
   return {
     issuerUrl: issuerBase,
-    clientId: env.OIDC_CLIENT_ID,
-    clientSecret: env.OIDC_CLIENT_SECRET,
-    redirectUri: env.OIDC_REDIRECT_URI,
+    clientId: env.OIDC_CLIENT_ID!,
+    clientSecret: env.OIDC_CLIENT_SECRET!,
+    redirectUri: env.OIDC_REDIRECT_URI!,
     scope: env.OIDC_SCOPE ?? "openid profile email",
     authorizationEndpoint: env.OIDC_AUTHORIZATION_ENDPOINT ?? `${issuerBase}/authorize`,
     tokenEndpoint: env.OIDC_TOKEN_ENDPOINT ?? `${issuerBase}/oauth/token`,
     userInfoEndpoint: env.OIDC_USERINFO_ENDPOINT ?? `${issuerBase}/userinfo`,
   };
+}
+
+function buildPostAuthRedirectUrl(redirectTo: string | null, env: Env): string {
+  const pathname = redirectTo && redirectTo.startsWith("/") ? redirectTo : "/";
+  const appBaseUrl = resolvePublicAppUrl(env);
+  return new URL(pathname, appBaseUrl).toString();
+}
+
+function resolvePublicAppUrl(env: Env): string {
+  const explicitUrl = env.PUBLIC_APP_URL?.trim();
+  if (explicitUrl) {
+    return explicitUrl.endsWith("/") ? explicitUrl : `${explicitUrl}/`;
+  }
+
+  const cookieDomain = env.COOKIE_DOMAIN.replace(/^\.+/, "").trim();
+  return `https://${cookieDomain}/`;
+}
+
+function buildClearedSessionHeaders(env: Env): Headers {
+  const headers = new Headers();
+
+  appendExpiredCookie(headers, SESSION_COOKIE_NAME, env.COOKIE_DOMAIN);
+  appendExpiredCookie(headers, getOidcStateCookieName(), env.COOKIE_DOMAIN);
+
+  return headers;
+}
+
+function appendExpiredCookie(headers: Headers, name: string, cookieDomain: string): void {
+  headers.append(
+    "Set-Cookie",
+    [
+      `${name}=`,
+      `Domain=${cookieDomain}`,
+      "Path=/",
+      "HttpOnly",
+      "Secure",
+      "SameSite=Lax",
+      "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+      "Max-Age=0",
+    ].join("; "),
+  );
 }
 
 interface WorkspaceAccess {
@@ -451,12 +510,16 @@ function resolveWorkspaceRole(userInfo: Record<string, unknown>, env: Env): Live
 }
 
 function getWorkspaceMap(env: Env): Record<string, string> {
-  if (!env.OIDC_EMAIL_DOMAIN_WORKSPACE_MAP) {
+  const raw = env.OIDC_EMAIL_DOMAIN_WORKSPACE_MAP;
+  if (!raw) {
     return {};
   }
 
   try {
-    const parsed = JSON.parse(env.OIDC_EMAIL_DOMAIN_WORKSPACE_MAP) as Record<string, unknown>;
+    const parsed =
+      typeof raw === "string"
+        ? (JSON.parse(raw) as Record<string, unknown>)
+        : ((raw as Record<string, unknown>) ?? {});
     return Object.fromEntries(
       Object.entries(parsed).filter(
         (entry): entry is [string, string] =>
@@ -469,10 +532,9 @@ function getWorkspaceMap(env: Env): Record<string, string> {
 }
 
 function isWorkspaceAllowed(workspaceId: string, env: Env): boolean {
-  const allowed = (env.OIDC_ALLOWED_WORKSPACE_IDS ?? "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const allowedSource =
+    typeof env.OIDC_ALLOWED_WORKSPACE_IDS === "string" ? env.OIDC_ALLOWED_WORKSPACE_IDS : "";
+  const allowed = allowedSource.split(",").map((value) => value.trim()).filter(Boolean);
 
   if (!allowed.length) {
     return true;

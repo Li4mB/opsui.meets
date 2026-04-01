@@ -37,11 +37,13 @@ export class CloudflareRealtimeAdapter implements MediaAdapter {
     });
 
     const body = (await response.json().catch(() => null)) as T | { error?: string } | null;
-    if (!response.ok || !body) {
+    const responseError =
+      typeof body === "object" && body && "error" in body && typeof body.error === "string"
+        ? body.error
+        : null;
+    if (!response.ok || !body || responseError) {
       const error =
-        typeof body === "object" && body && "error" in body && typeof body.error === "string"
-          ? body.error
-          : `media_control_request_failed_${response.status}`;
+        responseError ?? `media_control_request_failed_${response.status}`;
       throw new Error(error);
     }
 

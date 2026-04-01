@@ -1,5 +1,6 @@
 export interface Env {
   COOKIE_DOMAIN: string;
+  PUBLIC_APP_URL?: string;
   ALLOW_MOCK_AUTH?: string;
   APP_ENV?: string;
   DEFAULT_WORKSPACE_ID?: string;
@@ -21,4 +22,8 @@ export interface Env {
   OIDC_ROLE_CLAIM?: string;
   OIDC_DEFAULT_ROLE?: string;
   ANALYTICS?: AnalyticsEngineDataset;
+  SENTRY_DSN?: string;
+  SENTRY_ENVIRONMENT?: string;
+  SENTRY_RELEASE?: string;
+  SENTRY_TRACES_SAMPLE_RATE?: string;
 }

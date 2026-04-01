@@ -92,13 +92,13 @@ export function resolveMembershipDirectoryEntry(
 }
 
 function getMembershipDirectory(env: Env): MembershipDirectory {
-  const raw = env.AUTH_MEMBERSHIP_DIRECTORY_JSON?.trim();
+  const raw = normalizeJsonInput(env.AUTH_MEMBERSHIP_DIRECTORY_JSON);
   if (!raw) {
     return { users: [] };
   }
 
   try {
-    const parsed = JSON.parse(raw) as { users?: unknown };
+    const parsed = typeof raw === "string" ? (JSON.parse(raw) as { users?: unknown }) : (raw as { users?: unknown });
     const users = Array.isArray(parsed.users)
       ? parsed.users.flatMap((value) => normalizeRecord(value))
       : [];
@@ -106,6 +106,19 @@ function getMembershipDirectory(env: Env): MembershipDirectory {
   } catch {
     return { users: [] };
   }
+}
+
+function normalizeJsonInput(value: unknown): string | Record<string, unknown> | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length ? trimmed : null;
+  }
+
+  if (value && typeof value === "object") {
+    return value as Record<string, unknown>;
+  }
+
+  return null;
 }
 
 function normalizeRecord(value: unknown): MembershipDirectoryRecord[] {

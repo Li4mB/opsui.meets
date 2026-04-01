@@ -50,9 +50,7 @@
       "healthUrl": "https://api.opsuimeets.com/v1/health",
       "requiredEnvVars": [
         "APP_ENV",
-        "APP_DATA_MODE",
-        "DATABASE_URL",
-        "MEDIA_CONTROL_SHARED_SECRET"
+        "APP_DATA_MODE"
       ],
       "serviceBindings": [
         {
@@ -99,11 +97,13 @@
       "purpose": "Media delivery, upload, and recording service boundary.",
       "rolloutStatus": "ready",
       "healthUrl": "https://media.opsuimeets.com/v1/health",
-      "requiredEnvVars": [
-        "MEDIA_BACKEND_BASE_URL",
-        "MEDIA_CONTROL_SHARED_SECRET"
+      "requiredEnvVars": [],
+      "serviceBindings": [
+        {
+          "binding": "MEDIA_CONTROL_SERVICE",
+          "service": "opsui-meets-media-control"
+        }
       ],
-      "serviceBindings": [],
       "analyticsBindings": [],
       "durableObjectBindings": []
     },
@@ -118,9 +118,16 @@
       "healthUrl": "https://auth.opsuimeets.com/v1/health",
       "requiredEnvVars": [
         "COOKIE_DOMAIN",
-        "MOCK_SESSION_SIGNING_SECRET",
+        "ALLOW_MOCK_AUTH",
+        "APP_ENV",
+        "DEFAULT_WORKSPACE_ID",
         "AUTH_ENFORCE_MEMBERSHIP_DIRECTORY",
-        "AUTH_MEMBERSHIP_DIRECTORY_JSON"
+        "OIDC_SCOPE",
+        "OIDC_WORKSPACE_CLAIM",
+        "OIDC_EMAIL_DOMAIN_WORKSPACE_MAP",
+        "OIDC_ALLOWED_WORKSPACE_IDS",
+        "OIDC_ROLE_CLAIM",
+        "OIDC_DEFAULT_ROLE"
       ],
       "serviceBindings": [],
       "analyticsBindings": [
@@ -173,5 +180,5 @@
       "durableObjectBindings": []
     }
   ],
-  "generatedAt": "2026-03-27T21:07:05.328Z"
+  "generatedAt": "2026-04-01T07:34:37.656Z"
 }

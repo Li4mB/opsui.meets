@@ -79,14 +79,18 @@ export function buildReadinessReport(rootDir) {
   const mediaAdapterPath = "packages/media-adapter/src/cloudflare-realtime.ts";
   const mediaControlAuthPath = "packages/media-adapter/src/control-auth.ts";
   const mediaWorkerPath = "apps/media-worker/src/index.ts";
+  const mediaControlWorkerPath = "apps/media-control-worker/src/index.ts";
+  const mediaControlWranglerPath = "apps/media-control-worker/wrangler.jsonc";
   const realtimePath = "apps/realtime-worker/src/durable/RoomCoordinator.ts";
-  const webApiPath = "apps/web/src/lib/api.ts";
+  const webApiPath = "apps/web/src/lib/auth.ts";
   const webCommandsPath = "apps/web/src/lib/commands.ts";
   const adminApiPath = "apps/admin/src/lib/api.ts";
   const adminCommandsPath = "apps/admin/src/lib/commands.ts";
   const packageJsonPath = "package.json";
   const ciPath = ".github/workflows/ci.yml";
   const topologyScriptPath = "scripts/export-topology.mjs";
+  const deployScriptPath = "scripts/deploy-cloudflare.ps1";
+  const envExamplePath = ".env.example";
 
   const apiWrangler = readText(rootDir, apiWranglerPath);
   const postgresAdapter = readText(rootDir, postgresAdapterPath);
@@ -104,6 +108,8 @@ export function buildReadinessReport(rootDir) {
   const mediaAdapter = readText(rootDir, mediaAdapterPath);
   const mediaControlAuth = readText(rootDir, mediaControlAuthPath);
   const mediaWorker = readText(rootDir, mediaWorkerPath);
+  const mediaControlWorker = readText(rootDir, mediaControlWorkerPath);
+  const mediaControlWrangler = readText(rootDir, mediaControlWranglerPath);
   const realtimeWorker = readText(rootDir, realtimePath);
   const webApi = readText(rootDir, webApiPath);
   const webCommands = readText(rootDir, webCommandsPath);
@@ -117,6 +123,8 @@ export function buildReadinessReport(rootDir) {
   const packageJson = readText(rootDir, packageJsonPath);
   const ciWorkflow = readText(rootDir, ciPath);
   const topologyScript = readText(rootDir, topologyScriptPath);
+  const deployScript = readText(rootDir, deployScriptPath);
+  const envExample = readText(rootDir, envExamplePath);
   const runtimeStateMigration = readText(rootDir, "packages/db/src/migrations/016_runtime_state.sql");
   const dbPackageJson = readText(rootDir, "packages/db/package.json");
   const dbMigrateScript = readText(rootDir, "packages/db/scripts/migrate.mjs");
@@ -573,8 +581,11 @@ export function buildReadinessReport(rootDir) {
   }
 
   const mediaBlocked =
-    hasLine(mediaWorker, "media_control_backend_not_configured") ||
-    hasLine(mediaWorker, '"MEDIA_BACKEND_BASE_URL": ""');
+    hasLine(mediaControlWorker, "cloudflare_realtime_not_configured") &&
+    hasLine(envExample, "MEDIA_CONTROL_SHARED_SECRET=") &&
+    hasLine(envExample, "CF_REALTIME_ACCOUNT_ID=") &&
+    hasLine(envExample, "CF_REALTIME_APP_ID=") &&
+    hasLine(envExample, "CF_REALTIME_API_TOKEN=");
   if (mediaBlocked) {
     blockers.push(
       createItem({
@@ -582,18 +593,19 @@ export function buildReadinessReport(rootDir) {
         title: "Media session and recording provider integration is still synthetic",
         status: "blocked",
         summary:
-          "The media boundary and signed control-plane auth now exist, but the checked-in scaffold still leaves both the backend base URL and the shared control secret unset, so real session and recording operations cannot run yet.",
+          "The media stack now supports an internal media-control worker, but launch still needs a shared control secret plus live Cloudflare RealtimeKit credentials before real session and recording operations can run.",
         details: [
           "The API worker now calls the media worker over a real service binding instead of fabricating provider ids.",
-          "The media worker now rejects unsigned control traffic and still fails closed until `MEDIA_BACKEND_BASE_URL` points at a real backend.",
-          "The checked-in scaffolds still leave `MEDIA_CONTROL_SHARED_SECRET` empty in both API and media worker config.",
-          "Screen share, recording, and playback cannot be treated as production-capable until that backend is live.",
+          "The media worker can forward control traffic to the internal `apps/media-control-worker` service, which talks to Cloudflare RealtimeKit and enforces the shared secret.",
+          "The checked-in env scaffold still leaves `MEDIA_CONTROL_SHARED_SECRET`, `CF_REALTIME_ACCOUNT_ID`, `CF_REALTIME_APP_ID`, and `CF_REALTIME_API_TOKEN` blank by design.",
+          "Screen share, recording, and playback cannot be treated as production-capable until those values are supplied and deployed.",
         ],
         evidence: [
-          evidence(mediaWorkerPath, mediaWorker, "media_control_backend_not_configured", "Media worker still blocks control operations until a backend is configured."),
-          evidence("apps/media-worker/wrangler.jsonc", readText(rootDir, "apps/media-worker/wrangler.jsonc"), '"MEDIA_BACKEND_BASE_URL": ""', "Media backend base URL is still empty in the worker scaffold."),
-          evidence("apps/media-worker/wrangler.jsonc", readText(rootDir, "apps/media-worker/wrangler.jsonc"), '"MEDIA_CONTROL_SHARED_SECRET": ""', "Media worker shared control secret is still empty in the worker scaffold."),
-          evidence(apiWranglerPath, apiWrangler, '"MEDIA_CONTROL_SHARED_SECRET": ""', "API worker shared control secret is still empty in the worker scaffold."),
+          evidence("apps/media-worker/wrangler.jsonc", readText(rootDir, "apps/media-worker/wrangler.jsonc"), '"service": "opsui-meets-media-control"', "Media worker is wired to the internal media-control service."),
+          evidence(mediaControlWorkerPath, mediaControlWorker, "cloudflare_realtime_not_configured", "Media-control worker still fails closed until live Realtime credentials are bound."),
+          evidence(envExamplePath, envExample, "MEDIA_CONTROL_SHARED_SECRET=", "The checked-in env scaffold leaves the shared media-control secret blank."),
+          evidence(envExamplePath, envExample, "CF_REALTIME_API_TOKEN=", "The checked-in env scaffold leaves the Realtime API token blank."),
+          evidence(deployScriptPath, deployScript, 'Deploy-Worker -ConfigPath "apps/media-control-worker/wrangler.jsonc"', "Deployment helper now includes the media-control worker in the rollout order."),
         ],
       }),
     );

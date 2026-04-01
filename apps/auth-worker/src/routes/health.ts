@@ -4,20 +4,21 @@ import {
   isMembershipDirectoryConfigured,
   isMembershipDirectoryEnforced,
 } from "../lib/membership-directory";
+import { isOidcConfigured } from "./oidc";
 import type { Env } from "../types";
 
 export function getHealth(request: Request, env: Env): Response {
-  const oidcConfigured = Boolean(
-    env.OIDC_ISSUER_URL &&
-      env.OIDC_CLIENT_ID &&
-      env.OIDC_CLIENT_SECRET &&
-      env.OIDC_REDIRECT_URI,
-  );
+  const oidcConfigured = isOidcConfigured(env);
   const workspaceMappingConfigured = Boolean(
-    env.OIDC_WORKSPACE_CLAIM || (env.OIDC_EMAIL_DOMAIN_WORKSPACE_MAP && env.OIDC_EMAIL_DOMAIN_WORKSPACE_MAP !== "{}"),
+    env.OIDC_WORKSPACE_CLAIM ||
+      (typeof env.OIDC_EMAIL_DOMAIN_WORKSPACE_MAP === "string"
+        ? env.OIDC_EMAIL_DOMAIN_WORKSPACE_MAP !== "{}"
+        : Boolean(env.OIDC_EMAIL_DOMAIN_WORKSPACE_MAP)),
   );
   const roleMappingConfigured = Boolean(env.OIDC_ROLE_CLAIM || env.OIDC_DEFAULT_ROLE);
-  const workspaceAllowlistConfigured = Boolean(env.OIDC_ALLOWED_WORKSPACE_IDS?.trim());
+  const workspaceAllowlistConfigured = Boolean(
+    typeof env.OIDC_ALLOWED_WORKSPACE_IDS === "string" && env.OIDC_ALLOWED_WORKSPACE_IDS.trim(),
+  );
   const membershipDirectoryConfigured = isMembershipDirectoryConfigured(env);
   const membershipEnforced = isMembershipDirectoryEnforced(env);
   const response = json({

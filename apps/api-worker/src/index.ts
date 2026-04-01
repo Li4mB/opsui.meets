@@ -1,5 +1,7 @@
+import * as Sentry from "@sentry/cloudflare";
 import { recordApiMetric } from "./lib/analytics";
 import { assertPersistenceAvailable } from "./lib/data-status";
+import { getSentryOptions } from "./lib/sentry";
 import { completeActionItem, createActionItem, listActionItems } from "./routes/action-items";
 import { dispatchFollowUp } from "./routes/follow-up-dispatch";
 import { retryFollowUp } from "./routes/follow-up-retry";
@@ -30,6 +32,7 @@ import { listTemplates } from "./routes/templates";
 import type { Env } from "./types";
 import { ApiError, fromApiError, internalError, notFound } from "./lib/http";
 import { getMeetingRecordingAction } from "./lib/paths";
+import { handleCorsPreflight, withCors } from "./lib/cors";
 import {
   getMeetingActionItemCompletePath,
   getMeetingActionItemsPath,
@@ -53,209 +56,256 @@ import {
   getRoomResolvePath,
 } from "./lib/route-params";
 
-export default {
+export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
   async fetch(request: Request, env: Env): Promise<Response> {
+    let routePath = "unknown";
     try {
       const url = new URL(request.url);
+      routePath = url.pathname;
+      const preflight = handleCorsPreflight(request);
+      if (preflight) {
+        return preflight;
+      }
+
+      let routeResponse: Response;
 
       if (request.method === "GET" && (url.pathname === "/health" || url.pathname === "/v1/health")) {
-        return getHealth(request, env);
+        routeResponse = getHealth(request, env);
+        return withCors(routeResponse, request);
       }
 
       assertPersistenceAvailable(env);
 
       if (request.method === "GET" && url.pathname === "/v1/dashboard") {
-        return getDashboard(request, env);
+        routeResponse = await getDashboard(request, env);
+        return withCors(routeResponse, request);
       }
 
       if (request.method === "GET" && url.pathname === "/v1/policies/workspace") {
-        return getWorkspacePolicy(request, env);
+        routeResponse = await getWorkspacePolicy(request, env);
+        return withCors(routeResponse, request);
       }
 
       if (request.method === "PATCH" && url.pathname === "/v1/policies/workspace") {
-        return updateWorkspacePolicy(request, env);
+        routeResponse = await updateWorkspacePolicy(request, env);
+        return withCors(routeResponse, request);
       }
 
       if (request.method === "POST" && url.pathname === "/v1/policies/workspace/post-meeting-hook/test") {
-        return testPostMeetingHook(request, env);
+        routeResponse = await testPostMeetingHook(request, env);
+        return withCors(routeResponse, request);
       }
 
       if (request.method === "GET" && url.pathname === "/v1/admin/analytics/overview") {
-        return getAdminOverview(request, env);
+        routeResponse = await getAdminOverview(request, env);
+        return withCors(routeResponse, request);
       }
 
       if (request.method === "GET" && url.pathname === "/v1/admin/audit") {
-        return getAdminAudit(env);
+        routeResponse = await getAdminAudit(env);
+        return withCors(routeResponse, request);
       }
 
       if (request.method === "GET" && url.pathname === "/v1/admin/hooks/deliveries") {
-        return getAdminHookDeliveries(request, env);
+        routeResponse = await getAdminHookDeliveries(request, env);
+        return withCors(routeResponse, request);
       }
 
       if (request.method === "POST" && url.pathname === "/v1/admin/hooks/retry-failures") {
-        return retryAdminHookFailures(request, env);
+        routeResponse = await retryAdminHookFailures(request, env);
+        return withCors(routeResponse, request);
       }
 
       if (request.method === "GET") {
         const roomResolvePath = getRoomResolvePath(url.pathname);
         if (roomResolvePath) {
-          return resolveRoom(roomResolvePath.slug, env);
+          routeResponse = await resolveRoom(roomResolvePath.slug, env);
+          return withCors(routeResponse, request);
         }
       }
 
       if (request.method === "POST" && url.pathname === "/v1/rooms") {
-        return createRoom(request, env);
+        routeResponse = await createRoom(request, env);
+        return withCors(routeResponse, request);
       }
 
       if (request.method === "GET" && url.pathname === "/v1/rooms") {
-        return listRooms(request, env);
+        routeResponse = await listRooms(request, env);
+        return withCors(routeResponse, request);
       }
 
       if (request.method === "GET" && url.pathname === "/v1/templates") {
-        return listTemplates(request, env);
+        routeResponse = await listTemplates(request, env);
+        return withCors(routeResponse, request);
       }
 
       if (request.method === "POST" && url.pathname === "/v1/templates") {
-        return createTemplate(request, env);
+        routeResponse = await createTemplate(request, env);
+        return withCors(routeResponse, request);
       }
 
       if (request.method === "POST" && url.pathname === "/v1/meetings") {
-        return createMeeting(request, env);
+        routeResponse = await createMeeting(request, env);
+        return withCors(routeResponse, request);
       }
 
       if (request.method === "GET" && url.pathname === "/v1/meetings") {
-        return listMeetings(request, env);
+        routeResponse = await listMeetings(request, env);
+        return withCors(routeResponse, request);
       }
 
       if (request.method === "GET") {
         const detailPath = getMeetingDetailPath(url.pathname);
         if (detailPath) {
-          return getMeetingDetail(detailPath.meetingInstanceId, env);
+          routeResponse = await getMeetingDetail(detailPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         const attendanceExportPath = getMeetingAttendanceExportPath(url.pathname);
         if (attendanceExportPath) {
-          return exportAttendance(attendanceExportPath.meetingInstanceId, env);
+          routeResponse = await exportAttendance(attendanceExportPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         const followUpExportPath = getMeetingFollowUpExportPath(url.pathname);
         if (followUpExportPath) {
-          return exportFollowUp(request, followUpExportPath.meetingInstanceId, env);
+          routeResponse = await exportFollowUp(request, followUpExportPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         const followUpAttemptsPath = getMeetingFollowUpAttemptsPath(url.pathname);
         if (followUpAttemptsPath) {
-          return listFollowUpAttempts(followUpAttemptsPath.meetingInstanceId, env);
+          routeResponse = await listFollowUpAttempts(followUpAttemptsPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         const actionItemsPath = getMeetingActionItemsPath(url.pathname);
         if (actionItemsPath) {
-          return listActionItems(actionItemsPath.meetingInstanceId, env);
+          routeResponse = await listActionItems(actionItemsPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         const recordingPath = getMeetingRecordingPath(url.pathname);
         if (recordingPath) {
-          return getMeetingRecording(recordingPath.meetingInstanceId, env);
+          routeResponse = await getMeetingRecording(recordingPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         const eventsPath = getMeetingEventsPath(url.pathname);
         if (eventsPath) {
-          return listRoomEvents(eventsPath.meetingInstanceId, env);
+          routeResponse = await listRoomEvents(eventsPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         const participantsPath = getMeetingParticipantsPath(url.pathname);
         if (participantsPath) {
-          return listParticipants(participantsPath.meetingInstanceId, env);
+          routeResponse = await listParticipants(participantsPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         const summaryPath = getMeetingSummaryPath(url.pathname);
         if (summaryPath) {
-          return getMeetingSummary(summaryPath.meetingInstanceId, env);
+          routeResponse = await getMeetingSummary(summaryPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
       }
 
       if (request.method === "POST") {
         const joinPath = getMeetingJoinPath(url.pathname);
         if (joinPath) {
-          return joinMeeting(request, joinPath.meetingInstanceId, env);
+          routeResponse = await joinMeeting(request, joinPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         const actionItemsPath = getMeetingActionItemsPath(url.pathname);
         if (actionItemsPath) {
-          return createActionItem(request, actionItemsPath.meetingInstanceId, env);
+          routeResponse = await createActionItem(request, actionItemsPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         const actionItemCompletePath = getMeetingActionItemCompletePath(url.pathname);
         if (actionItemCompletePath) {
-          return completeActionItem(
+          routeResponse = await completeActionItem(
             request,
             actionItemCompletePath.meetingInstanceId,
             actionItemCompletePath.actionItemId,
             env,
           );
+          return withCors(routeResponse, request);
         }
 
         const followUpDispatchPath = getMeetingFollowUpDispatchPath(url.pathname);
         if (followUpDispatchPath) {
-          return dispatchFollowUp(request, followUpDispatchPath.meetingInstanceId, env);
+          routeResponse = await dispatchFollowUp(request, followUpDispatchPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         const followUpRetryPath = getMeetingFollowUpRetryPath(url.pathname);
         if (followUpRetryPath) {
-          return retryFollowUp(request, followUpRetryPath.meetingInstanceId, env);
+          routeResponse = await retryFollowUp(request, followUpRetryPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         const muteAllPath = getMeetingMuteAllPath(url.pathname);
         if (muteAllPath) {
-          return muteAllParticipants(request, muteAllPath.meetingInstanceId, env);
+          routeResponse = await muteAllParticipants(request, muteAllPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         const endPath = getMeetingEndPath(url.pathname);
         if (endPath) {
-          return endMeeting(request, endPath.meetingInstanceId, env);
+          routeResponse = await endMeeting(request, endPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         const lockPath = getMeetingLockPath(url.pathname);
         if (lockPath) {
-          return lockMeeting(request, lockPath.meetingInstanceId, env);
+          routeResponse = await lockMeeting(request, lockPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         const unlockPath = getMeetingUnlockPath(url.pathname);
         if (unlockPath) {
-          return unlockMeeting(request, unlockPath.meetingInstanceId, env);
+          routeResponse = await unlockMeeting(request, unlockPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         const participantModerationPath = getMeetingParticipantModerationPath(url.pathname);
         if (participantModerationPath?.action === "admit") {
-          return admitParticipant(
+          routeResponse = await admitParticipant(
             request,
             participantModerationPath.meetingInstanceId,
             participantModerationPath.participantId,
             env,
           );
+          return withCors(routeResponse, request);
         }
 
         if (participantModerationPath?.action === "remove") {
-          return removeParticipant(
+          routeResponse = await removeParticipant(
             request,
             participantModerationPath.meetingInstanceId,
             participantModerationPath.participantId,
             env,
           );
+          return withCors(routeResponse, request);
         }
 
         const recordingAction = getMeetingRecordingAction(url.pathname);
         if (recordingAction?.action === "start") {
-          return startRecording(request, recordingAction.meetingInstanceId, env);
+          routeResponse = await startRecording(request, recordingAction.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         if (recordingAction?.action === "stop") {
-          return stopRecording(request, recordingAction.meetingInstanceId, env);
+          routeResponse = await stopRecording(request, recordingAction.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
 
         const mediaSessionPath = getMeetingMediaSessionPath(url.pathname);
         if (mediaSessionPath) {
-          return createMeetingMediaSession(request, mediaSessionPath.meetingInstanceId, env);
+          routeResponse = await createMeetingMediaSession(request, mediaSessionPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
         }
       }
 
@@ -266,7 +316,7 @@ export default {
         request,
         outcome: "not_found",
       });
-      return response;
+      return withCors(response, request);
     } catch (error) {
       if (error instanceof ApiError) {
         const response = fromApiError(error);
@@ -276,9 +326,19 @@ export default {
           request,
           outcome: error.code,
         });
-        return response;
+        return withCors(response, request);
       }
 
+      console.error("Unhandled API worker error", error);
+      Sentry.withScope((scope) => {
+        scope.setTag("service", "opsui-meets-api");
+        scope.setTag("route", routePath);
+        scope.setContext("request", {
+          method: request.method,
+          path: routePath,
+        });
+        Sentry.captureException(error);
+      });
       const response = internalError();
       recordApiMetric(env, {
         route: "internal-error",
@@ -286,7 +346,7 @@ export default {
         request,
         outcome: "internal_error",
       });
-      return response;
+      return withCors(response, request);
     }
   },
-};
+} satisfies ExportedHandler<Env>);

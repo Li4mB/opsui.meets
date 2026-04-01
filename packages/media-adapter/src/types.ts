@@ -1,4 +1,5 @@
 export interface CreateMediaSessionInput {
+  displayName: string;
   meetingInstanceId: string;
   participantId: string;
   role: string;

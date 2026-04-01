@@ -1,10 +1,10 @@
 {
-  "generatedAt": "2026-03-27T21:07:05.079Z",
+  "generatedAt": "2026-04-01T07:34:37.953Z",
   "overallStatus": "not_ready",
-  "recommendedNextStep": "Bind DATABASE_URL to a real Postgres service, apply packages/db/src/migrations/016_runtime_state.sql, and rerun preview smoke before public launch.",
+  "recommendedNextStep": "Complete the remaining launch blockers, then run launch review against deployed preview.",
   "summary": {
-    "readyFoundations": 18,
-    "blockers": 3,
+    "readyFoundations": 14,
+    "blockers": 1,
     "prelaunchHardening": 2
   },
   "readyFoundations": [
@@ -21,12 +21,12 @@
       "evidence": [
         {
           "path": "package.json",
-          "line": 31,
+          "line": 36,
           "note": "Root verify script is defined."
         },
         {
           "path": ".github/workflows/ci.yml",
-          "line": 37,
+          "line": 43,
           "note": "CI runs the verify workflow."
         },
         {
@@ -59,7 +59,7 @@
         },
         {
           "path": "apps/api-worker/wrangler.jsonc",
-          "line": 31,
+          "line": 29,
           "note": "API worker declares an analytics dataset binding."
         },
         {
@@ -86,17 +86,17 @@
       "evidence": [
         {
           "path": "apps/auth-worker/wrangler.jsonc",
-          "line": 14,
+          "line": 16,
           "note": "Mock auth is disabled by default."
         },
         {
           "path": "apps/media-worker/src/index.ts",
-          "line": 47,
+          "line": 49,
           "note": "Download route fails closed when not configured."
         },
         {
           "path": "apps/media-worker/src/index.ts",
-          "line": 68,
+          "line": 70,
           "note": "Upload route fails closed when not configured."
         }
       ]
@@ -114,84 +114,23 @@
       "evidence": [
         {
           "path": "apps/api-worker/wrangler.jsonc",
-          "line": 25,
+          "line": 23,
           "note": "API worker now binds to the media worker."
         },
         {
           "path": "apps/media-worker/src/index.ts",
-          "line": 34,
+          "line": 36,
           "note": "Media worker exposes explicit control-plane routes."
         },
         {
           "path": "apps/media-worker/src/index.ts",
-          "line": 123,
+          "line": 125,
           "note": "Media control fails closed when no backend is configured."
         },
         {
           "path": "packages/media-adapter/src/cloudflare-realtime.ts",
           "line": 24,
           "note": "Media adapter now calls the control boundary instead of generating ids locally."
-        }
-      ]
-    },
-    {
-      "id": "media-control-plane-auth",
-      "title": "Signed media control-plane auth",
-      "status": "ready",
-      "summary": "Media control requests are now signed from the API boundary and verified by the media worker instead of leaving those public control routes effectively open.",
-      "details": [
-        "The shared media adapter now signs control-plane payloads with a timestamped HMAC.",
-        "The media worker rejects unsigned or invalid control requests before proxying to a backend.",
-        "This closes an important control-plane trust gap even though the real backend is still not configured."
-      ],
-      "evidence": [
-        {
-          "path": "packages/media-adapter/src/control-auth.ts",
-          "line": 12,
-          "note": "Media adapter now creates signed control-plane headers."
-        },
-        {
-          "path": "packages/media-adapter/src/control-auth.ts",
-          "line": 31,
-          "note": "Media worker can verify signed control-plane requests."
-        },
-        {
-          "path": "apps/media-worker/src/index.ts",
-          "line": 95,
-          "note": "Media worker now verifies signed control-plane requests before proxying."
-        },
-        {
-          "path": "apps/api-worker/wrangler.jsonc",
-          "line": 17,
-          "note": "API scaffold now carries a dedicated shared secret for media control signing."
-        }
-      ]
-    },
-    {
-      "id": "persistence-runtime-signals",
-      "title": "Persistence runtime signals",
-      "status": "ready",
-      "summary": "The API now exposes whether durable persistence is selected, configured, and launch-ready, which makes preview and docs much more honest about the database rollout state.",
-      "details": [
-        "Health now reports the active data mode.",
-        "Health distinguishes between database configuration and actual persistence readiness.",
-        "This reduces ambiguity before the full Postgres repository implementation lands."
-      ],
-      "evidence": [
-        {
-          "path": "apps/api-worker/wrangler.jsonc",
-          "line": 16,
-          "note": "API scaffold now carries an explicit database connection placeholder."
-        },
-        {
-          "path": "apps/api-worker/src/routes/health.ts",
-          "line": 13,
-          "note": "API health reports whether database connectivity is configured."
-        },
-        {
-          "path": "apps/api-worker/src/routes/health.ts",
-          "line": 14,
-          "note": "API health reports whether persistence is actually ready for launch."
         }
       ]
     },
@@ -223,7 +162,7 @@
         },
         {
           "path": "apps/api-worker/src/index.ts",
-          "line": 65,
+          "line": 77,
           "note": "Top-level API routing blocks unavailable persistence mode before executing routes."
         }
       ]
@@ -241,17 +180,17 @@
       "evidence": [
         {
           "path": "packages/db/src/adapters/postgres.ts",
-          "line": 39,
+          "line": 50,
           "note": "Postgres adapter now loads persisted runtime state."
         },
         {
           "path": "packages/db/src/adapters/postgres.ts",
-          "line": 129,
+          "line": 147,
           "note": "Postgres adapter now commits runtime state back to Postgres."
         },
         {
           "path": "packages/db/src/adapters/postgres.ts",
-          "line": 141,
+          "line": 162,
           "note": "Adapter targets the runtime-state table instead of throwing not-implemented errors."
         },
         {
@@ -274,51 +213,23 @@
       "evidence": [
         {
           "path": "package.json",
-          "line": 19,
+          "line": 20,
           "note": "Root workspace now exposes a database migration command."
         },
         {
           "path": "package.json",
-          "line": 20,
+          "line": 21,
           "note": "Root workspace now exposes a database status command."
         },
         {
           "path": "packages/db/scripts/migrate.mjs",
-          "line": 22,
+          "line": 24,
           "note": "Database migrations are tracked in a schema-migrations table."
         },
         {
           "path": "packages/db/scripts/status.mjs",
-          "line": 51,
+          "line": 53,
           "note": "DB status command reports applied vs pending migrations."
-        }
-      ]
-    },
-    {
-      "id": "signed-mock-session-cookies",
-      "title": "Signed scaffold session cookies",
-      "status": "ready",
-      "summary": "The auth scaffold no longer trusts any opaque cookie value. Mock sessions are now signed and verified before actor data is accepted by the app surfaces.",
-      "details": [
-        "Session issuance now creates a signed cookie payload instead of storing only a random id.",
-        "Session reads verify the signature before treating the actor as authenticated.",
-        "This is stronger than the original scaffold, even though a real identity provider is still required."
-      ],
-      "evidence": [
-        {
-          "path": "apps/auth-worker/src/routes/session.ts",
-          "line": 8,
-          "note": "Mock session issuance now signs the cookie payload."
-        },
-        {
-          "path": "apps/auth-worker/src/routes/session-info.ts",
-          "line": 4,
-          "note": "Session reads verify the signed cookie before authenticating."
-        },
-        {
-          "path": "apps/auth-worker/wrangler.jsonc",
-          "line": 17,
-          "note": "Auth worker now carries a signing secret setting."
         }
       ]
     },
@@ -335,12 +246,12 @@
       "evidence": [
         {
           "path": "apps/auth-worker/src/index.ts",
-          "line": 45,
+          "line": 57,
           "note": "Auth worker exposes an OIDC login route."
         },
         {
           "path": "apps/auth-worker/src/index.ts",
-          "line": 57,
+          "line": 70,
           "note": "Auth worker exposes an OIDC callback route."
         },
         {
@@ -352,44 +263,6 @@
           "path": "apps/auth-worker/wrangler.jsonc",
           "line": 21,
           "note": "Auth worker now carries OIDC configuration variables."
-        }
-      ]
-    },
-    {
-      "id": "auth-membership-directory-boundary",
-      "title": "Authoritative auth membership directory boundary",
-      "status": "ready",
-      "summary": "The auth worker now has an explicit membership directory boundary for OIDC and mock session issuance, instead of trusting provider claims and defaults alone.",
-      "details": [
-        "OIDC callback can now fail closed when a user has no configured membership entry.",
-        "Mock session issuance can also require a configured membership record.",
-        "Auth health now reports whether the membership directory exists and whether enforcement is active."
-      ],
-      "evidence": [
-        {
-          "path": "apps/auth-worker/src/lib/membership-directory.ts",
-          "line": 45,
-          "note": "Auth worker now resolves membership through a dedicated directory helper."
-        },
-        {
-          "path": "apps/auth-worker/src/lib/membership-directory.ts",
-          "line": 33,
-          "note": "Membership enforcement policy is centralized in the auth worker."
-        },
-        {
-          "path": "apps/auth-worker/wrangler.jsonc",
-          "line": 19,
-          "note": "Auth worker scaffold now carries a membership directory variable."
-        },
-        {
-          "path": "apps/auth-worker/src/routes/oidc.ts",
-          "line": 228,
-          "note": "OIDC callback now fails closed when no membership entry exists."
-        },
-        {
-          "path": "apps/auth-worker/src/routes/health.ts",
-          "line": 21,
-          "note": "Auth health now reports directory configuration and enforcement state."
         }
       ]
     },
@@ -406,17 +279,17 @@
       "evidence": [
         {
           "path": "apps/auth-worker/src/routes/oidc.ts",
-          "line": 395,
+          "line": 454,
           "note": "OIDC callback now resolves workspace through a helper instead of hardcoding the default workspace."
         },
         {
           "path": "apps/auth-worker/src/routes/oidc.ts",
-          "line": 408,
+          "line": 467,
           "note": "Workspace resolution can use a configured OIDC claim."
         },
         {
           "path": "apps/auth-worker/src/routes/oidc.ts",
-          "line": 454,
+          "line": 513,
           "note": "Workspace resolution can fall back to an email-domain map."
         }
       ]
@@ -439,7 +312,7 @@
         },
         {
           "path": "apps/auth-worker/src/routes/oidc.ts",
-          "line": 399,
+          "line": 458,
           "note": "OIDC callback now maps a workspace role into the session actor."
         },
         {
@@ -538,7 +411,7 @@
         },
         {
           "path": "apps/auth-worker/src/index.ts",
-          "line": 20,
+          "line": 30,
           "note": "Auth join-token issuance is rate limited."
         },
         {
@@ -566,7 +439,7 @@
       "evidence": [
         {
           "path": "package.json",
-          "line": 25,
+          "line": 27,
           "note": "Root package now exposes a preview smoke script."
         },
         {
@@ -581,7 +454,7 @@
         },
         {
           "path": ".github/workflows/ci.yml",
-          "line": 47,
+          "line": 53,
           "note": "CI can execute preview smoke checks when preview URLs are configured."
         }
       ]
@@ -589,109 +462,41 @@
   ],
   "blockers": [
     {
-      "id": "persistence-not-production-ready",
-      "title": "Durable persistence is not production-ready",
-      "status": "blocked",
-      "summary": "The Postgres code path now exists, but the checked-in API deployment scaffold still does not carry a real database connection string. Durable persistence still needs an actual bound database secret before production traffic should rely on it.",
-      "details": [
-        "The repository adapter is now wired to a real Postgres-backed runtime-state table.",
-        "The checked-in worker config now selects Postgres mode, but still leaves DATABASE_URL empty for safety.",
-        "The runtime health surface can prove whether database connectivity is configured and whether persistence is ready.",
-        "Production launch should not proceed until DATABASE_URL is bound to a real durable database."
-      ],
-      "evidence": [
-        {
-          "path": "apps/api-worker/wrangler.jsonc",
-          "line": 15,
-          "note": "API worker now targets Postgres mode in the deployment scaffold."
-        },
-        {
-          "path": "apps/api-worker/wrangler.jsonc",
-          "line": 16,
-          "note": "The checked-in deployment scaffold still leaves the database connection unset."
-        },
-        {
-          "path": "apps/api-worker/src/routes/health.ts",
-          "line": 14,
-          "note": "API runtime health still reflects that persistence is not ready."
-        },
-        {
-          "path": "packages/db/src/adapters/postgres.ts",
-          "line": 141,
-          "note": "Postgres adapter now persists runtime state into a database table."
-        }
-      ]
-    },
-    {
-      "id": "auth-session-still-synthetic",
-      "title": "Authoritative auth membership still needs production binding",
-      "status": "blocked",
-      "summary": "The auth layer now has signed sessions, an OIDC boundary, and a real membership-directory enforcement path, but the checked-in production scaffold still leaves that directory empty and the live identity provider still needs to be bound.",
-      "details": [
-        "Session integrity is stronger now because the cookie is signed and verified.",
-        "OIDC callback can now fail closed on missing membership instead of trusting provider claims by default.",
-        "The checked-in auth worker scaffold still leaves AUTH_MEMBERSHIP_DIRECTORY_JSON empty for safety.",
-        "Production launch still needs live OIDC provider configuration and a real membership directory binding."
-      ],
-      "evidence": [
-        {
-          "path": "apps/auth-worker/src/lib/membership-directory.ts",
-          "line": 45,
-          "note": "Auth worker now has an authoritative membership directory helper."
-        },
-        {
-          "path": "apps/auth-worker/src/routes/oidc.ts",
-          "line": 228,
-          "note": "OIDC callback can now reject users without configured membership."
-        },
-        {
-          "path": "apps/auth-worker/wrangler.jsonc",
-          "line": 19,
-          "note": "The checked-in auth scaffold still leaves the membership directory empty."
-        },
-        {
-          "path": "apps/auth-worker/wrangler.jsonc",
-          "line": 21,
-          "note": "OIDC config knobs exist, but live provider values still need deployment-time binding."
-        },
-        {
-          "path": "apps/auth-worker/src/index.ts",
-          "line": 30,
-          "note": "Mock session route still exists behind an explicit flag for non-production testing."
-        }
-      ]
-    },
-    {
       "id": "media-provider-not-integrated",
       "title": "Media session and recording provider integration is still synthetic",
       "status": "blocked",
-      "summary": "The media boundary and signed control-plane auth now exist, but the checked-in scaffold still leaves both the backend base URL and the shared control secret unset, so real session and recording operations cannot run yet.",
+      "summary": "The media stack now supports an internal media-control worker, but launch still needs a shared control secret plus live Cloudflare RealtimeKit credentials before real session and recording operations can run.",
       "details": [
         "The API worker now calls the media worker over a real service binding instead of fabricating provider ids.",
-        "The media worker now rejects unsigned control traffic and still fails closed until `MEDIA_BACKEND_BASE_URL` points at a real backend.",
-        "The checked-in scaffolds still leave `MEDIA_CONTROL_SHARED_SECRET` empty in both API and media worker config.",
-        "Screen share, recording, and playback cannot be treated as production-capable until that backend is live."
+        "The media worker can forward control traffic to the internal `apps/media-control-worker` service, which talks to Cloudflare RealtimeKit and enforces the shared secret.",
+        "The checked-in env scaffold still leaves `MEDIA_CONTROL_SHARED_SECRET`, `CF_REALTIME_ACCOUNT_ID`, `CF_REALTIME_APP_ID`, and `CF_REALTIME_API_TOKEN` blank by design.",
+        "Screen share, recording, and playback cannot be treated as production-capable until those values are supplied and deployed."
       ],
       "evidence": [
         {
-          "path": "apps/media-worker/src/index.ts",
-          "line": 123,
-          "note": "Media worker still blocks control operations until a backend is configured."
-        },
-        {
           "path": "apps/media-worker/wrangler.jsonc",
           "line": 15,
-          "note": "Media backend base URL is still empty in the worker scaffold."
+          "note": "Media worker is wired to the internal media-control service."
         },
         {
-          "path": "apps/media-worker/wrangler.jsonc",
-          "line": 16,
-          "note": "Media worker shared control secret is still empty in the worker scaffold."
+          "path": "apps/media-control-worker/src/index.ts",
+          "line": 331,
+          "note": "Media-control worker still fails closed until live Realtime credentials are bound."
         },
         {
-          "path": "apps/api-worker/wrangler.jsonc",
-          "line": 17,
-          "note": "API worker shared control secret is still empty in the worker scaffold."
+          "path": ".env.example",
+          "line": 47,
+          "note": "The checked-in env scaffold leaves the shared media-control secret blank."
+        },
+        {
+          "path": ".env.example",
+          "line": 51,
+          "note": "The checked-in env scaffold leaves the Realtime API token blank."
+        },
+        {
+          "path": "scripts/deploy-cloudflare.ps1",
+          "line": 300,
+          "note": "Deployment helper now includes the media-control worker in the rollout order."
         }
       ]
     }
@@ -709,12 +514,12 @@
       "evidence": [
         {
           "path": "package.json",
-          "line": 25,
+          "line": 27,
           "note": "Preview smoke runner now exists in the root package."
         },
         {
           "path": ".github/workflows/ci.yml",
-          "line": 47,
+          "line": 53,
           "note": "CI can run preview smoke checks, but only after preview URLs are configured."
         }
       ]

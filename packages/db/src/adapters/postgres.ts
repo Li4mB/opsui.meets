@@ -14,7 +14,6 @@ import type { RequestRepositoryContext } from "../contracts";
 import { createSeedStore, type MemoryStore } from "../store";
 
 const DEFAULT_SCOPE = "global";
-const CLIENT_CACHE_KEY = "__opsui_meets_postgres_client_cache__";
 
 type SqlClient = ReturnType<typeof postgres>;
 
@@ -35,8 +34,25 @@ export async function createPostgresRepositoryContext(
     throw new Error("Postgres adapter requires DATABASE_URL when APP_DATA_MODE=postgres.");
   }
 
-  const sql = getSqlClient(connectionString);
-  const persisted = await loadRuntimeState(sql, DEFAULT_SCOPE);
+  const sql = createSqlClient(connectionString);
+  let disposed = false;
+  const dispose = async (): Promise<void> => {
+    if (disposed) {
+      return;
+    }
+
+    disposed = true;
+    await sql.end({ timeout: 5 }).catch(() => undefined);
+  };
+
+  let persisted: { version: number; store: MemoryStore };
+  try {
+    persisted = await loadRuntimeState(sql, DEFAULT_SCOPE);
+  } catch (error) {
+    await dispose();
+    throw error;
+  }
+
   const getStore = () => persisted.store;
   let dirty = false;
 
@@ -123,11 +139,16 @@ export async function createPostgresRepositoryContext(
     audit,
     events,
     async commit(): Promise<void> {
-      if (!dirty) {
-        return;
+      try {
+        if (!dirty) {
+          return;
+        }
+
+        persisted.version = await saveRuntimeState(sql, DEFAULT_SCOPE, persisted.store, persisted.version);
+        dirty = false;
+      } finally {
+        await dispose();
       }
-      persisted.version = await saveRuntimeState(sql, DEFAULT_SCOPE, persisted.store, persisted.version);
-      dirty = false;
     },
   };
 }
@@ -211,26 +232,13 @@ function normalizeStore(raw: MemoryStore | string): MemoryStore {
   return raw;
 }
 
-function getSqlClient(connectionString: string): SqlClient {
-  const globalScope = globalThis as typeof globalThis & {
-    [CLIENT_CACHE_KEY]?: Map<string, SqlClient>;
-  };
-  const cache = globalScope[CLIENT_CACHE_KEY] ?? new Map<string, SqlClient>();
-  globalScope[CLIENT_CACHE_KEY] = cache;
-
-  const existing = cache.get(connectionString);
-  if (existing) {
-    return existing;
-  }
-
-  const client = postgres(connectionString, {
+function createSqlClient(connectionString: string): SqlClient {
+  return postgres(connectionString, {
     prepare: false,
     max: 1,
     idle_timeout: 20,
     connect_timeout: 5,
   });
-  cache.set(connectionString, client);
-  return client;
 }
 
 function trackMutation<TArgs extends unknown[], TResult>(

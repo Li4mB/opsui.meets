@@ -1,3 +1,4 @@
+import * as Sentry from "@sentry/cloudflare";
 import { recordAuthMetric } from "./lib/analytics";
 import { getHealth } from "./routes/health";
 import { issueJoinToken } from "./routes/join-token";
@@ -5,14 +6,23 @@ import { getRateLimitResponse } from "./lib/rate-limit";
 import { clearSession, handleOidcCallback, startOidcLogin } from "./routes/oidc";
 import { issueMockSession } from "./routes/session";
 import { getSessionInfo } from "./routes/session-info";
+import { getSentryOptions } from "./lib/sentry";
 import type { Env } from "./types";
+import { handleCorsPreflight, withCors } from "./lib/cors";
 
-export default {
+export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    const preflight = handleCorsPreflight(request);
+    if (preflight) {
+      return preflight;
+    }
+
+    let response: Response;
 
     if (request.method === "GET" && (url.pathname === "/health" || url.pathname === "/v1/health")) {
-      return getHealth(request, env);
+      response = getHealth(request, env);
+      return withCors(response, request);
     }
 
     if (request.method === "POST" && url.pathname === "/v1/join-token") {
@@ -22,14 +32,15 @@ export default {
         windowMs: 60_000,
       });
       if (limited) {
-        return limited;
+        return withCors(limited, request);
       }
-      return issueJoinToken(request, env);
+      response = await issueJoinToken(request, env);
+      return withCors(response, request);
     }
 
     if (request.method === "POST" && url.pathname === "/v1/session/mock") {
       if (env.ALLOW_MOCK_AUTH !== "true") {
-        return new Response("Not found", { status: 404 });
+        return withCors(new Response("Not found", { status: 404 }), request);
       }
       const limited = getRateLimitResponse(request, {
         bucket: "session-mock",
@@ -37,9 +48,10 @@ export default {
         windowMs: 60_000,
       });
       if (limited) {
-        return limited;
+        return withCors(limited, request);
       }
-      return issueMockSession(request, env);
+      response = await issueMockSession(request, env);
+      return withCors(response, request);
     }
 
     if (request.method === "GET" && url.pathname === "/v1/login") {
@@ -49,9 +61,10 @@ export default {
         windowMs: 60_000,
       });
       if (limited) {
-        return limited;
+        return withCors(limited, request);
       }
-      return startOidcLogin(request, env);
+      response = await startOidcLogin(request, env);
+      return withCors(response, request);
     }
 
     if (request.method === "GET" && url.pathname === "/v1/callback") {
@@ -61,17 +74,20 @@ export default {
         windowMs: 60_000,
       });
       if (limited) {
-        return limited;
+        return withCors(limited, request);
       }
-      return handleOidcCallback(request, env);
+      response = await handleOidcCallback(request, env);
+      return withCors(response, request);
     }
 
     if (request.method === "GET" && url.pathname === "/v1/session") {
-      return getSessionInfo(request, env);
+      response = await getSessionInfo(request, env);
+      return withCors(response, request);
     }
 
-    if (request.method === "POST" && url.pathname === "/v1/logout") {
-      return clearSession(request, env);
+    if ((request.method === "GET" || request.method === "POST") && url.pathname === "/v1/logout") {
+      response = clearSession(request, env);
+      return withCors(response, request);
     }
 
     const notFoundResponse = new Response("Not found", { status: 404 });
@@ -81,6 +97,6 @@ export default {
       request,
       outcome: "not_found",
     });
-    return notFoundResponse;
+    return withCors(notFoundResponse, request);
   },
-};
+} satisfies ExportedHandler<Env>);

@@ -1,4 +1,5 @@
 export interface CreateMeetingMediaSessionInput {
+  displayName: string;
   participantId: string;
   role: string;
 }

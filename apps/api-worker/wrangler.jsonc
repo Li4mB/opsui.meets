@@ -12,9 +12,7 @@
   ],
   "vars": {
     "APP_ENV": "production",
-    "APP_DATA_MODE": "postgres",
-    "DATABASE_URL": "",
-    "MEDIA_CONTROL_SHARED_SECRET": ""
+    "APP_DATA_MODE": "postgres"
   },
   "services": [
     {

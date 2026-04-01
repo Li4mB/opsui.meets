@@ -22,30 +22,29 @@ export default {
 
     if (url.pathname === "/join") {
       const room = url.searchParams.get("room");
-      const target = new URL(`https://${APP_HOSTS.app}/join`);
       if (room) {
         const resolved = await resolveRoomAlias(env, room);
-        target.searchParams.set("room", resolved.slug);
-        target.searchParams.set("roomId", resolved.id);
+        return Response.redirect(`https://${APP_HOSTS.public}/${resolved.slug}`, 302);
       }
 
-      return Response.redirect(target.toString(), 302);
+      return Response.redirect(`https://${APP_HOSTS.public}/`, 302);
     }
 
     if (url.pathname === "/new") {
-      return Response.redirect(`https://${APP_HOSTS.app}/new`, 302);
+      return Response.redirect(`https://${APP_HOSTS.public}/`, 302);
     }
 
     if (url.pathname === "/internal/auth-health") {
       return env.AUTH_SERVICE.fetch("https://auth.opsuimeets.com/v1/health");
     }
 
-    return new Response("OpsUI Meets gateway scaffold", {
-      status: 200,
-      headers: {
-        "content-type": "text/plain; charset=utf-8",
-      },
-    });
+    if (request.method === "GET" || request.method === "HEAD") {
+      const proxyUrl = new URL(`https://${APP_HOSTS.app}${url.pathname}${url.search}`);
+      const proxyRequest = new Request(proxyUrl.toString(), request);
+      return fetch(proxyRequest);
+    }
+
+    return new Response("Not found", { status: 404 });
   },
 };
 

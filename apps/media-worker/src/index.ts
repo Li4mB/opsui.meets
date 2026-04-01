@@ -5,6 +5,7 @@ interface Env {
   MEDIA_UPLOAD_BASE_URL?: string;
   MEDIA_BACKEND_BASE_URL?: string;
   MEDIA_CONTROL_SHARED_SECRET?: string;
+  MEDIA_CONTROL_SERVICE?: Fetcher;
 }
 
 export default {
@@ -17,9 +18,10 @@ export default {
         service: "opsui-meets-media",
         downloadBaseConfigured: Boolean(env.MEDIA_DOWNLOAD_BASE_URL),
         uploadBaseConfigured: Boolean(env.MEDIA_UPLOAD_BASE_URL),
-        controlBackendConfigured: Boolean(env.MEDIA_BACKEND_BASE_URL),
+        controlBackendConfigured: Boolean(env.MEDIA_CONTROL_SERVICE || env.MEDIA_BACKEND_BASE_URL),
+        internalControlServiceBound: Boolean(env.MEDIA_CONTROL_SERVICE),
         controlPlaneAuthConfigured: Boolean(env.MEDIA_CONTROL_SHARED_SECRET),
-        controlPlaneReady: Boolean(env.MEDIA_BACKEND_BASE_URL && env.MEDIA_CONTROL_SHARED_SECRET),
+        controlPlaneReady: Boolean((env.MEDIA_CONTROL_SERVICE || env.MEDIA_BACKEND_BASE_URL) && env.MEDIA_CONTROL_SHARED_SECRET),
       }, {
         headers: {
           "access-control-allow-origin": "*",
@@ -116,12 +118,12 @@ async function handleControlRequest(request: Request, env: Env, backendPath: str
 }
 
 async function proxyControlRequest(body: string, env: Env, backendPath: string): Promise<Response> {
-  if (!env.MEDIA_BACKEND_BASE_URL) {
+  if (!env.MEDIA_CONTROL_SERVICE && !env.MEDIA_BACKEND_BASE_URL) {
     return Response.json(
       {
         ok: false,
         error: "media_control_backend_not_configured",
-        message: "Set MEDIA_BACKEND_BASE_URL before enabling media control operations.",
+        message: "Bind MEDIA_CONTROL_SERVICE or set MEDIA_BACKEND_BASE_URL before enabling media control operations.",
       },
       { status: 501 },
     );
@@ -134,11 +136,17 @@ async function proxyControlRequest(body: string, env: Env, backendPath: string):
     headers.set("x-opsui-media-secret", env.MEDIA_CONTROL_SHARED_SECRET);
   }
 
-  const response = await fetch(new URL(backendPath, ensureTrailingSlash(env.MEDIA_BACKEND_BASE_URL)), {
-    method: "POST",
-    headers,
-    body,
-  });
+  const response = env.MEDIA_CONTROL_SERVICE
+    ? await env.MEDIA_CONTROL_SERVICE.fetch(`https://media-control.internal${backendPath}`, {
+        method: "POST",
+        headers,
+        body,
+      })
+    : await fetch(new URL(backendPath, ensureTrailingSlash(env.MEDIA_BACKEND_BASE_URL as string)), {
+        method: "POST",
+        headers,
+        body,
+      });
 
   return new Response(response.body, {
     status: response.status,

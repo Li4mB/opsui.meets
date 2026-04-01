@@ -25,12 +25,18 @@ export async function createMeetingMediaSession(
     "participant_id_required",
     "participant_local",
   );
+  const displayName = requireNonEmptyString(
+    payload.displayName,
+    "display_name_required",
+    participantId,
+  );
   const role = requireNonEmptyString(payload.role, "participant_role_required", "participant");
   const mediaAdapter = new CloudflareRealtimeAdapter(env.MEDIA_SERVICE, env.MEDIA_CONTROL_SHARED_SECRET);
 
   let session: MeetingMediaSession;
   try {
     session = await mediaAdapter.createSession({
+      displayName,
       meetingInstanceId,
       participantId,
       role,

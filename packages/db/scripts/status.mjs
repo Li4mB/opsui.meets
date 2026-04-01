@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import postgres from "postgres";
+import { loadRootEnv } from "./load-root-env.mjs";
 
 const rootDir = path.resolve(import.meta.dirname, "..");
 const migrationsDir = path.join(rootDir, "src", "migrations");
+loadRootEnv();
 const connectionString = process.env.DATABASE_URL?.trim();
 
 if (!connectionString) {

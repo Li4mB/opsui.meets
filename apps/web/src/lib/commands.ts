@@ -147,6 +147,7 @@ export async function createMediaSession(
   meetingInstanceId: string,
   participantId: string,
   role: string,
+  displayName: string,
 ): Promise<MeetingMediaSession | null> {
   try {
     const headers = await getActorHeaders(
@@ -159,6 +160,7 @@ export async function createMediaSession(
       method: "POST",
       headers,
       body: JSON.stringify({
+        displayName,
         participantId,
         role,
       }),

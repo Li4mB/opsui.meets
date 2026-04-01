@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "dependencies": {
-    "@opsui/shared-types": "workspace:*"
+    "@opsui/shared-types": "workspace:*",
+    "@sentry/cloudflare": "10.47.0"
   },
   "scripts": {
     "build": "wrangler deploy --dry-run",

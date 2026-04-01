@@ -99,7 +99,7 @@ export const OPSUI_MEETS_SURFACES: DomainSurface[] = [
     purpose: "Edge API for rooms, meetings, moderation, summaries, and exports.",
     rolloutStatus: "ready",
     healthPath: "/v1/health",
-    requiredEnvVars: ["APP_ENV", "APP_DATA_MODE", "DATABASE_URL", "MEDIA_CONTROL_SHARED_SECRET"],
+    requiredEnvVars: ["APP_ENV", "APP_DATA_MODE"],
     serviceBindings: [
       {
         binding: "REALTIME_SERVICE",
@@ -141,7 +141,13 @@ export const OPSUI_MEETS_SURFACES: DomainSurface[] = [
     purpose: "Media delivery, upload, and recording service boundary.",
     rolloutStatus: "ready",
     healthPath: "/v1/health",
-    requiredEnvVars: ["MEDIA_BACKEND_BASE_URL", "MEDIA_CONTROL_SHARED_SECRET"],
+    requiredEnvVars: [],
+    serviceBindings: [
+      {
+        binding: "MEDIA_CONTROL_SERVICE",
+        service: "opsui-meets-media-control",
+      },
+    ],
   },
   {
     kind: "auth",
@@ -154,9 +160,16 @@ export const OPSUI_MEETS_SURFACES: DomainSurface[] = [
     healthPath: "/v1/health",
     requiredEnvVars: [
       "COOKIE_DOMAIN",
-      "MOCK_SESSION_SIGNING_SECRET",
+      "ALLOW_MOCK_AUTH",
+      "APP_ENV",
+      "DEFAULT_WORKSPACE_ID",
       "AUTH_ENFORCE_MEMBERSHIP_DIRECTORY",
-      "AUTH_MEMBERSHIP_DIRECTORY_JSON",
+      "OIDC_SCOPE",
+      "OIDC_WORKSPACE_CLAIM",
+      "OIDC_EMAIL_DOMAIN_WORKSPACE_MAP",
+      "OIDC_ALLOWED_WORKSPACE_IDS",
+      "OIDC_ROLE_CLAIM",
+      "OIDC_DEFAULT_ROLE",
     ],
     analyticsBindings: [
       {
