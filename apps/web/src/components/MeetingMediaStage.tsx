@@ -6,16 +6,28 @@ import {
 } from "@cloudflare/realtimekit-react";
 import type { RTKParticipant, RTKSelf } from "@cloudflare/realtimekit-react";
 import type { ParticipantState } from "@opsui/shared-types";
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createMediaSession } from "../lib/commands";
+import { MeetingControlButton } from "./MeetingControlButton";
+import {
+  LeaveCallIcon,
+  MicrophoneIcon,
+  MicrophoneOffIcon,
+  RefreshIcon,
+  VideoCameraIcon,
+  VideoCameraOffIcon,
+} from "./MeetingRoomIcons";
 
 type MediaStatus = "idle" | "connecting" | "connected" | "warning" | "error";
 type MediaClient = Awaited<ReturnType<ReturnType<typeof useRealtimeKitClient>[1]>> | undefined;
 
 interface MeetingMediaStageProps {
   activeParticipants: ParticipantState[];
+  extraControls?: ReactNode;
   meetingActive: boolean;
   meetingId: string | null;
+  onLeave?: () => void;
   participantDisplayName: string;
   participantId: string | null;
   participantRole: string;
@@ -161,9 +173,11 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
   const mediaFallback = (
     <StageFallback
       activeParticipants={props.activeParticipants}
+      extraControls={props.extraControls}
       meetingActive={props.meetingActive}
       mediaMessage={mediaMessage}
       mediaStatus={mediaStatus}
+      onLeave={props.onLeave}
       onRetry={
         props.shouldConnect
           ? () => {
@@ -179,6 +193,7 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
       <RealtimeKitProvider fallback={mediaFallback} value={client}>
         <ConnectedMediaStage
           activeParticipants={props.activeParticipants}
+          extraControls={props.extraControls}
           mediaMessage={mediaMessage}
           mediaStatus={mediaStatus}
           onMediaActionError={(kind, error) => {
@@ -190,6 +205,7 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
             setMediaStatus("connected");
             setMediaMessage(null);
           }}
+          onLeave={props.onLeave}
           onRetry={() => {
             setRetryNonce((current) => current + 1);
           }}
@@ -202,14 +218,15 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
 
 function ConnectedMediaStage(props: {
   activeParticipants: ParticipantState[];
+  extraControls?: ReactNode;
   mediaMessage: string | null;
   mediaStatus: MediaStatus;
   onMediaActionError(kind: "audio" | "video", error: unknown): void;
   onMediaActionSuccess(): void;
+  onLeave?: () => void;
   onRetry(): void;
   participantDisplayName: string;
 }) {
-  const meeting = useRealtimeKitSelector((currentMeeting) => currentMeeting);
   const roomJoined = useRealtimeKitSelector((currentMeeting) => currentMeeting.self.roomJoined);
   const self = useRealtimeKitSelector((currentMeeting) => currentMeeting.self);
   const remoteParticipants = useRealtimeKitSelector((currentMeeting) => currentMeeting.participants.active.toArray());
@@ -223,7 +240,7 @@ function ConnectedMediaStage(props: {
 
   if (!roomJoined) {
     return (
-      <>
+      <div className="meeting-stage-runtime">
         <div className="stage-tiles">
           <article className="participant-tile participant-tile--empty">
             <div className="participant-tile__avatar participant-tile__avatar--ghost">O</div>
@@ -234,19 +251,21 @@ function ConnectedMediaStage(props: {
           </article>
         </div>
         <MediaToolbar
+          extraControls={props.extraControls}
           mediaMessage={props.mediaMessage}
           mediaStatus={props.mediaStatus}
+          onLeave={props.onLeave}
           onRetry={props.onRetry}
           onToggleAudio={null}
           onToggleVideo={null}
           self={self}
         />
-      </>
+      </div>
     );
   }
 
   return (
-    <>
+    <div className="meeting-stage-runtime">
       <div className="stage-tiles">
         <MediaTile
           audioEnabled={self.audioEnabled}
@@ -281,8 +300,10 @@ function ConnectedMediaStage(props: {
       </div>
 
       <MediaToolbar
+        extraControls={props.extraControls}
         mediaMessage={props.mediaMessage}
         mediaStatus={props.mediaStatus}
+        onLeave={props.onLeave}
         onRetry={props.onRetry}
         onToggleAudio={async () => {
           try {
@@ -310,56 +331,67 @@ function ConnectedMediaStage(props: {
         }}
         self={self}
       />
-    </>
+    </div>
   );
 }
 
 function MediaToolbar(props: {
+  extraControls?: ReactNode;
   mediaMessage: string | null;
   mediaStatus: MediaStatus;
+  onLeave?: () => void;
   onRetry(): void;
   onToggleAudio: (() => Promise<void>) | null;
   onToggleVideo: (() => Promise<void>) | null;
   self: RTKSelf | null;
 }) {
   return (
-    <div className="stage-media__footer">
-      <div className="stage-media__actions">
-        <button
-          className={`button ${props.self?.audioEnabled ? "button--secondary" : "button--ghost"}`}
-          disabled={!props.onToggleAudio}
-          onClick={() => {
-            void props.onToggleAudio?.();
-          }}
-          type="button"
-        >
-          {props.self?.audioEnabled ? "Mute Mic" : "Unmute Mic"}
-        </button>
-        <button
-          className={`button ${props.self?.videoEnabled ? "button--secondary" : "button--ghost"}`}
-          disabled={!props.onToggleVideo}
-          onClick={() => {
-            void props.onToggleVideo?.();
-          }}
-          type="button"
-        >
-          {props.self?.videoEnabled ? "Hide Camera" : "Show Camera"}
-        </button>
-        {props.mediaStatus === "error" ? (
-          <button
-            className="button button--ghost"
-            onClick={props.onRetry}
-            type="button"
-          >
-            Retry Media
-          </button>
-        ) : null}
-      </div>
+    <div className="meeting-control-surface">
       {props.mediaMessage ? (
-        <p className={`inline-feedback${props.mediaStatus === "error" || props.mediaStatus === "warning" ? " inline-feedback--error" : ""}`}>
+        <p className={`meeting-control-surface__message${props.mediaStatus === "error" || props.mediaStatus === "warning" ? " meeting-control-surface__message--warning" : ""}`}>
           {props.mediaMessage}
         </p>
       ) : null}
+      <div className="meeting-control-dock">
+        <div className="meeting-control-dock__cluster">
+          <MeetingControlButton
+            active={Boolean(props.self?.audioEnabled)}
+            disabled={!props.onToggleAudio}
+            icon={props.self?.audioEnabled ? <MicrophoneIcon /> : <MicrophoneOffIcon />}
+            label={props.self?.audioEnabled ? "Mic" : "Mic Off"}
+            onClick={() => {
+              void props.onToggleAudio?.();
+            }}
+          />
+          <MeetingControlButton
+            active={Boolean(props.self?.videoEnabled)}
+            disabled={!props.onToggleVideo}
+            icon={props.self?.videoEnabled ? <VideoCameraIcon /> : <VideoCameraOffIcon />}
+            label={props.self?.videoEnabled ? "Camera" : "Camera Off"}
+            onClick={() => {
+              void props.onToggleVideo?.();
+            }}
+          />
+          {props.mediaStatus === "error" ? (
+            <MeetingControlButton
+              icon={<RefreshIcon />}
+              label="Retry"
+              onClick={props.onRetry}
+            />
+          ) : null}
+        </div>
+        <div className="meeting-control-dock__cluster meeting-control-dock__cluster--secondary">
+          {props.extraControls}
+          {props.onLeave ? (
+            <MeetingControlButton
+              danger
+              icon={<LeaveCallIcon />}
+              label="Leave"
+              onClick={props.onLeave}
+            />
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }
@@ -439,15 +471,17 @@ function MediaTile(props: {
 
 function StageFallback(props: {
   activeParticipants: ParticipantState[];
+  extraControls?: ReactNode;
   meetingActive: boolean;
   mediaMessage: string | null;
   mediaStatus: MediaStatus;
+  onLeave?: () => void;
   onRetry: (() => void) | null;
 }) {
   const visibleParticipants = props.activeParticipants.slice(0, 4);
 
   return (
-    <>
+    <div className="meeting-stage-runtime">
       <div className="stage-tiles">
         {visibleParticipants.length > 0 ? (
           visibleParticipants.map((participant) => (
@@ -458,7 +492,7 @@ function StageFallback(props: {
               <div className="participant-tile__meta">
                 <strong>{participant.displayName}</strong>
                 <span>
-                  {participant.audio} audio · {participant.video} video
+                  {participant.audio} audio / {participant.video} video
                 </span>
               </div>
             </article>
@@ -478,27 +512,17 @@ function StageFallback(props: {
         )}
       </div>
 
-      {props.mediaMessage || props.onRetry ? (
-        <div className="stage-media__footer">
-          {props.mediaMessage ? (
-            <p className={`inline-feedback${props.mediaStatus === "error" ? " inline-feedback--error" : ""}`}>
-              {props.mediaMessage}
-            </p>
-          ) : null}
-          {props.onRetry ? (
-            <div className="stage-media__actions">
-              <button
-                className="button button--ghost"
-                onClick={props.onRetry}
-                type="button"
-              >
-                Retry Media
-              </button>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-    </>
+      <MediaToolbar
+        extraControls={props.extraControls}
+        mediaMessage={props.mediaMessage}
+        mediaStatus={props.mediaStatus}
+        onLeave={props.onLeave}
+        onRetry={props.onRetry ?? (() => {})}
+        onToggleAudio={null}
+        onToggleVideo={null}
+        self={null}
+      />
+    </div>
   );
 }
 
@@ -515,7 +539,7 @@ function resolveParticipantName(
 
 function buildTileSubtitle(audioEnabled: boolean, videoEnabled: boolean, isSelf: boolean): string {
   const prefix = isSelf ? "Live preview" : "Live";
-  return `${prefix} · ${audioEnabled ? "mic on" : "mic off"} · ${videoEnabled ? "camera on" : "camera off"}`;
+  return `${prefix} / ${audioEnabled ? "mic on" : "mic off"} / ${videoEnabled ? "camera on" : "camera off"}`;
 }
 
 async function leaveMediaClient(client: MediaClient): Promise<void> {

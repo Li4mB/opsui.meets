@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessageEventPayload, RoomEvent } from "@opsui/shared-types";
+import { CloseIcon } from "./MeetingRoomIcons";
 
 interface MeetingConversationPanelProps {
   currentParticipantId: string | null;
   disabledReason: string | null;
   events: RoomEvent[];
+  onClose?: () => void;
   onSendMessage(message: string): Promise<{ errorMessage?: string }>;
 }
 
@@ -46,12 +48,22 @@ export function MeetingConversationPanel(props: MeetingConversationPanelProps) {
   }
 
   return (
-    <section className="panel-card panel-card--conversation">
-      <div className="panel-card__header">
+    <section className="panel-card panel-card--conversation meeting-drawer-panel meeting-conversation-panel">
+      <div className="panel-card__header meeting-drawer-panel__header">
         <div>
           <div className="eyebrow">Conversation</div>
           <h2 className="panel-card__title">Chat & Activity</h2>
         </div>
+        {props.onClose ? (
+          <button
+            aria-label="Close chat"
+            className="icon-button icon-button--small"
+            onClick={props.onClose}
+            type="button"
+          >
+            <CloseIcon />
+          </button>
+        ) : null}
       </div>
 
       <div className="conversation-log" ref={logRef}>
@@ -72,7 +84,7 @@ export function MeetingConversationPanel(props: MeetingConversationPanelProps) {
               <article className="conversation-divider" key={event.eventId}>
                 <span className="conversation-divider__line" />
                 <span className="conversation-divider__content">
-                  {formatActivityLabel(event)} · {formatClockTime(event.occurredAt)}
+                  {formatActivityLabel(event)} - {formatClockTime(event.occurredAt)}
                 </span>
                 <span className="conversation-divider__line" />
               </article>

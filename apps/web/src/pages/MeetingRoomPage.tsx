@@ -1,7 +1,16 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import type { AuthCapabilities, ChatMessageEventPayload, ParticipantState, RoomEvent, SessionInfo } from "@opsui/shared-types";
+import type {
+  AuthCapabilities,
+  ChatMessageEventPayload,
+  ParticipantState,
+  RoomEvent,
+  SessionInfo,
+} from "@opsui/shared-types";
 import { MeetingConversationPanel } from "../components/MeetingConversationPanel";
+import { MeetingControlButton } from "../components/MeetingControlButton";
+import { MeetingInfoPanel } from "../components/MeetingInfoPanel";
 import { MeetingMediaStage } from "../components/MeetingMediaStage";
+import { ChatBubbleIcon, InformationCircleIcon } from "../components/MeetingRoomIcons";
 import { Modal } from "../components/Modal";
 import { getSessionDisplayName, startLogin } from "../lib/auth";
 import {
@@ -38,9 +47,11 @@ type LoadState =
   | { data: MeetingRoomData; status: "ready" };
 
 type JoinUiState = "idle" | "joining" | "direct" | "lobby" | "blocked" | "error";
+type ActiveDrawer = "chat" | "info" | null;
 
 export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
+  const [activeDrawer, setActiveDrawer] = useState<ActiveDrawer>(null);
   const [joinState, setJoinState] = useState<JoinUiState>("idle");
   const [guestDisplayName, setGuestDisplayName] = useState("");
   const [guestModalOpen, setGuestModalOpen] = useState(false);
@@ -93,6 +104,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   useEffect(() => {
     autoJoinKeyRef.current = null;
     setJoinState("idle");
+    setActiveDrawer(null);
     setJoinMessage(null);
     setActionMessage(null);
     setServiceMessage(null);
@@ -307,6 +319,22 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     setActionMessage("Meeting started.");
   }
 
+  function toggleDrawer(nextDrawer: Exclude<ActiveDrawer, null>) {
+    setActiveDrawer((current) => current === nextDrawer ? null : nextDrawer);
+  }
+
+  function closeDrawers() {
+    setActiveDrawer(null);
+  }
+
+  function leaveRoom() {
+    if (meeting?.id && participantId) {
+      leaveMeetingParticipantInBackground(meeting.id, participantId, sessionRef.current);
+    }
+
+    props.onNavigate("/");
+  }
+
   if (loadState.status === "loading") {
     return (
       <section className="page page--centered">
@@ -373,7 +401,10 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const lobbyParticipants = participants.filter((entry) => entry.presence === "lobby");
   const canManageMeeting =
     Boolean(props.session?.authenticated) ||
-    Boolean(currentParticipant && ["owner", "host", "co_host", "moderator", "presenter"].includes(currentParticipant.role)) ||
+    Boolean(
+      currentParticipant &&
+        ["owner", "host", "co_host", "moderator", "presenter"].includes(currentParticipant.role),
+    ) ||
     Boolean(meeting?.hostUserId && meeting.hostUserId === props.session?.actor.userId);
   const participantDisplayName =
     currentParticipant?.displayName ??
@@ -402,7 +433,11 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
         return current;
       }
 
-      const nextEvents = [result as RoomEvent<ChatMessageEventPayload>, ...current.data.events.filter((event) => event.eventId !== result.eventId)];
+      const nextEvents = [
+        result as RoomEvent<ChatMessageEventPayload>,
+        ...current.data.events.filter((event) => event.eventId !== result.eventId),
+      ];
+
       return {
         status: "ready",
         data: {
@@ -416,246 +451,207 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     return {};
   }
 
+  const identityLabel = props.session?.authenticated ? getSessionDisplayName(props.session) : participantDisplayName;
+  const isChatOpen = activeDrawer === "chat";
+  const isInfoOpen = activeDrawer === "info";
+  const stageBadges = [
+    formatMeetingCodeLabel(props.meetingCode),
+    meeting?.status ?? "waiting",
+    joinState === "idle" ? "not joined" : joinState,
+    recording?.status === "recording" ? "recording" : null,
+  ].filter((value): value is string => Boolean(value));
+
   return (
     <>
       <section className={`page page--room${guestModalOpen ? " page--obscured" : ""}`}>
-        <div className="meeting-room">
-          <div className="stage-card">
-            <div className="stage-card__header">
-              <div>
-                <div className="eyebrow">Meeting {formatMeetingCodeLabel(props.meetingCode)}</div>
-                <h1 className="stage-card__title">{meeting?.title ?? room?.name ?? "Meeting room"}</h1>
-              </div>
-              <div className="status-pills">
-                <span className="status-pill">{meeting?.status ?? "waiting"}</span>
-                <span className="status-pill">{recording?.status ?? "idle"}</span>
-                <span className="status-pill">{joinState === "idle" ? "not joined" : joinState}</span>
-              </div>
-            </div>
+        <div
+          className={[
+            "meeting-room-shell",
+            isChatOpen ? " meeting-room-shell--chat-open" : "",
+            isInfoOpen ? " meeting-room-shell--info-open" : "",
+          ].join("")}
+        >
+          <button
+            aria-label="Close drawer"
+            className={`meeting-room-shell__scrim${activeDrawer ? " is-visible" : ""}`}
+            onClick={closeDrawers}
+            type="button"
+          />
 
-            <MeetingMediaStage
-              activeParticipants={activeParticipants}
-              meetingActive={Boolean(meeting)}
-              meetingId={meeting?.id ?? null}
-              participantDisplayName={participantDisplayName}
-              participantId={participantId}
-              participantRole={participantRole}
-              shouldConnect={shouldConnectMedia}
-            />
-
-            <div className="stage-card__footer">
-              <button
-                className="button button--secondary"
-                onClick={() => {
-                  void copyMeetingLink();
-                }}
-                type="button"
-              >
-                Copy Link
-              </button>
-              <button
-                className="button button--ghost"
-                onClick={() => {
-                  void refreshRoom();
-                }}
-                type="button"
-              >
-                Refresh
-              </button>
-              {!props.session?.authenticated ? (
-                <button
-                  className="button button--ghost"
-                  onClick={() => {
-                    startLogin(window.location.pathname);
-                  }}
-                  type="button"
-                >
-                  Sign In
-                </button>
-              ) : null}
-            </div>
-          </div>
-
-          <aside className="side-rail">
-            <section className="panel-card">
-              <div className="panel-card__header">
-                <div>
-                  <div className="eyebrow">Room Status</div>
-                  <h2 className="panel-card__title">Session</h2>
-                </div>
-              </div>
-              <div className="detail-grid detail-grid--compact">
-                <Detail label="Code" value={formatMeetingCodeLabel(props.meetingCode)} />
-                <Detail label="Identity" value={props.session?.authenticated ? getSessionDisplayName(props.session) : "Guest"} />
-                <Detail label="Joined" value={joinState} />
-                <Detail label="Recording" value={recording?.status ?? "idle"} />
-              </div>
-              {joinMessage ? <p className="inline-feedback">{joinMessage}</p> : null}
-              {actionMessage ? <p className="inline-feedback">{actionMessage}</p> : null}
-              {serviceMessage ? <p className="inline-feedback inline-feedback--warning">{serviceMessage}</p> : null}
-            </section>
-
-            <section className="panel-card panel-card--scroll">
-              <div className="panel-card__header">
-                <div>
-                  <div className="eyebrow">People</div>
-                  <h2 className="panel-card__title">
-                    {activeParticipants.length} active · {lobbyParticipants.length} lobby
-                  </h2>
-                </div>
-              </div>
-
-              <div className="people-list">
-                {activeParticipants.map((participant) => (
-                  <ParticipantRow
-                    key={participant.participantId}
-                    onAdmit={null}
-                    onRemove={
-                      meeting && canManageMeeting
-                        ? () => {
-                            void runAction(
-                              () => removeParticipant(meeting.id, participant.participantId),
-                              `${participant.displayName} removed.`,
-                              "Remove failed.",
-                            );
-                          }
-                        : null
-                    }
-                    participant={participant}
-                  />
-                ))}
-                {lobbyParticipants.map((participant) => (
-                  <ParticipantRow
-                    key={participant.participantId}
-                    onAdmit={
-                      meeting && canManageMeeting
-                        ? () => {
-                            void runAction(
-                              () => admitParticipant(meeting.id, participant.participantId),
-                              `${participant.displayName} admitted.`,
-                              "Admit failed.",
-                            );
-                          }
-                        : null
-                    }
-                    onRemove={
-                      meeting && canManageMeeting
-                        ? () => {
-                            void runAction(
-                              () => removeParticipant(meeting.id, participant.participantId),
-                              `${participant.displayName} removed.`,
-                              "Remove failed.",
-                            );
-                          }
-                        : null
-                    }
-                    participant={participant}
-                  />
-                ))}
-                {!activeParticipants.length && !lobbyParticipants.length ? (
-                  <div className="empty-list">No participants yet.</div>
-                ) : null}
-              </div>
-            </section>
-
-            {meeting && canManageMeeting ? (
-              <section className="panel-card">
-                <div className="panel-card__header">
-                  <div>
-                    <div className="eyebrow">Controls</div>
-                    <h2 className="panel-card__title">Host tools</h2>
-                  </div>
-                </div>
-                <div className="host-actions">
-                  <button
-                    className="button button--secondary"
-                    disabled={isActionBusy}
-                    onClick={() => {
-                      void runAction(
-                        () => muteAllParticipants(meeting.id),
-                        "Everyone in the room was muted.",
-                        "Mute all failed.",
-                      );
-                    }}
-                    type="button"
-                  >
-                    Mute All
-                  </button>
-                  <button
-                    className="button button--secondary"
-                    disabled={isActionBusy}
-                    onClick={() => {
-                      void runAction(
-                        () => (meeting.isLocked ? unlockMeeting(meeting.id) : lockMeeting(meeting.id)),
-                        meeting.isLocked ? "Meeting unlocked." : "Meeting locked.",
-                        "Lock update failed.",
-                      );
-                    }}
-                    type="button"
-                  >
-                    {meeting.isLocked ? "Unlock" : "Lock"}
-                  </button>
-                  <button
-                    className="button button--secondary"
-                    disabled={isActionBusy}
-                    onClick={() => {
-                      void runAction(
-                        () =>
-                          recording?.status === "recording"
-                            ? stopRecording(meeting.id)
-                            : startRecording(meeting.id),
-                        recording?.status === "recording" ? "Recording stopped." : "Recording started.",
-                        "Recording update failed.",
-                      );
-                    }}
-                    type="button"
-                  >
-                    {recording?.status === "recording" ? "Stop Recording" : "Start Recording"}
-                  </button>
-                  <button
-                    className="button button--danger"
-                    disabled={isActionBusy}
-                    onClick={() => {
-                      void runAction(
-                        () => endMeeting(meeting.id),
-                        "Meeting ended.",
-                        "End meeting failed.",
-                      );
-                    }}
-                    type="button"
-                  >
-                    End Meeting
-                  </button>
-                </div>
-              </section>
-            ) : null}
-
-            {!meeting && props.session?.authenticated ? (
-              <section className="panel-card">
-                <div className="panel-card__header">
-                  <div>
-                    <div className="eyebrow">No Active Session</div>
-                    <h2 className="panel-card__title">Start this room</h2>
-                  </div>
-                </div>
-                <button
-                  className="button button--primary"
-                  disabled={isActionBusy}
-                  onClick={() => {
-                    void handleStartMeetingNow();
-                  }}
-                  type="button"
-                >
-                  Start Meeting Now
-                </button>
-              </section>
-            ) : null}
-
+          <aside
+            aria-hidden={!isChatOpen}
+            className={`meeting-room-drawer meeting-room-drawer--chat${isChatOpen ? " is-open" : ""}`}
+          >
             <MeetingConversationPanel
               currentParticipantId={participantId}
               disabledReason={chatDisabledReason}
               events={events}
+              onClose={closeDrawers}
               onSendMessage={handleSendChatMessage}
+            />
+          </aside>
+
+          <div className="meeting-room-stage-layout">
+            <section className="meeting-room-stage-surface">
+              <div className="meeting-room-stage-surface__header">
+                <div className="meeting-room-stage-surface__title-group">
+                  <div className="meeting-room-stage-surface__badges">
+                    {stageBadges.map((badge, index) => (
+                      <span className="meeting-room-stage-surface__badge" key={`${badge}-${index}`}>
+                        {badge}
+                      </span>
+                    ))}
+                  </div>
+                  <h1 className="meeting-room-stage-surface__title">
+                    {meeting?.title ?? room?.name ?? `Meeting ${formatMeetingCodeLabel(props.meetingCode)}`}
+                  </h1>
+                </div>
+              </div>
+
+              <div className="meeting-room-stage-surface__notices">
+                {serviceMessage ? (
+                  <p className="meeting-room-stage-surface__notice meeting-room-stage-surface__notice--warning">
+                    {serviceMessage}
+                  </p>
+                ) : null}
+                {joinMessage ? <p className="meeting-room-stage-surface__notice">{joinMessage}</p> : null}
+                {actionMessage ? <p className="meeting-room-stage-surface__notice">{actionMessage}</p> : null}
+              </div>
+
+              <MeetingMediaStage
+                activeParticipants={activeParticipants}
+                extraControls={
+                  <>
+                    <MeetingControlButton
+                      active={isChatOpen}
+                      icon={<ChatBubbleIcon />}
+                      label="Chat"
+                      onClick={() => {
+                        toggleDrawer("chat");
+                      }}
+                    />
+                    <MeetingControlButton
+                      active={isInfoOpen}
+                      icon={<InformationCircleIcon />}
+                      label="Info"
+                      onClick={() => {
+                        toggleDrawer("info");
+                      }}
+                    />
+                  </>
+                }
+                meetingActive={Boolean(meeting)}
+                meetingId={meeting?.id ?? null}
+                onLeave={leaveRoom}
+                participantDisplayName={participantDisplayName}
+                participantId={participantId}
+                participantRole={participantRole}
+                shouldConnect={shouldConnectMedia}
+              />
+            </section>
+          </div>
+
+          <aside
+            aria-hidden={!isInfoOpen}
+            className={`meeting-room-drawer meeting-room-drawer--info${isInfoOpen ? " is-open" : ""}`}
+          >
+            <MeetingInfoPanel
+              actionMessage={actionMessage}
+              activeParticipants={activeParticipants}
+              canManageMeeting={canManageMeeting}
+              identityLabel={identityLabel}
+              isActionBusy={isActionBusy}
+              joinMessage={joinMessage}
+              joinState={joinState}
+              lobbyParticipants={lobbyParticipants}
+              meeting={meeting}
+              meetingCode={props.meetingCode}
+              onAdmitParticipant={(nextParticipantId) => {
+                if (!meeting) {
+                  return;
+                }
+
+                void runAction(
+                  () => admitParticipant(meeting.id, nextParticipantId),
+                  "Participant admitted.",
+                  "Admit failed.",
+                );
+              }}
+              onClose={closeDrawers}
+              onCopyLink={() => {
+                void copyMeetingLink();
+              }}
+              onEndMeeting={() => {
+                if (!meeting) {
+                  return;
+                }
+
+                void runAction(
+                  () => endMeeting(meeting.id),
+                  "Meeting ended.",
+                  "End meeting failed.",
+                );
+              }}
+              onRefresh={() => {
+                void refreshRoom();
+              }}
+              onRemoveParticipant={(nextParticipantId) => {
+                if (!meeting) {
+                  return;
+                }
+
+                void runAction(
+                  () => removeParticipant(meeting.id, nextParticipantId),
+                  "Participant removed.",
+                  "Remove failed.",
+                );
+              }}
+              onSignIn={() => {
+                startLogin(window.location.pathname);
+              }}
+              onStartMeetingNow={() => {
+                void handleStartMeetingNow();
+              }}
+              onToggleLock={() => {
+                if (!meeting) {
+                  return;
+                }
+
+                void runAction(
+                  () => (meeting.isLocked ? unlockMeeting(meeting.id) : lockMeeting(meeting.id)),
+                  meeting.isLocked ? "Meeting unlocked." : "Meeting locked.",
+                  "Lock update failed.",
+                );
+              }}
+              onToggleMuteAll={() => {
+                if (!meeting) {
+                  return;
+                }
+
+                void runAction(
+                  () => muteAllParticipants(meeting.id),
+                  "Everyone in the room was muted.",
+                  "Mute all failed.",
+                );
+              }}
+              onToggleRecording={() => {
+                if (!meeting) {
+                  return;
+                }
+
+                void runAction(
+                  () =>
+                    recording?.status === "recording"
+                      ? stopRecording(meeting.id)
+                      : startRecording(meeting.id),
+                  recording?.status === "recording" ? "Recording stopped." : "Recording started.",
+                  "Recording update failed.",
+                );
+              }}
+              recording={recording}
+              serviceMessage={serviceMessage}
+              sessionAuthenticated={Boolean(props.session?.authenticated)}
+              showStartMeetingAction={!meeting && Boolean(props.session?.authenticated)}
             />
           </aside>
         </div>
@@ -710,44 +706,6 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
         </div>
       </Modal>
     </>
-  );
-}
-
-function Detail(props: { label: string; value: string }) {
-  return (
-    <div className="detail-card">
-      <span className="detail-card__label">{props.label}</span>
-      <strong className="detail-card__value">{props.value}</strong>
-    </div>
-  );
-}
-
-function ParticipantRow(props: {
-  onAdmit: (() => void) | null;
-  onRemove: (() => void) | null;
-  participant: ParticipantState;
-}) {
-  return (
-    <article className="people-row">
-      <div>
-        <strong>{props.participant.displayName}</strong>
-        <div className="people-row__meta">
-          {props.participant.presence} · {props.participant.audio} audio · {props.participant.video} video
-        </div>
-      </div>
-      <div className="people-row__actions">
-        {props.onAdmit ? (
-          <button className="chip-button" onClick={props.onAdmit} type="button">
-            Admit
-          </button>
-        ) : null}
-        {props.onRemove ? (
-          <button className="chip-button chip-button--danger" onClick={props.onRemove} type="button">
-            Remove
-          </button>
-        ) : null}
-      </div>
-    </article>
   );
 }
 

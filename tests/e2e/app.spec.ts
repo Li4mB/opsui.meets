@@ -21,7 +21,7 @@ test("start meeting creates a room and keeps guests on the same room URL", async
 
   await expect(page).toHaveURL(new RegExp(`${escapeRegex(roomPath)}$`));
   await expect(page.locator('[role="dialog"]')).toHaveCount(0);
-  await expect(page.getByText("You are waiting in the lobby for a host to admit you.")).toBeVisible();
+  await expectRoomNotice(page, "You are waiting in the lobby for a host to admit you.");
 });
 
 test("join meeting accepts legacy invite links from the landing page", async ({ page }) => {
@@ -44,8 +44,7 @@ test("guest room sign-in escalation redirects through auth and auto-joins", asyn
 
   await expect(page).toHaveURL(/\/ops-login$/);
   await expect(page.locator('[role="dialog"]')).toHaveCount(0);
-  await expect(page.getByText("You are in the meeting.")).toBeVisible();
-  await expect(page.locator(".detail-card").filter({ hasText: "Identity" })).toContainText("Member");
+  await expectRoomNotice(page, "You are in the meeting.");
 });
 
 test("sign-in page mock auth enables direct room entry and host controls", async ({ page }) => {
@@ -55,12 +54,13 @@ test("sign-in page mock auth enables direct room entry and host controls", async
 
   await page.goto("/ops-signin");
   await expect(page.locator('[role="dialog"]')).toHaveCount(0);
-  await expect(page.getByText("You are in the meeting.")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Host tools" })).toBeVisible();
+  await expectRoomNotice(page, "You are in the meeting.");
+  await openInfoDrawer(page);
+  await expect(page.getByRole("button", { name: "Lock" })).toBeVisible();
 
   await page.getByRole("button", { name: "Lock" }).click();
   await expect(page.getByRole("button", { name: "Unlock" })).toBeVisible();
-  await expect(page.getByText("Meeting locked.")).toBeVisible();
+  await expectRoomNotice(page, "Meeting locked.");
 });
 
 test("signed-in users can start a meeting from home and enter directly", async ({ page }) => {
@@ -73,9 +73,10 @@ test("signed-in users can start a meeting from home and enter directly", async (
 
   await expect(page).toHaveURL(/\/ops-/);
   await expect(page.locator('[role="dialog"]')).toHaveCount(0);
-  await expect(page.getByText("You are in the meeting.")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Host tools" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: /1 active · 0 lobby/i })).toBeVisible();
+  await expectRoomNotice(page, "You are in the meeting.");
+  await openInfoDrawer(page);
+  await expect(page.getByRole("button", { name: "Mute All" })).toBeVisible();
+  await expect(page.getByText(/1 active \/ 0 lobby/i)).toBeVisible();
   await expect(page.getByText("You are waiting in the lobby for a host to admit you.")).toHaveCount(0);
 });
 
@@ -95,7 +96,9 @@ test("chat messages show sender and time, and other users appear on the left", a
 
     await signInThroughUi(guestPage, "sam@example.com");
     await guestPage.goto(meetingPath);
-    await expect(guestPage.getByText("You are in the meeting.")).toBeVisible();
+    await expectRoomNotice(guestPage, "You are in the meeting.");
+    await openChatDrawer(hostPage);
+    await openChatDrawer(guestPage);
 
     await hostPage.getByRole("textbox", { name: "Message" }).fill("Hello from Liam");
     await hostPage.getByRole("button", { name: "Send message" }).click();
@@ -103,7 +106,9 @@ test("chat messages show sender and time, and other users appear on the left", a
 
     await guestPage.getByRole("textbox", { name: "Message" }).fill("Reply from Sam");
     await guestPage.getByRole("button", { name: "Send message" }).click();
+    await openInfoDrawer(hostPage);
     await hostPage.getByRole("button", { name: "Refresh" }).click();
+    await openChatDrawer(hostPage);
 
     await expect(
       hostPage.locator(".chat-message:not(.chat-message--self)").filter({ hasText: "Reply from Sam" }),
@@ -124,7 +129,8 @@ test("chat and activity share the same conversation log", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Start Meeting" }).click();
 
-  await expect(page.getByText("You are in the meeting.")).toBeVisible();
+  await expectRoomNotice(page, "You are in the meeting.");
+  await openChatDrawer(page);
   await expect(page.locator(".conversation-divider")).toHaveCount(1);
   await expect(page.locator(".conversation-divider")).toContainText(/joined|recording|locked|meeting/i);
   await page.getByRole("textbox", { name: "Message" }).fill("One log only");
@@ -142,7 +148,8 @@ test("transient room refresh failures do not replace an open meeting with a fata
   await page.goto("/");
   await page.getByRole("button", { name: "Start Meeting" }).click();
 
-  await expect(page.getByText("You are in the meeting.")).toBeVisible();
+  await expectRoomNotice(page, "You are in the meeting.");
+  await openInfoDrawer(page);
 
   await page.route("**/v1/meetings", async (route) => {
     await route.abort("failed");
@@ -151,7 +158,7 @@ test("transient room refresh failures do not replace an open meeting with a fata
   await page.getByRole("button", { name: "Refresh" }).click();
 
   await expect(page.getByRole("heading", { name: /Meeting OPS-/i })).toBeVisible();
-  await expect(page.getByText("Connection to meeting services was interrupted.")).toBeVisible();
+  await expectRoomNotice(page, "Connection to meeting services was interrupted.");
   await expect(page.getByText("Meeting services are temporarily unavailable.")).toHaveCount(0);
 });
 
@@ -178,7 +185,7 @@ test("the same signed-in identity can join from two browser sessions without col
 
     await expect(hostPage).toHaveURL(/\/ops-/);
     await expect(hostPage.locator('[role="dialog"]')).toHaveCount(0);
-    await expect(hostPage.getByText("You are in the meeting.")).toBeVisible();
+    await expectRoomNotice(hostPage, "You are in the meeting.");
 
     const meetingPath = new URL(hostPage.url()).pathname;
 
@@ -186,11 +193,13 @@ test("the same signed-in identity can join from two browser sessions without col
     await guestPage.goto(meetingPath);
 
     await expect(guestPage.locator('[role="dialog"]')).toHaveCount(0);
-    await expect(guestPage.getByText("You are in the meeting.")).toBeVisible();
+    await expectRoomNotice(guestPage, "You are in the meeting.");
+    await openInfoDrawer(hostPage);
     await hostPage.getByRole("button", { name: "Refresh" }).click();
+    await openInfoDrawer(guestPage);
     await guestPage.getByRole("button", { name: "Refresh" }).click();
-    await expect(hostPage.getByRole("heading", { name: /2 active/i })).toBeVisible();
-    await expect(guestPage.getByRole("heading", { name: /2 active/i })).toBeVisible();
+    await expect(hostPage.getByText(/2 active \/ 0 lobby/i)).toBeVisible();
+    await expect(guestPage.getByText(/2 active \/ 0 lobby/i)).toBeVisible();
   } finally {
     await Promise.allSettled([hostContext.close(), guestContext.close()]);
   }
@@ -208,24 +217,25 @@ test("leaving one browser session updates the remaining participant count", asyn
     await hostPage.getByRole("button", { name: "Start Meeting" }).click();
 
     await expect(hostPage).toHaveURL(/\/ops-/);
-    await expect(hostPage.getByText("You are in the meeting.")).toBeVisible();
+    await expectRoomNotice(hostPage, "You are in the meeting.");
 
     const meetingPath = new URL(hostPage.url()).pathname;
 
     await signInThroughUi(guestPage, "liam@example.com");
     await guestPage.goto(meetingPath);
 
-    await expect(guestPage.getByText("You are in the meeting.")).toBeVisible();
+    await expectRoomNotice(guestPage, "You are in the meeting.");
+    await openInfoDrawer(hostPage);
     await hostPage.getByRole("button", { name: "Refresh" }).click();
-    await expect(hostPage.getByRole("heading", { name: /2 active/i })).toBeVisible();
+    await expect(hostPage.getByText(/2 active \/ 0 lobby/i)).toBeVisible();
 
     await guestPage.goto("/");
     await expect
       .poll(async () => {
         await hostPage.getByRole("button", { name: "Refresh" }).click();
-        return (await hostPage.getByRole("heading", { name: /active/i }).textContent()) ?? "";
+        return (await hostPage.locator(".meeting-info-panel__section-title").nth(1).textContent()) ?? "";
       })
-      .toContain("1 active");
+      .toContain("1 active / 0 lobby");
   } finally {
     await Promise.allSettled([hostContext.close(), guestContext.close()]);
   }
@@ -255,6 +265,20 @@ async function signInThroughUi(page: Page, email: string) {
   await page.getByRole("button", { name: "Use Dev Sign-In" }).click();
   await expect(page.getByText("You are signed in for local testing.")).toBeVisible();
   await expect(page.getByText("Signed in", { exact: true })).toBeVisible();
+}
+
+async function openChatDrawer(page: Page) {
+  await page.getByRole("button", { name: "Chat" }).click();
+  await expect(page.getByRole("heading", { name: "Chat & Activity" })).toBeVisible();
+}
+
+async function openInfoDrawer(page: Page) {
+  await page.getByRole("button", { name: "Info" }).click();
+  await expect(page.getByRole("heading", { name: "Room details" })).toBeVisible();
+}
+
+async function expectRoomNotice(page: Page, text: string) {
+  await expect(page.locator(".meeting-room-stage-surface__notice").filter({ hasText: text }).first()).toBeVisible();
 }
 
 async function expectNoPageScroll(page: Page) {
