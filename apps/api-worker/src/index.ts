@@ -3,6 +3,7 @@ import { recordApiMetric } from "./lib/analytics";
 import { assertPersistenceAvailable } from "./lib/data-status";
 import { getSentryOptions } from "./lib/sentry";
 import { completeActionItem, createActionItem, listActionItems } from "./routes/action-items";
+import { sendChatMessage } from "./routes/chat";
 import { dispatchFollowUp } from "./routes/follow-up-dispatch";
 import { retryFollowUp } from "./routes/follow-up-retry";
 import { exportFollowUp } from "./routes/follow-up-export";
@@ -20,7 +21,15 @@ import { joinMeeting } from "./routes/join";
 import { createMeeting, listMeetings } from "./routes/meetings";
 import { getMeetingRecording } from "./routes/meeting-recording";
 import { getMeetingSummary } from "./routes/meeting-summary";
-import { admitParticipant, endMeeting, lockMeeting, muteAllParticipants, removeParticipant, unlockMeeting } from "./routes/moderation";
+import {
+  admitParticipant,
+  endMeeting,
+  leaveParticipant,
+  lockMeeting,
+  muteAllParticipants,
+  removeParticipant,
+  unlockMeeting,
+} from "./routes/moderation";
 import { listParticipants } from "./routes/participants";
 import { testPostMeetingHook } from "./routes/post-meeting-hook-test";
 import { getWorkspacePolicy, updateWorkspacePolicy } from "./routes/policies";
@@ -37,6 +46,7 @@ import {
   getMeetingActionItemCompletePath,
   getMeetingActionItemsPath,
   getMeetingAttendanceExportPath,
+  getMeetingChatMessagesPath,
   getMeetingFollowUpAttemptsPath,
   getMeetingFollowUpDispatchPath,
   getMeetingFollowUpExportPath,
@@ -217,6 +227,12 @@ export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
           return withCors(routeResponse, request);
         }
 
+        const chatMessagesPath = getMeetingChatMessagesPath(url.pathname);
+        if (chatMessagesPath) {
+          routeResponse = await sendChatMessage(request, chatMessagesPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
+        }
+
         const actionItemsPath = getMeetingActionItemsPath(url.pathname);
         if (actionItemsPath) {
           routeResponse = await createActionItem(request, actionItemsPath.meetingInstanceId, env);
@@ -283,6 +299,16 @@ export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
 
         if (participantModerationPath?.action === "remove") {
           routeResponse = await removeParticipant(
+            request,
+            participantModerationPath.meetingInstanceId,
+            participantModerationPath.participantId,
+            env,
+          );
+          return withCors(routeResponse, request);
+        }
+
+        if (participantModerationPath?.action === "leave") {
+          routeResponse = await leaveParticipant(
             request,
             participantModerationPath.meetingInstanceId,
             participantModerationPath.participantId,

@@ -19,6 +19,11 @@ export type RoomEventType =
   | "action_item.completed"
   | "follow_up.dispatched";
 
+export interface ChatMessageEventPayload {
+  displayName: string;
+  text: string;
+}
+
 export interface RoomEvent<TPayload = unknown> {
   eventId: string;
   roomEventNumber: number;

@@ -79,6 +79,82 @@ test("signed-in users can start a meeting from home and enter directly", async (
   await expect(page.getByText("You are waiting in the lobby for a host to admit you.")).toHaveCount(0);
 });
 
+test("chat messages show sender and time, and other users appear on the left", async ({ browser }) => {
+  const hostContext = await browser.newContext();
+  const guestContext = await browser.newContext();
+  const hostPage = await hostContext.newPage();
+  const guestPage = await guestContext.newPage();
+
+  try {
+    await signInThroughUi(hostPage, "liam@example.com");
+    await hostPage.goto("/");
+    await hostPage.getByRole("button", { name: "Start Meeting" }).click();
+    await expect(hostPage).toHaveURL(/\/ops-/);
+
+    const meetingPath = new URL(hostPage.url()).pathname;
+
+    await signInThroughUi(guestPage, "sam@example.com");
+    await guestPage.goto(meetingPath);
+    await expect(guestPage.getByText("You are in the meeting.")).toBeVisible();
+
+    await hostPage.getByRole("textbox", { name: "Message" }).fill("Hello from Liam");
+    await hostPage.getByRole("button", { name: "Send message" }).click();
+    await expect(hostPage.locator(".chat-message--self")).toContainText("Hello from Liam");
+
+    await guestPage.getByRole("textbox", { name: "Message" }).fill("Reply from Sam");
+    await guestPage.getByRole("button", { name: "Send message" }).click();
+    await hostPage.getByRole("button", { name: "Refresh" }).click();
+
+    await expect(
+      hostPage.locator(".chat-message:not(.chat-message--self)").filter({ hasText: "Reply from Sam" }),
+    ).toBeVisible();
+    await expect
+      .poll(async () => {
+        const metaTexts = await hostPage.locator(".chat-message__meta").allTextContents();
+        return metaTexts.some((value) => /Liam|Sam/.test(value) && /\d{2}:\d{2}/.test(value));
+      })
+      .toBe(true);
+  } finally {
+    await Promise.allSettled([hostContext.close(), guestContext.close()]);
+  }
+});
+
+test("chat and activity share the same conversation log", async ({ page }) => {
+  await signInThroughUi(page, "liam@example.com");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Start Meeting" }).click();
+
+  await expect(page.getByText("You are in the meeting.")).toBeVisible();
+  await expect(page.locator(".conversation-divider")).toHaveCount(1);
+  await expect(page.locator(".conversation-divider")).toContainText(/joined|recording|locked|meeting/i);
+  await page.getByRole("textbox", { name: "Message" }).fill("One log only");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.locator(".conversation-log")).toContainText("One log only");
+  await expect
+    .poll(async () => {
+      return page.locator(".conversation-log").evaluate((element) => getComputedStyle(element).overflowY);
+    })
+    .toBe("auto");
+});
+
+test("transient room refresh failures do not replace an open meeting with a fatal error page", async ({ page }) => {
+  await signInThroughUi(page, "liam@example.com");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Start Meeting" }).click();
+
+  await expect(page.getByText("You are in the meeting.")).toBeVisible();
+
+  await page.route("**/v1/meetings", async (route) => {
+    await route.abort("failed");
+  });
+
+  await page.getByRole("button", { name: "Refresh" }).click();
+
+  await expect(page.getByRole("heading", { name: /Meeting OPS-/i })).toBeVisible();
+  await expect(page.getByText("Connection to meeting services was interrupted.")).toBeVisible();
+  await expect(page.getByText("Meeting services are temporarily unavailable.")).toHaveCount(0);
+});
+
 test("sign out clears the signed-in session state", async ({ page }) => {
   await signInThroughUi(page, "liam@example.com");
 
@@ -115,6 +191,41 @@ test("the same signed-in identity can join from two browser sessions without col
     await guestPage.getByRole("button", { name: "Refresh" }).click();
     await expect(hostPage.getByRole("heading", { name: /2 active/i })).toBeVisible();
     await expect(guestPage.getByRole("heading", { name: /2 active/i })).toBeVisible();
+  } finally {
+    await Promise.allSettled([hostContext.close(), guestContext.close()]);
+  }
+});
+
+test("leaving one browser session updates the remaining participant count", async ({ browser }) => {
+  const hostContext = await browser.newContext();
+  const guestContext = await browser.newContext();
+  const hostPage = await hostContext.newPage();
+  const guestPage = await guestContext.newPage();
+
+  try {
+    await signInThroughUi(hostPage, "liam@example.com");
+    await hostPage.goto("/");
+    await hostPage.getByRole("button", { name: "Start Meeting" }).click();
+
+    await expect(hostPage).toHaveURL(/\/ops-/);
+    await expect(hostPage.getByText("You are in the meeting.")).toBeVisible();
+
+    const meetingPath = new URL(hostPage.url()).pathname;
+
+    await signInThroughUi(guestPage, "liam@example.com");
+    await guestPage.goto(meetingPath);
+
+    await expect(guestPage.getByText("You are in the meeting.")).toBeVisible();
+    await hostPage.getByRole("button", { name: "Refresh" }).click();
+    await expect(hostPage.getByRole("heading", { name: /2 active/i })).toBeVisible();
+
+    await guestPage.goto("/");
+    await expect
+      .poll(async () => {
+        await hostPage.getByRole("button", { name: "Refresh" }).click();
+        return (await hostPage.getByRole("heading", { name: /active/i }).textContent()) ?? "";
+      })
+      .toContain("1 active");
   } finally {
     await Promise.allSettled([hostContext.close(), guestContext.close()]);
   }

@@ -113,6 +113,15 @@ export function getMeetingMediaSessionPath(pathname: string): { meetingInstanceI
   return { meetingInstanceId: match.groups.meetingInstanceId };
 }
 
+export function getMeetingChatMessagesPath(pathname: string): { meetingInstanceId: string } | null {
+  const match = pathname.match(/^\/v1\/meetings\/(?<meetingInstanceId>[^/]+)\/chat\/messages$/);
+  if (!match?.groups?.meetingInstanceId) {
+    return null;
+  }
+
+  return { meetingInstanceId: match.groups.meetingInstanceId };
+}
+
 export function getMeetingDetailPath(pathname: string): { meetingInstanceId: string } | null {
   const match = pathname.match(/^\/v1\/meetings\/(?<meetingInstanceId>[^/]+)$/);
   if (!match?.groups?.meetingInstanceId) {
@@ -169,9 +178,9 @@ export function getMeetingEndPath(pathname: string): { meetingInstanceId: string
 
 export function getMeetingParticipantModerationPath(
   pathname: string,
-): { meetingInstanceId: string; participantId: string; action: "admit" | "remove" } | null {
+): { meetingInstanceId: string; participantId: string; action: "admit" | "leave" | "remove" } | null {
   const match = pathname.match(
-    /^\/v1\/meetings\/(?<meetingInstanceId>[^/]+)\/participants\/(?<participantId>[^/]+)\/(?<action>admit|remove)$/,
+    /^\/v1\/meetings\/(?<meetingInstanceId>[^/]+)\/participants\/(?<participantId>[^/]+)\/(?<action>admit|leave|remove)$/,
   );
   if (!match?.groups?.meetingInstanceId || !match.groups.participantId || !match.groups.action) {
     return null;
@@ -180,7 +189,7 @@ export function getMeetingParticipantModerationPath(
   return {
     meetingInstanceId: match.groups.meetingInstanceId,
     participantId: match.groups.participantId,
-    action: match.groups.action as "admit" | "remove",
+    action: match.groups.action as "admit" | "leave" | "remove",
   };
 }
 

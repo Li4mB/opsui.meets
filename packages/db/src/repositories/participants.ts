@@ -71,6 +71,22 @@ export class ParticipantsRepository {
     return participant ? toPublicParticipant(participant) : null;
   }
 
+  leaveMeeting(meetingInstanceId: string, participantId: string): ParticipantState | null {
+    const participant = this.getStore().participants.find(
+      (item) => item.meetingInstanceId === meetingInstanceId && item.participantId === participantId,
+    );
+
+    if (!participant) {
+      return null;
+    }
+
+    participant.presence = "left";
+    participant.audio = "muted";
+    participant.video = "off";
+    participant.handRaised = false;
+    return participant ? toPublicParticipant(participant) : null;
+  }
+
   removeFromMeeting(meetingInstanceId: string, participantId: string): ParticipantState | null {
     const participant = this.getStore().participants.find(
       (item) => item.meetingInstanceId === meetingInstanceId && item.participantId === participantId,

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-04-01T11:07:03.365Z",
+  "generatedAt": "2026-04-02T07:52:32.223Z",
   "overallStatus": "ready_for_launch_review",
   "recommendedNextStep": "Run launch review against deployed preview and complete final compliance checks.",
   "summary": {
@@ -162,7 +162,7 @@
         },
         {
           "path": "apps/api-worker/src/index.ts",
-          "line": 77,
+          "line": 87,
           "note": "Top-level API routing blocks unavailable persistence mode before executing routes."
         }
       ]
@@ -185,12 +185,12 @@
         },
         {
           "path": "packages/db/src/adapters/postgres.ts",
-          "line": 147,
+          "line": 150,
           "note": "Postgres adapter now commits runtime state back to Postgres."
         },
         {
           "path": "packages/db/src/adapters/postgres.ts",
-          "line": 162,
+          "line": 165,
           "note": "Adapter targets the runtime-state table instead of throwing not-implemented errors."
         },
         {

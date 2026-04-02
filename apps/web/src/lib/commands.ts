@@ -1,13 +1,16 @@
 import type {
   ActionItem,
+  ChatMessageEventPayload,
   CreateActionItemInput,
   CreateMeetingInput,
   JoinMeetingResult,
   MeetingMediaSession,
   MeetingDetail,
+  RoomEvent,
   RoomSummary,
+  SessionInfo,
 } from "@opsui/shared-types";
-import { getActorHeaders } from "./auth";
+import { buildActorHeadersFromSession, getActorHeaders } from "./auth";
 import { API_BASE_URL } from "./config";
 import { createIdempotencyKey } from "./idempotency";
 import { getJoinSessionId } from "./join-session";
@@ -135,6 +138,56 @@ export function admitParticipant(meetingInstanceId: string, participantId: strin
 
 export function removeParticipant(meetingInstanceId: string, participantId: string): Promise<boolean> {
   return postCommand(`/v1/meetings/${meetingInstanceId}/participants/${participantId}/remove`);
+}
+
+export function leaveMeetingParticipant(meetingInstanceId: string, participantId: string): Promise<boolean> {
+  return postCommand(`/v1/meetings/${meetingInstanceId}/participants/${participantId}/leave`);
+}
+
+export async function sendChatMessage(
+  meetingInstanceId: string,
+  participantId: string,
+  text: string,
+): Promise<RoomEvent<ChatMessageEventPayload> | null> {
+  try {
+    const headers = await getActorHeaders(
+      {
+        "Idempotency-Key": createIdempotencyKey("chat-message-send"),
+      },
+      { includeJsonContentType: true },
+    );
+    const response = await fetch(`${API_BASE_URL}/v1/meetings/${meetingInstanceId}/chat/messages`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        participantId,
+        text,
+      }),
+    });
+
+    if (response.ok) {
+      return (await response.json()) as RoomEvent<ChatMessageEventPayload>;
+    }
+  } catch {}
+
+  return null;
+}
+
+export function leaveMeetingParticipantInBackground(
+  meetingInstanceId: string,
+  participantId: string,
+  session: SessionInfo | null,
+): void {
+  try {
+    const headers = buildActorHeadersFromSession(session, {
+      "Idempotency-Key": createIdempotencyKey("meeting-leave"),
+    });
+    void fetch(`${API_BASE_URL}/v1/meetings/${meetingInstanceId}/participants/${participantId}/leave`, {
+      method: "POST",
+      headers,
+      keepalive: true,
+    });
+  } catch {}
 }
 
 export function startRecording(meetingInstanceId: string): Promise<boolean> {

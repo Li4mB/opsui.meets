@@ -253,6 +253,64 @@ export async function removeParticipant(
   return response;
 }
 
+export async function leaveParticipant(
+  request: Request,
+  meetingInstanceId: string,
+  participantId: string,
+  env: Env,
+): Promise<Response> {
+  const actor = getActorContext(request);
+  const repositories = await getRepositories(env);
+  const participant = repositories.participants.leaveMeeting(meetingInstanceId, participantId);
+
+  if (!participant) {
+    throw new ApiError(404, "participant_not_found");
+  }
+
+  repositories.events.append({
+    meetingInstanceId,
+    type: "participant.leave",
+    payload: {
+      participantId: participant.participantId,
+      displayName: participant.displayName,
+    },
+  });
+  repositories.audit.append({
+    actor: actor.email ?? actor.userId,
+    action: "participant.left",
+    target: participant.displayName,
+  });
+  syncMeetingSummary(repositories, meetingInstanceId);
+  await repositories.commit();
+
+  await syncRealtimeRoomState(env, meetingInstanceId, {
+    participants: [
+      {
+        participantId: participant.participantId,
+        presence: "removed",
+      },
+    ],
+    event: {
+      type: "participant.leave",
+      actorParticipantId: participant.participantId,
+      payload: {
+        participantId: participant.participantId,
+        displayName: participant.displayName,
+      },
+    },
+  });
+
+  const response = json(participant);
+  recordApiMetric(env, {
+    route: "participant-leave",
+    status: response.status,
+    request,
+    outcome: "left",
+    workspaceId: actor.workspaceId,
+  });
+  return response;
+}
+
 async function setMeetingLockState(
   request: Request,
   meetingInstanceId: string,

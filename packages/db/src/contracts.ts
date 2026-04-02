@@ -49,6 +49,7 @@ export interface ParticipantsRepositoryContract {
     role?: ParticipantState["role"];
   }): ParticipantState;
   admitToMeeting(meetingInstanceId: string, participantId: string): ParticipantState | null;
+  leaveMeeting(meetingInstanceId: string, participantId: string): ParticipantState | null;
   removeFromMeeting(meetingInstanceId: string, participantId: string): ParticipantState | null;
   muteAll(meetingInstanceId: string): ParticipantState[];
   endMeeting(meetingInstanceId: string): ParticipantState[];

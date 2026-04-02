@@ -57,7 +57,7 @@ export async function loadMeetingRoomData(meetingCode: string): Promise<MeetingR
       };
     }
 
-    const [meetingResponse, participantsResponse, eventsResponse, recordingResponse] = await Promise.all([
+    const [meetingResult, participantsResult, eventsResult, recordingResult] = await Promise.allSettled([
       fetchWithTimeout(`${API_BASE_URL}/v1/meetings/${meetingSummary.id}`, {
         headers: actorHeaders,
       }),
@@ -72,8 +72,13 @@ export async function loadMeetingRoomData(meetingCode: string): Promise<MeetingR
       }),
     ]);
 
+    const meetingResponse = getSettledResponse(meetingResult);
+    const participantsResponse = getSettledResponse(participantsResult);
+    const eventsResponse = getSettledResponse(eventsResult);
+    const recordingResponse = getSettledResponse(recordingResult);
+
     const meeting =
-      meetingResponse.ok
+      meetingResponse?.ok
         ? ((await meetingResponse.json()) as MeetingDetail)
         : ({
             ...meetingSummary,
@@ -81,13 +86,13 @@ export async function loadMeetingRoomData(meetingCode: string): Promise<MeetingR
             isLocked: false,
             joinUrl: getMeetingShareUrl(meetingCode),
           } satisfies MeetingDetail);
-    const participants = participantsResponse.ok
+    const participants = participantsResponse?.ok
       ? ((await participantsResponse.json()) as { items: ParticipantState[] }).items
       : [];
-    const events = eventsResponse.ok
+    const events = eventsResponse?.ok
       ? ((await eventsResponse.json()) as { items: RoomEvent[] }).items
       : [];
-    const recording = recordingResponse.ok
+    const recording = recordingResponse?.ok
       ? ((await recordingResponse.json()) as RecordingSummary)
       : null;
 
@@ -106,7 +111,7 @@ export async function loadMeetingRoomData(meetingCode: string): Promise<MeetingR
 async function fetchWithTimeout(
   input: string,
   init?: RequestInit,
-  timeoutMs = 4_000,
+  timeoutMs = 8_000,
 ): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = globalThis.setTimeout(() => {
@@ -121,6 +126,14 @@ async function fetchWithTimeout(
   } finally {
     globalThis.clearTimeout(timeoutId);
   }
+}
+
+function getSettledResponse(result: PromiseSettledResult<Response>): Response | null {
+  if (result.status === "fulfilled") {
+    return result.value;
+  }
+
+  return null;
 }
 
 export function getMeetingShareUrl(meetingCode: string): string {

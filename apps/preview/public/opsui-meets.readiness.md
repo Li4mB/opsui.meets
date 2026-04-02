@@ -1,6 +1,6 @@
 # OpsUI Meets Readiness Report
 
-Generated at: 2026-04-01T11:07:03.365Z
+Generated at: 2026-04-02T07:52:32.223Z
 
 Overall status: ready_for_launch_review
 
@@ -75,7 +75,7 @@ If Postgres mode is selected before the durable adapter exists, the API now fail
 - apps/api-worker/src/lib/data-status.ts:41 - API exposes a shared persistence-availability helper.
 - apps/api-worker/src/lib/data-status.ts:51 - Unavailable Postgres mode now maps to a clear 503 error code.
 - apps/api-worker/src/lib/data.ts:11 - Repository access uses the shared persistence guard.
-- apps/api-worker/src/index.ts:77 - Top-level API routing blocks unavailable persistence mode before executing routes.
+- apps/api-worker/src/index.ts:87 - Top-level API routing blocks unavailable persistence mode before executing routes.
 
 ### Postgres runtime-state adapter [ready]
 
@@ -86,8 +86,8 @@ The DB package now has a real Postgres-backed persistence path that loads and co
 - A dedicated migration now creates the runtime-state table required by the adapter.
 
 - packages/db/src/adapters/postgres.ts:50 - Postgres adapter now loads persisted runtime state.
-- packages/db/src/adapters/postgres.ts:147 - Postgres adapter now commits runtime state back to Postgres.
-- packages/db/src/adapters/postgres.ts:162 - Adapter targets the runtime-state table instead of throwing not-implemented errors.
+- packages/db/src/adapters/postgres.ts:150 - Postgres adapter now commits runtime state back to Postgres.
+- packages/db/src/adapters/postgres.ts:165 - Adapter targets the runtime-state table instead of throwing not-implemented errors.
 - packages/db/src/migrations/016_runtime_state.sql:1 - A dedicated migration now creates the runtime-state table.
 
 ### Database migration tooling [ready]

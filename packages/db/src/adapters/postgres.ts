@@ -92,6 +92,9 @@ export async function createPostgresRepositoryContext(
   participants.admitToMeeting = trackMutation(participants.admitToMeeting.bind(participants), () => {
     dirty = true;
   });
+  participants.leaveMeeting = trackMutation(participants.leaveMeeting.bind(participants), () => {
+    dirty = true;
+  });
   participants.removeFromMeeting = trackMutation(participants.removeFromMeeting.bind(participants), () => {
     dirty = true;
   });

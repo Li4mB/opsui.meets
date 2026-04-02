@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
-import type { AuthCapabilities, ParticipantState, SessionInfo } from "@opsui/shared-types";
+import type { AuthCapabilities, ChatMessageEventPayload, ParticipantState, RoomEvent, SessionInfo } from "@opsui/shared-types";
+import { MeetingConversationPanel } from "../components/MeetingConversationPanel";
 import { MeetingMediaStage } from "../components/MeetingMediaStage";
 import { Modal } from "../components/Modal";
 import { getSessionDisplayName, startLogin } from "../lib/auth";
@@ -8,9 +9,11 @@ import {
   createInstantMeeting,
   endMeeting,
   joinMeeting,
+  leaveMeetingParticipantInBackground,
   lockMeeting,
   muteAllParticipants,
   removeParticipant,
+  sendChatMessage,
   startRecording,
   stopRecording,
   unlockMeeting,
@@ -43,27 +46,47 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const [guestModalOpen, setGuestModalOpen] = useState(false);
   const [joinMessage, setJoinMessage] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [serviceMessage, setServiceMessage] = useState<string | null>(null);
   const [isActionBusy, setIsActionBusy] = useState(false);
   const [participantId, setParticipantId] = useState<string | null>(null);
   const autoJoinKeyRef = useRef<string | null>(null);
+  const sessionRef = useRef(props.session);
+
+  useEffect(() => {
+    sessionRef.current = props.session;
+  }, [props.session]);
 
   const refreshRoom = useEffectEvent(async () => {
     try {
       const nextData = await loadMeetingRoomData(props.meetingCode);
       if (!nextData) {
-        setLoadState({ status: "not-found" });
+        setLoadState((current) => {
+          if (current.status === "ready") {
+            return current;
+          }
+
+          return { status: "not-found" };
+        });
         return;
       }
 
+      setServiceMessage(null);
       setLoadState({
         data: nextData,
         status: "ready",
       });
     } catch {
-      setLoadState({
-        message: "Meeting services are unavailable right now. Start the local API/Auth workers or use the deployed environment.",
-        status: "error",
+      setLoadState((current) => {
+        if (current.status === "ready") {
+          return current;
+        }
+
+        return {
+          message: "Meeting services are temporarily unavailable. Please retry in a moment.",
+          status: "error",
+        };
       });
+      setServiceMessage("Connection to meeting services was interrupted. Retrying in the background.");
     }
   });
 
@@ -72,6 +95,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     setJoinState("idle");
     setJoinMessage(null);
     setActionMessage(null);
+    setServiceMessage(null);
     setParticipantId(null);
     setGuestModalOpen(false);
     setLoadState({ status: "loading" });
@@ -176,6 +200,30 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       socket?.close();
     };
   }, [meeting?.id]);
+
+  useEffect(() => {
+    if (!meeting?.id || !participantId) {
+      return;
+    }
+
+    let leaveSent = false;
+
+    const notifyLeave = () => {
+      if (leaveSent) {
+        return;
+      }
+
+      leaveSent = true;
+      leaveMeetingParticipantInBackground(meeting.id, participantId, sessionRef.current);
+    };
+
+    window.addEventListener("pagehide", notifyLeave);
+
+    return () => {
+      window.removeEventListener("pagehide", notifyLeave);
+      notifyLeave();
+    };
+  }, [meeting?.id, participantId]);
 
   async function submitJoin(displayName: string, sessionType: string) {
     if (loadState.status !== "ready" || !loadState.data.meeting) {
@@ -323,7 +371,6 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
 
   const activeParticipants = participants.filter((entry) => entry.presence === "active");
   const lobbyParticipants = participants.filter((entry) => entry.presence === "lobby");
-  const timelineEvents = [...events].slice(-6).reverse();
   const canManageMeeting =
     Boolean(props.session?.authenticated) ||
     Boolean(currentParticipant && ["owner", "host", "co_host", "moderator", "presenter"].includes(currentParticipant.role)) ||
@@ -333,6 +380,41 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     (props.session?.authenticated ? getSessionDisplayName(props.session) : guestDisplayName.trim() || "Guest User");
   const participantRole = currentParticipant?.role ?? props.session?.actor.workspaceRole ?? "participant";
   const shouldConnectMedia = joinState === "direct" && Boolean(currentParticipant && participantId);
+  const chatDisabledReason = getChatDisabledReason({
+    canManageMeeting,
+    currentParticipant,
+    joinState,
+    roomChatMode: room?.policy?.chatMode ?? "open",
+  });
+
+  async function handleSendChatMessage(text: string): Promise<{ errorMessage?: string }> {
+    if (!meeting?.id || !participantId || chatDisabledReason) {
+      return { errorMessage: chatDisabledReason ?? "Join the room to send messages." };
+    }
+
+    const result = await sendChatMessage(meeting.id, participantId, text);
+    if (!result) {
+      return { errorMessage: "Message failed to send." };
+    }
+
+    setLoadState((current) => {
+      if (current.status !== "ready") {
+        return current;
+      }
+
+      const nextEvents = [result as RoomEvent<ChatMessageEventPayload>, ...current.data.events.filter((event) => event.eventId !== result.eventId)];
+      return {
+        status: "ready",
+        data: {
+          ...current.data,
+          events: nextEvents,
+        },
+      };
+    });
+
+    void refreshRoom();
+    return {};
+  }
 
   return (
     <>
@@ -410,6 +492,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
               </div>
               {joinMessage ? <p className="inline-feedback">{joinMessage}</p> : null}
               {actionMessage ? <p className="inline-feedback">{actionMessage}</p> : null}
+              {serviceMessage ? <p className="inline-feedback inline-feedback--warning">{serviceMessage}</p> : null}
             </section>
 
             <section className="panel-card panel-card--scroll">
@@ -568,23 +651,12 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
               </section>
             ) : null}
 
-            <section className="panel-card panel-card--scroll">
-              <div className="panel-card__header">
-                <div>
-                  <div className="eyebrow">Activity</div>
-                  <h2 className="panel-card__title">Recent events</h2>
-                </div>
-              </div>
-              <div className="activity-list">
-                {timelineEvents.map((event) => (
-                  <article className="activity-item" key={event.eventId}>
-                    <strong>{event.type.replace(/\./g, " ")}</strong>
-                    <span>{new Date(event.occurredAt).toLocaleTimeString()}</span>
-                  </article>
-                ))}
-                {!timelineEvents.length ? <div className="empty-list">No room events yet.</div> : null}
-              </div>
-            </section>
+            <MeetingConversationPanel
+              currentParticipantId={participantId}
+              disabledReason={chatDisabledReason}
+              events={events}
+              onSendMessage={handleSendChatMessage}
+            />
           </aside>
         </div>
       </section>
@@ -700,4 +772,25 @@ function getJoinMessage(
   }
 
   return "You cannot join this meeting right now.";
+}
+
+function getChatDisabledReason(input: {
+  canManageMeeting: boolean;
+  currentParticipant: ParticipantState | null;
+  joinState: JoinUiState;
+  roomChatMode: "open" | "host_only" | "moderated" | "disabled";
+}): string | null {
+  if (!input.currentParticipant || input.joinState !== "direct") {
+    return "Join the room to send messages.";
+  }
+
+  if (input.roomChatMode === "disabled") {
+    return "Chat is disabled for this room.";
+  }
+
+  if (input.roomChatMode === "host_only" && !input.canManageMeeting) {
+    return "Chat is limited to hosts in this room.";
+  }
+
+  return null;
 }

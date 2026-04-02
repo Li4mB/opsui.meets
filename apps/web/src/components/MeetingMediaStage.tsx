@@ -9,7 +9,7 @@ import type { ParticipantState } from "@opsui/shared-types";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createMediaSession } from "../lib/commands";
 
-type MediaStatus = "idle" | "connecting" | "connected" | "error";
+type MediaStatus = "idle" | "connecting" | "connected" | "warning" | "error";
 type MediaClient = Awaited<ReturnType<ReturnType<typeof useRealtimeKitClient>[1]>> | undefined;
 
 interface MeetingMediaStageProps {
@@ -181,6 +181,15 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
           activeParticipants={props.activeParticipants}
           mediaMessage={mediaMessage}
           mediaStatus={mediaStatus}
+          onMediaActionError={(kind, error) => {
+            reportMediaException(error, { kind, stage: "toggle" });
+            setMediaStatus("warning");
+            setMediaMessage(getMediaActionErrorMessage(kind, error));
+          }}
+          onMediaActionSuccess={() => {
+            setMediaStatus("connected");
+            setMediaMessage(null);
+          }}
           onRetry={() => {
             setRetryNonce((current) => current + 1);
           }}
@@ -195,6 +204,8 @@ function ConnectedMediaStage(props: {
   activeParticipants: ParticipantState[];
   mediaMessage: string | null;
   mediaStatus: MediaStatus;
+  onMediaActionError(kind: "audio" | "video", error: unknown): void;
+  onMediaActionSuccess(): void;
   onRetry(): void;
   participantDisplayName: string;
 }) {
@@ -280,8 +291,9 @@ function ConnectedMediaStage(props: {
             } else {
               await self.enableAudio();
             }
+            props.onMediaActionSuccess();
           } catch (error) {
-            Sentry.captureException(error);
+            props.onMediaActionError("audio", error);
           }
         }}
         onToggleVideo={async () => {
@@ -291,8 +303,9 @@ function ConnectedMediaStage(props: {
             } else {
               await self.enableVideo();
             }
+            props.onMediaActionSuccess();
           } catch (error) {
-            Sentry.captureException(error);
+            props.onMediaActionError("video", error);
           }
         }}
         self={self}
@@ -343,7 +356,7 @@ function MediaToolbar(props: {
         ) : null}
       </div>
       {props.mediaMessage ? (
-        <p className={`inline-feedback${props.mediaStatus === "error" ? " inline-feedback--error" : ""}`}>
+        <p className={`inline-feedback${props.mediaStatus === "error" || props.mediaStatus === "warning" ? " inline-feedback--error" : ""}`}>
           {props.mediaMessage}
         </p>
       ) : null}
@@ -543,6 +556,66 @@ function toMediaErrorMessage(error: unknown): string {
   }
 
   return "Live media failed to connect.";
+}
+
+function getMediaActionErrorMessage(kind: "audio" | "video", error: unknown): string {
+  const fallback = kind === "audio"
+    ? "Microphone could not be updated. Check browser or device permissions and try again."
+    : "Camera could not be updated. Check browser or device permissions and try again.";
+  const message = normaliseMediaErrorMessage(error);
+
+  if (!message) {
+    return fallback;
+  }
+
+  if (kind === "audio" && /(unmute|audio|microphone|mic)/i.test(message)) {
+    return "Microphone could not be enabled. Check browser or device permissions and try again.";
+  }
+
+  if (kind === "video" && /(video|camera)/i.test(message)) {
+    return "Camera could not be enabled. Check browser or device permissions and try again.";
+  }
+
+  return fallback;
+}
+
+function reportMediaException(
+  error: unknown,
+  context: {
+    kind: "audio" | "video";
+    stage: "toggle";
+  },
+) {
+  if (isExpectedLocalMediaIssue(error)) {
+    return;
+  }
+
+  Sentry.withScope((scope) => {
+    scope.setTag("media_action_kind", context.kind);
+    scope.setTag("media_action_stage", context.stage);
+    Sentry.captureException(error);
+  });
+}
+
+function isExpectedLocalMediaIssue(error: unknown): boolean {
+  const message = normaliseMediaErrorMessage(error);
+  return Boolean(
+    message &&
+      /(localmediahandler|failed to unmute track|failed to get video track|could not start video source|could not start audio source|notallowederror|notreadableerror|overconstrainederror)/i
+        .test(message),
+  );
+}
+
+function normaliseMediaErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message.trim();
+  }
+
+  if (typeof error === "string") {
+    return error.trim();
+  }
+
+  return "";
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

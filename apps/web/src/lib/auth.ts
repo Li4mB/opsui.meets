@@ -113,12 +113,22 @@ export async function getActorHeaders(
 ): Promise<Record<string, string>> {
   const session = await getSessionState(options?.forceRefresh);
 
+  return buildActorHeadersFromSession(session, extra, options);
+}
+
+export function buildActorHeadersFromSession(
+  session: SessionInfo | null | undefined,
+  extra?: Record<string, string>,
+  options?: { includeJsonContentType?: boolean },
+): Record<string, string> {
+  const actor = session?.actor ?? FALLBACK_SESSION.actor;
+
   return {
     ...(options?.includeJsonContentType ? { "content-type": "application/json" } : {}),
-    "x-workspace-id": session.actor.workspaceId,
-    "x-user-id": session.actor.userId,
-    ...(session.actor.email ? { "x-user-email": session.actor.email } : {}),
-    ...(session.actor.workspaceRole ? { "x-workspace-role": session.actor.workspaceRole } : {}),
+    "x-workspace-id": actor.workspaceId,
+    "x-user-id": actor.userId,
+    ...(actor.email ? { "x-user-email": actor.email } : {}),
+    ...(actor.workspaceRole ? { "x-workspace-role": actor.workspaceRole } : {}),
     ...(extra ?? {}),
   };
 }

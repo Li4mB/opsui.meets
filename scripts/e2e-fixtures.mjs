@@ -200,6 +200,36 @@ const apiServer = http.createServer(async (request, response) => {
     return;
   }
 
+  const chatMatch = url.pathname.match(/^\/v1\/meetings\/([^/]+)\/chat\/messages$/);
+  if (request.method === "POST" && chatMatch) {
+    const meetingId = chatMatch[1];
+    const body = await readJsonBody(request);
+    const participant = findParticipant(meetingId, String(body?.participantId ?? ""));
+    const text = String(body?.text ?? "").trim();
+
+    if (!participant) {
+      sendJson(request, response, 404, { error: "participant_not_found" });
+      return;
+    }
+
+    if (!text) {
+      sendJson(request, response, 400, { error: "chat_text_required" });
+      return;
+    }
+
+    const event = addEvent(
+      meetingId,
+      "chat.message_sent",
+      {
+        displayName: participant.displayName,
+        text,
+      },
+      participant.participantId,
+    );
+    sendJson(request, response, 201, event);
+    return;
+  }
+
   const admitMatch = url.pathname.match(/^\/v1\/meetings\/([^/]+)\/participants\/([^/]+)\/admit$/);
   if (request.method === "POST" && admitMatch) {
     const participant = findParticipant(admitMatch[1], admitMatch[2]);
@@ -224,6 +254,22 @@ const apiServer = http.createServer(async (request, response) => {
 
     participant.presence = "left";
     addEvent(removeMatch[1], "participant.removed", { participantId: participant.participantId });
+    sendJson(request, response, 200, { ok: true });
+    return;
+  }
+
+  const leaveMatch = url.pathname.match(/^\/v1\/meetings\/([^/]+)\/participants\/([^/]+)\/leave$/);
+  if (request.method === "POST" && leaveMatch) {
+    const participant = findParticipant(leaveMatch[1], leaveMatch[2]);
+    if (!participant) {
+      sendJson(request, response, 404, { error: "participant_not_found" });
+      return;
+    }
+
+    participant.presence = "left";
+    participant.audio = "muted";
+    participant.video = "off";
+    addEvent(leaveMatch[1], "participant.leave", { participantId: participant.participantId });
     sendJson(request, response, 200, { ok: true });
     return;
   }
@@ -552,8 +598,9 @@ function createParticipant(input) {
   };
 }
 
-function addEvent(meetingId, type, payload) {
+function addEvent(meetingId, type, payload, actorParticipantId = undefined) {
   const event = {
+    actorParticipantId,
     eventId: `event_${state.nextEventNumber}`,
     meetingInstanceId: meetingId,
     occurredAt: new Date().toISOString(),
