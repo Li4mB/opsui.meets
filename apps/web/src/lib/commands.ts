@@ -10,6 +10,7 @@ import type {
 import { getActorHeaders } from "./auth";
 import { API_BASE_URL } from "./config";
 import { createIdempotencyKey } from "./idempotency";
+import { getJoinSessionId } from "./join-session";
 
 export async function createInstantMeeting(input: CreateMeetingInput): Promise<MeetingDetail | null> {
   try {
@@ -82,6 +83,7 @@ export async function joinMeeting(
       method: "POST",
       headers,
       body: JSON.stringify({
+        clientSessionId: getJoinSessionId(),
         roomId,
         displayName,
         sessionType,

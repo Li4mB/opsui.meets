@@ -22,6 +22,7 @@ export async function joinMeeting(
   const actor = getActorContext(request);
   const repositories = await getRepositories(env);
   const payload = await parseJson<{
+    clientSessionId?: string;
     roomId: string;
     displayName: string;
     lobbyPreferred: boolean;
@@ -44,6 +45,10 @@ export async function joinMeeting(
     "display_name_required",
     actor.email ?? "Guest User",
   );
+  const clientSessionId =
+    typeof payload.clientSessionId === "string" && payload.clientSessionId.trim()
+      ? payload.clientSessionId.trim()
+      : undefined;
   const sessionType = typeof payload.sessionType === "string" ? payload.sessionType : "guest";
   const isGuest = sessionType !== "user";
   const elevatedRole = actor.workspaceRole ?? (meeting.hostUserId === actor.userId ? "host" : undefined);
@@ -76,6 +81,7 @@ export async function joinMeeting(
       ? null
       : repositories.participants.registerJoin({
           meetingInstanceId,
+          joinSessionId: clientSessionId,
           displayName,
           presence: joinState === "lobby" ? "lobby" : "active",
           role: elevatedRole,

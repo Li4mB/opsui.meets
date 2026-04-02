@@ -10,11 +10,15 @@ import type {
   WorkspacePolicy,
 } from "@opsui/shared-types";
 
+export interface StoredParticipantState extends ParticipantState {
+  joinSessionId?: string;
+}
+
 export interface MemoryStore {
   rooms: RoomRecord[];
   meetings: MeetingRecord[];
   templates: TemplateSummary[];
-  participants: ParticipantState[];
+  participants: StoredParticipantState[];
   recordings: RecordingSummary[];
   actionItems: ActionItem[];
   hookDeliveries: HookDeliveryAttempt[];

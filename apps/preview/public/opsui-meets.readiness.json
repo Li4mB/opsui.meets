@@ -1,10 +1,10 @@
 {
-  "generatedAt": "2026-04-01T07:34:37.953Z",
-  "overallStatus": "not_ready",
-  "recommendedNextStep": "Complete the remaining launch blockers, then run launch review against deployed preview.",
+  "generatedAt": "2026-04-01T11:07:03.365Z",
+  "overallStatus": "ready_for_launch_review",
+  "recommendedNextStep": "Run launch review against deployed preview and complete final compliance checks.",
   "summary": {
     "readyFoundations": 14,
-    "blockers": 1,
+    "blockers": 0,
     "prelaunchHardening": 2
   },
   "readyFoundations": [
@@ -460,47 +460,7 @@
       ]
     }
   ],
-  "blockers": [
-    {
-      "id": "media-provider-not-integrated",
-      "title": "Media session and recording provider integration is still synthetic",
-      "status": "blocked",
-      "summary": "The media stack now supports an internal media-control worker, but launch still needs a shared control secret plus live Cloudflare RealtimeKit credentials before real session and recording operations can run.",
-      "details": [
-        "The API worker now calls the media worker over a real service binding instead of fabricating provider ids.",
-        "The media worker can forward control traffic to the internal `apps/media-control-worker` service, which talks to Cloudflare RealtimeKit and enforces the shared secret.",
-        "The checked-in env scaffold still leaves `MEDIA_CONTROL_SHARED_SECRET`, `CF_REALTIME_ACCOUNT_ID`, `CF_REALTIME_APP_ID`, and `CF_REALTIME_API_TOKEN` blank by design.",
-        "Screen share, recording, and playback cannot be treated as production-capable until those values are supplied and deployed."
-      ],
-      "evidence": [
-        {
-          "path": "apps/media-worker/wrangler.jsonc",
-          "line": 15,
-          "note": "Media worker is wired to the internal media-control service."
-        },
-        {
-          "path": "apps/media-control-worker/src/index.ts",
-          "line": 331,
-          "note": "Media-control worker still fails closed until live Realtime credentials are bound."
-        },
-        {
-          "path": ".env.example",
-          "line": 47,
-          "note": "The checked-in env scaffold leaves the shared media-control secret blank."
-        },
-        {
-          "path": ".env.example",
-          "line": 51,
-          "note": "The checked-in env scaffold leaves the Realtime API token blank."
-        },
-        {
-          "path": "scripts/deploy-cloudflare.ps1",
-          "line": 300,
-          "note": "Deployment helper now includes the media-control worker in the rollout order."
-        }
-      ]
-    }
-  ],
+  "blockers": [],
   "prelaunchHardening": [
     {
       "id": "preview-smoke-tests-missing",

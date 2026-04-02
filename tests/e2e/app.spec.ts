@@ -89,6 +89,37 @@ test("sign out clears the signed-in session state", async ({ page }) => {
   await expect(page.getByRole("button", { name: "OIDC Unavailable" })).toBeDisabled();
 });
 
+test("the same signed-in identity can join from two browser sessions without collapsing into one participant", async ({ browser }) => {
+  const hostContext = await browser.newContext();
+  const guestContext = await browser.newContext();
+  const hostPage = await hostContext.newPage();
+  const guestPage = await guestContext.newPage();
+
+  try {
+    await signInThroughUi(hostPage, "liam@example.com");
+    await hostPage.goto("/");
+    await hostPage.getByRole("button", { name: "Start Meeting" }).click();
+
+    await expect(hostPage).toHaveURL(/\/ops-/);
+    await expect(hostPage.locator('[role="dialog"]')).toHaveCount(0);
+    await expect(hostPage.getByText("You are in the meeting.")).toBeVisible();
+
+    const meetingPath = new URL(hostPage.url()).pathname;
+
+    await signInThroughUi(guestPage, "liam@example.com");
+    await guestPage.goto(meetingPath);
+
+    await expect(guestPage.locator('[role="dialog"]')).toHaveCount(0);
+    await expect(guestPage.getByText("You are in the meeting.")).toBeVisible();
+    await hostPage.getByRole("button", { name: "Refresh" }).click();
+    await guestPage.getByRole("button", { name: "Refresh" }).click();
+    await expect(hostPage.getByRole("heading", { name: /2 active/i })).toBeVisible();
+    await expect(guestPage.getByRole("heading", { name: /2 active/i })).toBeVisible();
+  } finally {
+    await Promise.allSettled([hostContext.close(), guestContext.close()]);
+  }
+});
+
 test("mobile sidebar opens and closes without scrolling the page", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");

@@ -44,6 +44,7 @@ export interface ParticipantsRepositoryContract {
   registerJoin(input: {
     meetingInstanceId: string;
     displayName: string;
+    joinSessionId?: string;
     presence: ParticipantState["presence"];
     role?: ParticipantState["role"];
   }): ParticipantState;

@@ -140,6 +140,9 @@ const apiServer = http.createServer(async (request, response) => {
     }
 
     const body = await readJsonBody(request);
+    const clientSessionId = typeof body?.clientSessionId === "string" && body.clientSessionId.trim()
+      ? body.clientSessionId.trim()
+      : null;
     const displayName = String(body?.displayName ?? "Guest User").trim() || "Guest User";
     const sessionType = body?.sessionType === "user" ? "user" : "guest";
 
@@ -165,15 +168,19 @@ const apiServer = http.createServer(async (request, response) => {
       return;
     }
 
-    const participant = createParticipant({
+    const participant = findParticipantByJoinSession(meeting.id, clientSessionId) ?? createParticipant({
       displayName,
+      joinSessionId: clientSessionId,
       meetingId: meeting.id,
       role: sessionType === "user" ? "owner" : "participant",
     });
+    participant.displayName = displayName;
     participant.presence = sessionType === "user" ? "active" : "lobby";
     participant.audio = room.policy.mutedOnEntry ? "muted" : "unmuted";
     participant.video = room.policy.cameraOffOnEntry ? "off" : "on";
-    state.participants.get(meeting.id)?.push(participant);
+    if (!(state.participants.get(meeting.id) ?? []).some((entry) => entry.participantId === participant.participantId)) {
+      state.participants.get(meeting.id)?.push(participant);
+    }
 
     if (sessionType === "user") {
       meeting.status = "live";
@@ -535,6 +542,7 @@ function createParticipant(input) {
     audio: "unmuted",
     displayName: input.displayName,
     handRaised: false,
+    joinSessionId: input.joinSessionId ?? null,
     joinedAt: new Date().toISOString(),
     meetingInstanceId: input.meetingId,
     participantId: `participant_${state.nextParticipantNumber++}`,
@@ -600,6 +608,14 @@ function normalizeSlug(value) {
 
 function findParticipant(meetingId, participantId) {
   return (state.participants.get(meetingId) ?? []).find((participant) => participant.participantId === participantId) ?? null;
+}
+
+function findParticipantByJoinSession(meetingId, joinSessionId) {
+  if (!joinSessionId) {
+    return null;
+  }
+
+  return (state.participants.get(meetingId) ?? []).find((participant) => participant.joinSessionId === joinSessionId) ?? null;
 }
 
 function getCurrentSession(request) {
