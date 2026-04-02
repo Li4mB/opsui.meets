@@ -7,6 +7,7 @@ interface MeetingControlButtonProps {
   icon: ReactNode;
   label: string;
   onClick?: () => void;
+  title?: string;
   type?: "button" | "submit";
 }
 
@@ -23,6 +24,7 @@ export function MeetingControlButton(props: MeetingControlButtonProps) {
       className={className}
       disabled={props.disabled}
       onClick={props.onClick}
+      title={props.title ?? props.label}
       type={props.type ?? "button"}
     >
       <span className="meeting-control-button__icon">{props.icon}</span>

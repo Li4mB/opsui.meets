@@ -417,6 +417,12 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     joinState,
     roomChatMode: room?.policy?.chatMode ?? "open",
   });
+  const screenShareDisabledReason = getScreenShareDisabledReason({
+    canManageMeeting,
+    currentParticipant,
+    joinState,
+    roomScreenShareMode: room?.policy?.screenShareMode ?? "presenters",
+  });
 
   async function handleSendChatMessage(text: string): Promise<{ errorMessage?: string }> {
     if (!meeting?.id || !participantId || chatDisabledReason) {
@@ -546,6 +552,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
                 participantDisplayName={participantDisplayName}
                 participantId={participantId}
                 participantRole={participantRole}
+                screenShareDisabledReason={screenShareDisabledReason}
                 shouldConnect={shouldConnectMedia}
               />
             </section>
@@ -748,6 +755,35 @@ function getChatDisabledReason(input: {
 
   if (input.roomChatMode === "host_only" && !input.canManageMeeting) {
     return "Chat is limited to hosts in this room.";
+  }
+
+  return null;
+}
+
+function getScreenShareDisabledReason(input: {
+  canManageMeeting: boolean;
+  currentParticipant: ParticipantState | null;
+  joinState: JoinUiState;
+  roomScreenShareMode: "hosts_only" | "presenters" | "everyone";
+}): string | null {
+  if (!input.currentParticipant || input.joinState !== "direct") {
+    return "Join the room to share your screen.";
+  }
+
+  const role = input.currentParticipant.role;
+  const hostRoles = new Set(["owner", "host", "co_host", "moderator"]);
+  const presenterRoles = new Set([...hostRoles, "presenter"]);
+
+  if (input.roomScreenShareMode === "everyone") {
+    return null;
+  }
+
+  if (input.roomScreenShareMode === "presenters" && !input.canManageMeeting && !presenterRoles.has(role)) {
+    return "Screen sharing is limited to presenters in this room.";
+  }
+
+  if (input.roomScreenShareMode === "hosts_only" && !input.canManageMeeting && !hostRoles.has(role)) {
+    return "Screen sharing is limited to hosts in this room.";
   }
 
   return null;

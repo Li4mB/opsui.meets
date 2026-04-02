@@ -80,6 +80,20 @@ test("signed-in users can start a meeting from home and enter directly", async (
   await expect(page.getByText("You are waiting in the lobby for a host to admit you.")).toHaveCount(0);
 });
 
+test("screen share control sits beside the camera control in the bottom dock", async ({ page }) => {
+  await signInThroughUi(page, "liam@example.com");
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Start Meeting" }).click();
+
+  await expectRoomNotice(page, "You are in the meeting.");
+
+  const primaryControls = page.locator(".meeting-control-dock__cluster").first();
+  const dockLabels = await primaryControls.locator(".meeting-control-button__label").allTextContents();
+  expect(dockLabels.slice(0, 3)).toEqual(["Mic Off", "Camera Off", "Share Screen"]);
+  await expect(primaryControls.getByRole("button", { name: "Share Screen" })).toBeVisible();
+});
+
 test("chat messages show sender and time, and other users appear on the left", async ({ browser }) => {
   const hostContext = await browser.newContext();
   const guestContext = await browser.newContext();

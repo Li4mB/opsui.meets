@@ -26,6 +26,31 @@ export function ChatBubbleIcon() {
   );
 }
 
+export function ApplicationWindowIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">
+      <rect
+        height="13"
+        rx="2.6"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        width="17"
+        x="3.5"
+        y="5.5"
+      />
+      <path
+        d="M3.5 9H20.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+      <circle cx="6.8" cy="7.2" fill="currentColor" r="0.9" />
+      <circle cx="9.6" cy="7.2" fill="currentColor" r="0.9" />
+      <circle cx="12.4" cy="7.2" fill="currentColor" r="0.9" />
+    </svg>
+  );
+}
+
 export function CloseIcon() {
   return (
     <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">
@@ -59,6 +84,34 @@ export function InformationCircleIcon() {
         strokeWidth="1.8"
       />
       <circle cx="12" cy="7.6" fill="currentColor" r="1.1" />
+    </svg>
+  );
+}
+
+export function DisplayScreenIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">
+      <rect
+        height="10.5"
+        rx="2.4"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        width="15"
+        x="4.5"
+        y="4.5"
+      />
+      <path
+        d="M9.5 18.5H14.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M12 15V18.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
     </svg>
   );
 }
@@ -221,6 +274,40 @@ export function RefreshIcon() {
         stroke="currentColor"
         strokeLinecap="round"
         strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
+export function PresentScreenIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">
+      <rect
+        height="10.5"
+        rx="2.4"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        width="13.5"
+        x="3.5"
+        y="5"
+      />
+      <path
+        d="M17 9L20.5 6.8V13.2L17 11"
+        stroke="currentColor"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M9 18.5H13"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M11 15.5V18.5"
+        stroke="currentColor"
+        strokeLinecap="round"
         strokeWidth="1.8"
       />
     </svg>
