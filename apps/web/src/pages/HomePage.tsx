@@ -18,12 +18,7 @@ export function HomePage(props: HomePageProps) {
     setIsBusy(true);
     setStatusMessage(null);
 
-    const proposedCode = generateMeetingCode();
-    const room = await createRoom({
-      isPersistent: false,
-      name: proposedCode,
-      roomType: "instant",
-    });
+    const room = await createRoomWithRetry();
 
     if (!room) {
       setIsBusy(false);
@@ -45,6 +40,23 @@ export function HomePage(props: HomePageProps) {
     }
 
     props.onNavigate(`/${room.slug}`);
+  }
+
+  async function createRoomWithRetry() {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const proposedCode = generateMeetingCode();
+      const room = await createRoom({
+        isPersistent: false,
+        name: proposedCode,
+        roomType: "instant",
+      });
+
+      if (room) {
+        return room;
+      }
+    }
+
+    return null;
   }
 
   function handleJoin() {

@@ -10,7 +10,6 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createMediaSession } from "../lib/commands";
 import { MeetingControlButton } from "./MeetingControlButton";
-import { type ShareSourceIntent, MeetingScreenSharePicker } from "./MeetingScreenSharePicker";
 import {
   LeaveCallIcon,
   MicrophoneIcon,
@@ -20,6 +19,7 @@ import {
   VideoCameraIcon,
   VideoCameraOffIcon,
 } from "./MeetingRoomIcons";
+import type { ParticipantMediaIndicators } from "./MeetingParticipantsPanel";
 
 type MediaStatus = "idle" | "connecting" | "connected" | "warning" | "error";
 type MediaActionKind = "audio" | "video" | "screenshare";
@@ -58,9 +58,12 @@ interface StageScreenShare {
 interface MeetingMediaStageProps {
   activeParticipants: ParticipantState[];
   extraControls?: ReactNode;
+  immersiveSoloMode?: boolean;
   meetingActive: boolean;
   meetingId: string | null;
   onLeave?: () => void;
+  onLiveMediaStateChange?: (state: Record<string, ParticipantMediaIndicators>) => void;
+  onLiveParticipantCountChange?: (count: number | null) => void;
   participantDisplayName: string;
   participantId: string | null;
   participantRole: string;
@@ -70,15 +73,15 @@ interface MeetingMediaStageProps {
 
 const BASE_SCREEN_SHARE_CONFIGURATION: ScreenshareConfiguration = {
   frameRate: {
-    ideal: 8,
-    max: 12,
+    ideal: 60,
+    max: 60,
   },
   height: {
-    max: 2160,
+    max: 1080,
   },
   selfBrowserSurface: "exclude",
   width: {
-    max: 3840,
+    max: 1920,
   },
 };
 
@@ -228,10 +231,13 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
     <StageFallback
       activeParticipants={props.activeParticipants}
       extraControls={props.extraControls}
+      immersiveSoloMode={props.immersiveSoloMode}
       meetingActive={props.meetingActive}
       mediaMessage={mediaMessage}
       mediaStatus={mediaStatus}
       onLeave={props.onLeave}
+      onLiveMediaStateChange={props.onLiveMediaStateChange}
+      onLiveParticipantCountChange={props.onLiveParticipantCountChange}
       onRetry={
         props.shouldConnect
           ? () => {
@@ -261,12 +267,12 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
             setMediaMessage(null);
           }}
           onLeave={props.onLeave}
-          onPrepareScreenShareIntent={(intent) => {
-            applyScreenShareIntentConfiguration(mediaConfigurationRef.current, intent);
-          }}
-          onRetry={() => {
-            setRetryNonce((current) => current + 1);
-          }}
+          onLiveMediaStateChange={props.onLiveMediaStateChange}
+          onLiveParticipantCountChange={props.onLiveParticipantCountChange}
+      onRetry={() => {
+        setRetryNonce((current) => current + 1);
+      }}
+          immersiveSoloMode={props.immersiveSoloMode}
           participantDisplayName={props.participantDisplayName}
           participantId={props.participantId}
           screenShareDisabledReason={props.screenShareDisabledReason ?? null}
@@ -279,12 +285,14 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
 function ConnectedMediaStage(props: {
   activeParticipants: ParticipantState[];
   extraControls?: ReactNode;
+  immersiveSoloMode?: boolean;
   mediaMessage: string | null;
   mediaStatus: MediaStatus;
   onMediaActionError(kind: MediaActionKind, error: unknown): void;
   onMediaActionSuccess(): void;
   onLeave?: () => void;
-  onPrepareScreenShareIntent(intent: ShareSourceIntent): void;
+  onLiveMediaStateChange?: (state: Record<string, ParticipantMediaIndicators>) => void;
+  onLiveParticipantCountChange?: (count: number | null) => void;
   onRetry(): void;
   participantDisplayName: string;
   participantId: string | null;
@@ -295,17 +303,16 @@ function ConnectedMediaStage(props: {
   const remoteParticipants = useRealtimeKitSelector((currentMeeting) =>
     currentMeeting.participants.active.toArray(),
   );
-  const [isSharePickerOpen, setIsSharePickerOpen] = useState(false);
   const [isShareActionPending, setIsShareActionPending] = useState(false);
-  const [pendingShareIntent, setPendingShareIntent] = useState<ShareSourceIntent | null>(null);
   const [selfShareSource, setSelfShareSource] = useState<ScreenShareSourceMeta | null>(null);
   const participantDirectory = useMemo(
     () => new Map(props.activeParticipants.map((participant) => [participant.participantId, participant])),
     [props.activeParticipants],
   );
-  const visibleRemoteParticipants = remoteParticipants
-    .filter((participant) => participant.id !== self.id && participant.customParticipantId !== self.customParticipantId)
-    .slice(0, 3);
+  const otherRemoteParticipants = remoteParticipants.filter(
+    (participant) => participant.id !== self.id && participant.customParticipantId !== self.customParticipantId,
+  );
+  const visibleRemoteParticipants = otherRemoteParticipants.slice(0, 3);
   const shareSupported = useMemo(
     () => typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getDisplayMedia),
     [],
@@ -328,23 +335,52 @@ function ConnectedMediaStage(props: {
   );
   const primaryScreenShare = stageScreenShares[0] ?? null;
   const additionalShareCount = Math.max(stageScreenShares.length - 1, 0);
+  const liveParticipantCount = roomJoined ? 1 + otherRemoteParticipants.length : null;
+  const showImmersiveSoloStage = Boolean(
+    props.immersiveSoloMode &&
+      roomJoined &&
+      !primaryScreenShare &&
+      otherRemoteParticipants.length === 0,
+  );
+  const liveMediaStateByParticipantId = useMemo(() => {
+    const nextState: Record<string, ParticipantMediaIndicators> = {};
 
-  useEffect(() => {
-    if (!isSharePickerOpen) {
-      return;
+    if (props.participantId) {
+      nextState[props.participantId] = {
+        audioEnabled: self.audioEnabled,
+        screenShareEnabled: Boolean(self.screenShareEnabled),
+        videoEnabled: self.videoEnabled,
+      };
     }
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !isShareActionPending) {
-        setIsSharePickerOpen(false);
+    for (const participant of otherRemoteParticipants) {
+      if (!participant.customParticipantId) {
+        continue;
       }
-    };
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isShareActionPending, isSharePickerOpen]);
+      nextState[participant.customParticipantId] = {
+        audioEnabled: participant.audioEnabled,
+        screenShareEnabled: Boolean(participant.screenShareEnabled),
+        videoEnabled: participant.videoEnabled,
+      };
+    }
+
+    return nextState;
+  }, [
+    otherRemoteParticipants,
+    props.participantId,
+    self.audioEnabled,
+    self.screenShareEnabled,
+    self.videoEnabled,
+  ]);
+
+  useEffect(() => {
+    props.onLiveParticipantCountChange?.(liveParticipantCount);
+  }, [liveParticipantCount, props.onLiveParticipantCountChange]);
+
+  useEffect(() => {
+    props.onLiveMediaStateChange?.(liveMediaStateByParticipantId);
+  }, [liveMediaStateByParticipantId, props.onLiveMediaStateChange]);
 
   useEffect(() => {
     if (!self.screenShareEnabled || !selfScreenShareVideoTrack) {
@@ -355,24 +391,17 @@ function ConnectedMediaStage(props: {
     setSelfShareSource(describeScreenShareSource(
       selfScreenShareVideoTrack,
       selfScreenShareAudioTrack,
-      pendingShareIntent,
     ));
-  }, [pendingShareIntent, self.screenShareEnabled, selfScreenShareAudioTrack, selfScreenShareVideoTrack]);
+  }, [self.screenShareEnabled, selfScreenShareAudioTrack, selfScreenShareVideoTrack]);
 
   useEffect(() => {
     if (!self.screenShareEnabled || !selfScreenShareVideoTrack) {
       setIsShareActionPending(false);
-      setIsSharePickerOpen(false);
-      if (!self.screenShareEnabled) {
-        setPendingShareIntent(null);
-      }
       return;
     }
 
     const handleEnded = () => {
       setIsShareActionPending(false);
-      setIsSharePickerOpen(false);
-      setPendingShareIntent(null);
       setSelfShareSource(null);
     };
 
@@ -382,15 +411,11 @@ function ConnectedMediaStage(props: {
     };
   }, [self.screenShareEnabled, selfScreenShareVideoTrack]);
 
-  async function handleStartScreenShare(intent: ShareSourceIntent) {
+  async function handleStartScreenShare() {
     if (!shareSupported || shareDisabledReason || !self || isShareActionPending) {
       return;
     }
 
-    // Browsers keep the real source list inside the native picker. We only
-    // store the user's intent here so the browser can present the closest source set.
-    props.onPrepareScreenShareIntent(intent);
-    setPendingShareIntent(intent);
     setIsShareActionPending(true);
 
     try {
@@ -399,15 +424,19 @@ function ConnectedMediaStage(props: {
 
       if (!started) {
         setIsShareActionPending(false);
-        setIsSharePickerOpen(false);
-        setPendingShareIntent(null);
         return;
       }
 
+      await applyActiveScreenShareConstraints(self);
       setIsShareActionPending(false);
-      setIsSharePickerOpen(false);
       props.onMediaActionSuccess();
     } catch (error) {
+      if (isScreenShareSelectionCancelled(error)) {
+        setIsShareActionPending(false);
+        setSelfShareSource(null);
+        return;
+      }
+
       setIsShareActionPending(false);
       props.onMediaActionError("screenshare", error);
     }
@@ -422,8 +451,6 @@ function ConnectedMediaStage(props: {
 
     try {
       await self.disableScreenShare();
-      setIsSharePickerOpen(false);
-      setPendingShareIntent(null);
       setSelfShareSource(null);
       props.onMediaActionSuccess();
     } catch (error) {
@@ -443,14 +470,17 @@ function ConnectedMediaStage(props: {
       return;
     }
 
-    setIsSharePickerOpen((current) => !current);
+    void handleStartScreenShare();
   }
 
   const stageTiles = (
-    <div className={`stage-tiles${primaryScreenShare ? " stage-tiles--supporting" : ""}`}>
+    <div
+      className={`stage-tiles${primaryScreenShare ? " stage-tiles--supporting" : ""}${showImmersiveSoloStage ? " stage-tiles--solo" : ""}`}
+    >
       <MediaTile
         audioEnabled={self.audioEnabled}
         displayName={props.participantDisplayName}
+        immersive={showImmersiveSoloStage}
         isSelf
         shareBadgeLabel={self.screenShareEnabled && selfShareSource ? getShareBadgeLabel(selfShareSource) : null}
         subtitle={buildTileSubtitle(self.audioEnabled, self.videoEnabled, true)}
@@ -477,35 +507,13 @@ function ConnectedMediaStage(props: {
           />
         );
       })}
-
-      {!visibleRemoteParticipants.length ? (
-        <article className="participant-tile participant-tile--empty">
-          <div className="participant-tile__avatar participant-tile__avatar--ghost">O</div>
-          <div className="participant-tile__meta">
-            <strong>Waiting for more people</strong>
-            <span>Live participants will appear here as soon as they connect media.</span>
-          </div>
-        </article>
-      ) : null}
     </div>
   );
 
   return (
-    <div className={`meeting-stage-runtime${primaryScreenShare ? " meeting-stage-runtime--sharing" : ""}`}>
-      <MeetingScreenSharePicker
-        busy={isShareActionPending}
-        disabledReason={shareDisabledReason}
-        onChooseIntent={(intent) => {
-          void handleStartScreenShare(intent);
-        }}
-        onClose={() => {
-          if (!isShareActionPending) {
-            setIsSharePickerOpen(false);
-          }
-        }}
-        open={isSharePickerOpen}
-      />
-
+    <div
+      className={`meeting-stage-runtime${primaryScreenShare ? " meeting-stage-runtime--sharing" : ""}${showImmersiveSoloStage ? " meeting-stage-runtime--solo" : ""}`}
+    >
       {!roomJoined ? (
         <div className="meeting-stage-canvas">
           <div className="stage-tiles">
@@ -519,7 +527,9 @@ function ConnectedMediaStage(props: {
           </div>
         </div>
       ) : (
-        <div className={`meeting-stage-canvas${primaryScreenShare ? " meeting-stage-canvas--sharing" : ""}`}>
+        <div
+          className={`meeting-stage-canvas${primaryScreenShare ? " meeting-stage-canvas--sharing" : ""}${showImmersiveSoloStage ? " meeting-stage-canvas--solo" : ""}`}
+        >
           {primaryScreenShare ? (
             <ScreenShareTile
               audioTrack={primaryScreenShare.audioTrack}
@@ -658,6 +668,7 @@ function MediaTile(props: {
   audioEnabled: boolean;
   audioTrack?: MediaStreamTrack | null;
   displayName: string;
+  immersive?: boolean;
   isSelf?: boolean;
   shareBadgeLabel?: string | null;
   subtitle: string;
@@ -697,7 +708,9 @@ function MediaTile(props: {
   }, [props.audioEnabled, props.audioTrack, props.isSelf]);
 
   return (
-    <article className={`participant-tile participant-tile--media${props.videoEnabled ? "" : " participant-tile--muted"}`}>
+    <article
+      className={`participant-tile participant-tile--media${props.videoEnabled ? "" : " participant-tile--muted"}${props.immersive ? " participant-tile--immersive" : ""}`}
+    >
       <div className="participant-tile__media-shell">
         <video
           autoPlay
@@ -712,16 +725,16 @@ function MediaTile(props: {
             <div className="participant-tile__avatar">{getInitials(props.displayName)}</div>
           </div>
         ) : null}
-        <div className="participant-tile__overlay">
+        <div className={`participant-tile__overlay${props.immersive ? " participant-tile__overlay--immersive" : ""}`}>
           <div className="participant-tile__nameplate">
             <strong>{props.displayName}</strong>
             <span>{props.subtitle}</span>
           </div>
-          <div className="participant-tile__badges">
+          <div className={`participant-tile__badges${props.immersive ? " participant-tile__badges--immersive" : ""}`}>
             {props.shareBadgeLabel ? <span className="status-pill status-pill--accent">{props.shareBadgeLabel}</span> : null}
-            {props.isSelf ? <span className="status-pill">You</span> : null}
-            <span className="status-pill">{props.audioEnabled ? "Mic On" : "Mic Off"}</span>
-            <span className="status-pill">{props.videoEnabled ? "Camera On" : "Camera Off"}</span>
+            {!props.immersive && props.isSelf ? <span className="status-pill">You</span> : null}
+            {!props.immersive ? <span className="status-pill">{props.audioEnabled ? "Mic On" : "Mic Off"}</span> : null}
+            {!props.immersive ? <span className="status-pill">{props.videoEnabled ? "Camera On" : "Camera Off"}</span> : null}
           </div>
         </div>
       </div>
@@ -792,22 +805,48 @@ function ScreenShareTile(props: {
 function StageFallback(props: {
   activeParticipants: ParticipantState[];
   extraControls?: ReactNode;
+  immersiveSoloMode?: boolean;
   meetingActive: boolean;
   mediaMessage: string | null;
   mediaStatus: MediaStatus;
   onLeave?: () => void;
+  onLiveMediaStateChange?: (state: Record<string, ParticipantMediaIndicators>) => void;
+  onLiveParticipantCountChange?: (count: number | null) => void;
   onRetry: (() => void) | null;
   screenShareDisabledReason: string | null;
 }) {
   const visibleParticipants = props.activeParticipants.slice(0, 4);
+  const showImmersiveSoloStage = Boolean(props.immersiveSoloMode && visibleParticipants.length === 1);
+
+  useEffect(() => {
+    props.onLiveParticipantCountChange?.(props.meetingActive ? visibleParticipants.length : null);
+  }, [props.meetingActive, props.onLiveParticipantCountChange, visibleParticipants.length]);
+
+  useEffect(() => {
+    const nextState = Object.fromEntries(
+      props.activeParticipants.map((participant) => [
+        participant.participantId,
+        {
+          audioEnabled: participant.audio === "unmuted",
+          screenShareEnabled: false,
+          videoEnabled: participant.video === "on",
+        } satisfies ParticipantMediaIndicators,
+      ]),
+    );
+
+    props.onLiveMediaStateChange?.(nextState);
+  }, [props.activeParticipants, props.onLiveMediaStateChange]);
 
   return (
-    <div className="meeting-stage-runtime">
+    <div className={`meeting-stage-runtime${showImmersiveSoloStage ? " meeting-stage-runtime--solo" : ""}`}>
       <div className="meeting-stage-canvas">
-        <div className="stage-tiles">
+        <div className={`stage-tiles${showImmersiveSoloStage ? " stage-tiles--solo" : ""}`}>
           {visibleParticipants.length > 0 ? (
             visibleParticipants.map((participant) => (
-              <article className="participant-tile" key={participant.participantId}>
+              <article
+                className={`participant-tile${showImmersiveSoloStage ? " participant-tile--fallback-summary-solo" : ""}`}
+                key={participant.participantId}
+              >
                 <div className="participant-tile__avatar">
                   {getInitials(participant.displayName)}
                 </div>
@@ -888,17 +927,6 @@ function buildStageScreenShares(input: {
   }
 
   return stageShares;
-}
-
-function applyScreenShareIntentConfiguration(
-  mediaConfiguration: { screenshare: ScreenshareConfiguration },
-  intent: ShareSourceIntent,
-) {
-  mediaConfiguration.screenshare = {
-    ...BASE_SCREEN_SHARE_CONFIGURATION,
-    displaySurface: intent === "application" ? "window" : "monitor",
-    selfBrowserSurface: "exclude",
-  };
 }
 
 function resolveParticipantName(
@@ -1010,6 +1038,11 @@ function isExpectedLocalMediaIssue(error: unknown): boolean {
   );
 }
 
+function isScreenShareSelectionCancelled(error: unknown): boolean {
+  const message = normaliseMediaErrorMessage(error);
+  return Boolean(message && /(aborterror|notallowederror|canceled|cancelled|denied)/i.test(message));
+}
+
 function normaliseMediaErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message.trim();
@@ -1047,6 +1080,24 @@ async function waitForScreenShareEnabled(self: RTKSelf, timeoutMs = 900): Promis
   return self.screenShareEnabled && Boolean(getScreenShareVideoTrack(self));
 }
 
+async function applyActiveScreenShareConstraints(self: RTKSelf): Promise<void> {
+  try {
+    await self.updateScreenshareConstraints({
+      frameRate: {
+        ideal: BASE_SCREEN_SHARE_CONFIGURATION.frameRate.ideal,
+      },
+      height: {
+        ideal: BASE_SCREEN_SHARE_CONFIGURATION.height.max,
+      },
+      width: {
+        ideal: BASE_SCREEN_SHARE_CONFIGURATION.width.max,
+      },
+    });
+  } catch {
+    // Browsers may ignore or partially support runtime constraint updates.
+  }
+}
+
 async function waitFor(delayMs: number): Promise<void> {
   await new Promise<void>((resolve) => {
     window.setTimeout(resolve, delayMs);
@@ -1068,10 +1119,9 @@ function getScreenShareAudioTrack(
 function describeScreenShareSource(
   videoTrack: MediaStreamTrack,
   audioTrack?: MediaStreamTrack | null,
-  intentHint?: ShareSourceIntent | null,
 ): ScreenShareSourceMeta {
   const settings = typeof videoTrack.getSettings === "function" ? videoTrack.getSettings() : {};
-  const surface = normaliseDisplaySurface(settings.displaySurface, intentHint);
+  const surface = normaliseDisplaySurface(settings.displaySurface);
   const defaultLabel = getDefaultShareLabel(surface);
   const nextLabel = videoTrack.label?.trim() || defaultLabel;
 
@@ -1085,7 +1135,6 @@ function describeScreenShareSource(
 
 function normaliseDisplaySurface(
   displaySurface: string | undefined,
-  intentHint?: ShareSourceIntent | null,
 ): ScreenShareSurface {
   if (displaySurface === "window") {
     return "application";
@@ -1097,14 +1146,6 @@ function normaliseDisplaySurface(
 
   if (displaySurface === "browser") {
     return "browser";
-  }
-
-  if (intentHint === "application") {
-    return "application";
-  }
-
-  if (intentHint === "screen") {
-    return "screen";
   }
 
   return "unknown";

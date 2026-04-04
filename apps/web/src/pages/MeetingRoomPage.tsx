@@ -10,7 +10,11 @@ import { MeetingConversationPanel } from "../components/MeetingConversationPanel
 import { MeetingControlButton } from "../components/MeetingControlButton";
 import { MeetingInfoPanel } from "../components/MeetingInfoPanel";
 import { MeetingMediaStage } from "../components/MeetingMediaStage";
-import { ChatBubbleIcon, InformationCircleIcon } from "../components/MeetingRoomIcons";
+import {
+  type ParticipantMediaIndicators,
+  MeetingParticipantsPanel,
+} from "../components/MeetingParticipantsPanel";
+import { ChatBubbleIcon, InformationCircleIcon, ParticipantsIcon } from "../components/MeetingRoomIcons";
 import { Modal } from "../components/Modal";
 import { getSessionDisplayName, startLogin } from "../lib/auth";
 import {
@@ -47,7 +51,8 @@ type LoadState =
   | { data: MeetingRoomData; status: "ready" };
 
 type JoinUiState = "idle" | "joining" | "direct" | "lobby" | "blocked" | "error";
-type ActiveDrawer = "chat" | "info" | null;
+type ActiveDrawer = "chat" | "info" | "participants" | null;
+const DRAWER_SWITCH_DELAY_MS = 220;
 
 export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
@@ -60,12 +65,25 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const [serviceMessage, setServiceMessage] = useState<string | null>(null);
   const [isActionBusy, setIsActionBusy] = useState(false);
   const [participantId, setParticipantId] = useState<string | null>(null);
+  const [liveStageParticipantCount, setLiveStageParticipantCount] = useState<number | null>(null);
+  const [liveMediaByParticipantId, setLiveMediaByParticipantId] = useState<Record<string, ParticipantMediaIndicators>>(
+    {},
+  );
   const autoJoinKeyRef = useRef<string | null>(null);
+  const drawerSwitchTimeoutRef = useRef<number | null>(null);
   const sessionRef = useRef(props.session);
 
   useEffect(() => {
     sessionRef.current = props.session;
   }, [props.session]);
+
+  useEffect(() => {
+    return () => {
+      if (drawerSwitchTimeoutRef.current) {
+        window.clearTimeout(drawerSwitchTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const refreshRoom = useEffectEvent(async () => {
     try {
@@ -109,6 +127,8 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     setActionMessage(null);
     setServiceMessage(null);
     setParticipantId(null);
+    setLiveStageParticipantCount(null);
+    setLiveMediaByParticipantId({});
     setGuestModalOpen(false);
     setLoadState({ status: "loading" });
 
@@ -320,10 +340,33 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   }
 
   function toggleDrawer(nextDrawer: Exclude<ActiveDrawer, null>) {
-    setActiveDrawer((current) => current === nextDrawer ? null : nextDrawer);
+    if (drawerSwitchTimeoutRef.current) {
+      window.clearTimeout(drawerSwitchTimeoutRef.current);
+      drawerSwitchTimeoutRef.current = null;
+    }
+
+    if (activeDrawer === nextDrawer) {
+      setActiveDrawer(null);
+      return;
+    }
+
+    if (activeDrawer && activeDrawer !== nextDrawer) {
+      setActiveDrawer(null);
+      drawerSwitchTimeoutRef.current = window.setTimeout(() => {
+        setActiveDrawer(nextDrawer);
+        drawerSwitchTimeoutRef.current = null;
+      }, DRAWER_SWITCH_DELAY_MS);
+      return;
+    }
+
+    setActiveDrawer(nextDrawer);
   }
 
   function closeDrawers() {
+    if (drawerSwitchTimeoutRef.current) {
+      window.clearTimeout(drawerSwitchTimeoutRef.current);
+      drawerSwitchTimeoutRef.current = null;
+    }
     setActiveDrawer(null);
   }
 
@@ -460,12 +503,26 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const identityLabel = props.session?.authenticated ? getSessionDisplayName(props.session) : participantDisplayName;
   const isChatOpen = activeDrawer === "chat";
   const isInfoOpen = activeDrawer === "info";
+  const isParticipantsOpen = activeDrawer === "participants";
+  const effectiveStageParticipantCount = liveStageParticipantCount ?? activeParticipants.length;
+  const immersiveSoloMode = joinState === "direct" && effectiveStageParticipantCount === 1;
   const stageBadges = [
     formatMeetingCodeLabel(props.meetingCode),
     meeting?.status ?? "waiting",
     joinState === "idle" ? "not joined" : joinState,
     recording?.status === "recording" ? "recording" : null,
   ].filter((value): value is string => Boolean(value));
+  const visibleStageMessages = [
+    serviceMessage
+      ? { kind: "warning" as const, text: serviceMessage }
+      : null,
+    !immersiveSoloMode && joinMessage
+      ? { kind: "default" as const, text: joinMessage }
+      : null,
+    !immersiveSoloMode && actionMessage
+      ? { kind: "default" as const, text: actionMessage }
+      : null,
+  ].filter((value): value is { kind: "default" | "warning"; text: string } => Boolean(value));
 
   return (
     <>
@@ -475,6 +532,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
             "meeting-room-shell",
             isChatOpen ? " meeting-room-shell--chat-open" : "",
             isInfoOpen ? " meeting-room-shell--info-open" : "",
+            isParticipantsOpen ? " meeting-room-shell--participants-open" : "",
           ].join("")}
         >
           <button
@@ -497,32 +555,80 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
             />
           </aside>
 
+          <aside
+            aria-hidden={!isParticipantsOpen}
+            className={`meeting-room-drawer meeting-room-drawer--participants${isParticipantsOpen ? " is-open" : ""}`}
+          >
+            <MeetingParticipantsPanel
+              activeParticipants={activeParticipants}
+              canManageMeeting={canManageMeeting}
+              currentParticipantId={participantId}
+              lobbyParticipants={lobbyParticipants}
+              mediaByParticipantId={liveMediaByParticipantId}
+              onAdmitParticipant={(nextParticipantId) => {
+                if (!meeting) {
+                  return;
+                }
+
+                void runAction(
+                  () => admitParticipant(meeting.id, nextParticipantId),
+                  "Participant admitted.",
+                  "Admit failed.",
+                );
+              }}
+              onClose={closeDrawers}
+              onRemoveParticipant={(nextParticipantId) => {
+                if (!meeting) {
+                  return;
+                }
+
+                void runAction(
+                  () => removeParticipant(meeting.id, nextParticipantId),
+                  "Participant removed.",
+                  "Remove failed.",
+                );
+              }}
+            />
+          </aside>
+
           <div className="meeting-room-stage-layout">
-            <section className="meeting-room-stage-surface">
-              <div className="meeting-room-stage-surface__header">
-                <div className="meeting-room-stage-surface__title-group">
-                  <div className="meeting-room-stage-surface__badges">
-                    {stageBadges.map((badge, index) => (
-                      <span className="meeting-room-stage-surface__badge" key={`${badge}-${index}`}>
-                        {badge}
-                      </span>
-                    ))}
+            <section
+              className={`meeting-room-stage-surface${immersiveSoloMode ? " meeting-room-stage-surface--immersive" : ""}`}
+            >
+              <div
+                aria-hidden={immersiveSoloMode}
+                className={`meeting-room-stage-surface__chrome${immersiveSoloMode ? " meeting-room-stage-surface__chrome--hidden" : ""}`}
+              >
+                <div className="meeting-room-stage-surface__header">
+                  <div className="meeting-room-stage-surface__title-group">
+                    <div className="meeting-room-stage-surface__badges">
+                      {stageBadges.map((badge, index) => (
+                        <span className="meeting-room-stage-surface__badge" key={`${badge}-${index}`}>
+                          {badge}
+                        </span>
+                      ))}
+                    </div>
+                    <h1 className="meeting-room-stage-surface__title">
+                      {meeting?.title ?? room?.name ?? `Meeting ${formatMeetingCodeLabel(props.meetingCode)}`}
+                    </h1>
                   </div>
-                  <h1 className="meeting-room-stage-surface__title">
-                    {meeting?.title ?? room?.name ?? `Meeting ${formatMeetingCodeLabel(props.meetingCode)}`}
-                  </h1>
                 </div>
               </div>
 
-              <div className="meeting-room-stage-surface__notices">
-                {serviceMessage ? (
-                  <p className="meeting-room-stage-surface__notice meeting-room-stage-surface__notice--warning">
-                    {serviceMessage}
-                  </p>
-                ) : null}
-                {joinMessage ? <p className="meeting-room-stage-surface__notice">{joinMessage}</p> : null}
-                {actionMessage ? <p className="meeting-room-stage-surface__notice">{actionMessage}</p> : null}
-              </div>
+              {visibleStageMessages.length ? (
+                <div
+                  className={`meeting-room-stage-surface__notices${immersiveSoloMode ? " meeting-room-stage-surface__notices--immersive" : ""}`}
+                >
+                  {visibleStageMessages.map((message) => (
+                    <p
+                      className={`meeting-room-stage-surface__notice${message.kind === "warning" ? " meeting-room-stage-surface__notice--warning" : ""}`}
+                      key={`${message.kind}:${message.text}`}
+                    >
+                      {message.text}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
 
               <MeetingMediaStage
                 activeParticipants={activeParticipants}
@@ -537,6 +643,14 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
                       }}
                     />
                     <MeetingControlButton
+                      active={isParticipantsOpen}
+                      icon={<ParticipantsIcon />}
+                      label="Participants"
+                      onClick={() => {
+                        toggleDrawer("participants");
+                      }}
+                    />
+                    <MeetingControlButton
                       active={isInfoOpen}
                       icon={<InformationCircleIcon />}
                       label="Info"
@@ -548,7 +662,10 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
                 }
                 meetingActive={Boolean(meeting)}
                 meetingId={meeting?.id ?? null}
+                immersiveSoloMode={immersiveSoloMode}
                 onLeave={leaveRoom}
+                onLiveMediaStateChange={setLiveMediaByParticipantId}
+                onLiveParticipantCountChange={setLiveStageParticipantCount}
                 participantDisplayName={participantDisplayName}
                 participantId={participantId}
                 participantRole={participantRole}

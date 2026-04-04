@@ -88,6 +88,29 @@ export function InformationCircleIcon() {
   );
 }
 
+export function ParticipantsIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">
+      <circle cx="9" cy="9" r="2.6" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="16.4" cy="10.6" r="2.1" stroke="currentColor" strokeWidth="1.8" />
+      <path
+        d="M4.8 18.6C5.4 15.9 7.5 14.4 10 14.4C12.5 14.4 14.6 15.9 15.2 18.6"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M14.4 18.2C14.8 16.5 16.1 15.4 17.7 15.4C19 15.4 20.2 16.2 20.7 17.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
 export function DisplayScreenIcon() {
   return (
     <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">

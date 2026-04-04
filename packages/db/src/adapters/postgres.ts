@@ -197,34 +197,28 @@ async function saveRuntimeState(
   store: MemoryStore,
   version: number,
 ): Promise<number> {
-  const updated = await sql<PersistedRuntimeStateRow[]>`
-    update opsui_runtime_state
-    set state = ${JSON.stringify(store)}::jsonb,
-        version = version + 1,
-        updated_at = now()
-    where scope = ${scope} and version = ${version}
-    returning version, state
-  `;
+  const serializedStore = JSON.stringify(store);
+  let currentVersion = version;
 
-  if (updated[0]) {
-    return Number(updated[0].version);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const updated = await sql<PersistedRuntimeStateRow[]>`
+      update opsui_runtime_state
+      set state = ${serializedStore}::jsonb,
+          version = version + 1,
+          updated_at = now()
+      where scope = ${scope} and version = ${currentVersion}
+      returning version, state
+    `;
+
+    if (updated[0]) {
+      return Number(updated[0].version);
+    }
+
+    const reloaded = await loadRuntimeState(sql, scope);
+    currentVersion = reloaded.version;
   }
 
-  const reloaded = await loadRuntimeState(sql, scope);
-  const inserted = await sql<PersistedRuntimeStateRow[]>`
-    update opsui_runtime_state
-    set state = ${JSON.stringify(store)}::jsonb,
-        version = version + 1,
-        updated_at = now()
-    where scope = ${scope} and version = ${reloaded.version}
-    returning version, state
-  `;
-
-  if (!inserted[0]) {
-    throw new Error("Postgres runtime state commit conflict.");
-  }
-
-  return Number(inserted[0].version);
+  throw new Error("Postgres runtime state commit conflict.");
 }
 
 function normalizeStore(raw: MemoryStore | string): MemoryStore {
