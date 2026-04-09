@@ -32,6 +32,7 @@ import {
   unlockMeeting,
 } from "../lib/commands";
 import { REALTIME_BASE_URL } from "../lib/config";
+import { rotateJoinSessionId } from "../lib/join-session";
 import { formatMeetingCodeLabel } from "../lib/meeting-code";
 import { getMeetingShareUrl, loadMeetingRoomData, type MeetingRoomData } from "../lib/meetings";
 
@@ -69,8 +70,12 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const [liveMediaByParticipantId, setLiveMediaByParticipantId] = useState<Record<string, ParticipantMediaIndicators>>(
     {},
   );
+  const activeMeetingSessionRef = useRef<{ meetingId: string; participantId: string } | null>(null);
   const autoJoinKeyRef = useRef<string | null>(null);
   const drawerSwitchTimeoutRef = useRef<number | null>(null);
+  const lastLeaveRequestKeyRef = useRef<string | null>(null);
+  const meetingCodeRef = useRef(props.meetingCode);
+  const meetingScopeRef = useRef(0);
   const sessionRef = useRef(props.session);
 
   useEffect(() => {
@@ -85,9 +90,36 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     };
   }, []);
 
-  const refreshRoom = useEffectEvent(async () => {
+  function isActiveMeetingScope(scopeId: number): boolean {
+    return meetingScopeRef.current === scopeId;
+  }
+
+  const leaveActiveMeetingSession = useEffectEvent((options?: { rotateJoinSession?: boolean }) => {
+    const activeSession = activeMeetingSessionRef.current;
+    if (!activeSession) {
+      return;
+    }
+
+    const sessionKey = `${activeSession.meetingId}:${activeSession.participantId}`;
+    if (lastLeaveRequestKeyRef.current === sessionKey) {
+      return;
+    }
+
+    if (options?.rotateJoinSession) {
+      rotateJoinSessionId();
+    }
+
+    lastLeaveRequestKeyRef.current = sessionKey;
+    leaveMeetingParticipantInBackground(activeSession.meetingId, activeSession.participantId, sessionRef.current);
+  });
+
+  const refreshRoom = useEffectEvent(async (scopeId = meetingScopeRef.current) => {
     try {
       const nextData = await loadMeetingRoomData(props.meetingCode);
+      if (!isActiveMeetingScope(scopeId)) {
+        return;
+      }
+
       if (!nextData) {
         setLoadState((current) => {
           if (current.status === "ready") {
@@ -105,6 +137,10 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
         status: "ready",
       });
     } catch {
+      if (!isActiveMeetingScope(scopeId)) {
+        return;
+      }
+
       setLoadState((current) => {
         if (current.status === "ready") {
           return current;
@@ -120,6 +156,14 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   });
 
   useEffect(() => {
+    const previousMeetingCode = meetingCodeRef.current;
+    meetingCodeRef.current = props.meetingCode;
+    if (previousMeetingCode !== props.meetingCode) {
+      leaveActiveMeetingSession({ rotateJoinSession: true });
+    }
+
+    meetingScopeRef.current += 1;
+    const scopeId = meetingScopeRef.current;
     autoJoinKeyRef.current = null;
     setJoinState("idle");
     setActiveDrawer(null);
@@ -132,7 +176,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     setGuestModalOpen(false);
     setLoadState({ status: "loading" });
 
-    void refreshRoom();
+    void refreshRoom(scopeId);
   }, [props.meetingCode]);
 
   const meeting = loadState.status === "ready" ? loadState.data.meeting : null;
@@ -145,20 +189,34 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     : null;
 
   useEffect(() => {
-    if (joinState !== "lobby" || !participantId || !currentParticipant) {
+    if (!participantId || !currentParticipant) {
       return;
     }
 
-    if (currentParticipant.presence === "active") {
+    if (currentParticipant.presence === "left") {
+      setParticipantId(null);
+      setJoinState("idle");
+      setJoinMessage("You are no longer in this meeting.");
+      return;
+    }
+
+    if (joinState === "lobby" && currentParticipant.presence === "active") {
       setJoinState("direct");
       setJoinMessage("You were admitted to the room.");
     }
-
-    if (currentParticipant.presence === "left") {
-      setJoinState("blocked");
-      setJoinMessage("You were removed from the meeting.");
-    }
   }, [currentParticipant, joinState, participantId]);
+
+  useEffect(() => {
+    if (!meeting?.id || !participantId) {
+      activeMeetingSessionRef.current = null;
+      return;
+    }
+
+    activeMeetingSessionRef.current = {
+      meetingId: meeting.id,
+      participantId,
+    };
+  }, [meeting?.id, participantId]);
 
   useEffect(() => {
     if (props.isAuthLoading || loadState.status !== "ready" || !loadState.data.meeting || !props.session) {
@@ -234,19 +292,8 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   }, [meeting?.id]);
 
   useEffect(() => {
-    if (!meeting?.id || !participantId) {
-      return;
-    }
-
-    let leaveSent = false;
-
     const notifyLeave = () => {
-      if (leaveSent) {
-        return;
-      }
-
-      leaveSent = true;
-      leaveMeetingParticipantInBackground(meeting.id, participantId, sessionRef.current);
+      leaveActiveMeetingSession();
     };
 
     window.addEventListener("pagehide", notifyLeave);
@@ -255,22 +302,29 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       window.removeEventListener("pagehide", notifyLeave);
       notifyLeave();
     };
-  }, [meeting?.id, participantId]);
+  }, []);
 
   async function submitJoin(displayName: string, sessionType: string) {
     if (loadState.status !== "ready" || !loadState.data.meeting) {
       return;
     }
 
+    const scopeId = meetingScopeRef.current;
+    const meetingId = loadState.data.meeting.id;
+    const roomId = loadState.data.room.id;
+
     setJoinState("joining");
     setJoinMessage(null);
 
     const result = await joinMeeting(
-      loadState.data.meeting.id,
-      loadState.data.room.id,
+      meetingId,
+      roomId,
       displayName,
       sessionType,
     );
+    if (!isActiveMeetingScope(scopeId)) {
+      return;
+    }
 
     if (!result) {
       setJoinState("error");
@@ -282,7 +336,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     setGuestModalOpen(false);
     setJoinState(result.joinState);
     setJoinMessage(getJoinMessage(result.joinState, result.reason));
-    await refreshRoom();
+    await refreshRoom(scopeId);
   }
 
   async function runAction(
@@ -290,17 +344,26 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     successMessage: string,
     failureMessage: string,
   ) {
+    const scopeId = meetingScopeRef.current;
     setIsActionBusy(true);
     setActionMessage(null);
 
     const ok = await action();
+    if (!isActiveMeetingScope(scopeId)) {
+      return;
+    }
+
     if (!ok) {
       setIsActionBusy(false);
       setActionMessage(failureMessage);
       return;
     }
 
-    await refreshRoom();
+    await refreshRoom(scopeId);
+    if (!isActiveMeetingScope(scopeId)) {
+      return;
+    }
+
     setIsActionBusy(false);
     setActionMessage(successMessage);
   }
@@ -319,6 +382,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       return;
     }
 
+    const scopeId = meetingScopeRef.current;
     setIsActionBusy(true);
     setActionMessage(null);
 
@@ -327,6 +391,9 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       startsAt: new Date().toISOString(),
       title: `Meeting ${formatMeetingCodeLabel(props.meetingCode)}`,
     });
+    if (!isActiveMeetingScope(scopeId)) {
+      return;
+    }
 
     if (!nextMeeting) {
       setIsActionBusy(false);
@@ -334,7 +401,11 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       return;
     }
 
-    await refreshRoom();
+    await refreshRoom(scopeId);
+    if (!isActiveMeetingScope(scopeId)) {
+      return;
+    }
+
     setIsActionBusy(false);
     setActionMessage("Meeting started.");
   }
@@ -371,10 +442,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   }
 
   function leaveRoom() {
-    if (meeting?.id && participantId) {
-      leaveMeetingParticipantInBackground(meeting.id, participantId, sessionRef.current);
-    }
-
+    leaveActiveMeetingSession({ rotateJoinSession: true });
     props.onNavigate("/");
   }
 

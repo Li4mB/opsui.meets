@@ -29,6 +29,21 @@ export function getJoinSessionId(): string {
   }
 }
 
+export function rotateJoinSessionId(): string {
+  const nextValue = createJoinSessionId();
+  cachedJoinSessionId = nextValue;
+
+  if (typeof window === "undefined") {
+    return cachedJoinSessionId;
+  }
+
+  try {
+    window.sessionStorage.setItem(JOIN_SESSION_STORAGE_KEY, nextValue);
+  } catch {}
+
+  return cachedJoinSessionId;
+}
+
 function createJoinSessionId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
