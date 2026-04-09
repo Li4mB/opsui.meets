@@ -17,6 +17,9 @@ export async function startRecording(
   const actor = getActorContext(request);
   const repositories = await getRepositories(env);
   const mediaAdapter = new CloudflareRealtimeAdapter(env.MEDIA_SERVICE, env.MEDIA_CONTROL_SHARED_SECRET);
+  const pendingRealtime = {
+    run: null as null | (() => Promise<void>),
+  };
   const result = await withIdempotency(request, `recordings.start:${meetingInstanceId}`, async () => {
     let recordingStart: { recordingId: string };
     try {
@@ -53,16 +56,17 @@ export async function startRecording(
       target: repositories.meetings.getById(meetingInstanceId)?.title ?? meetingInstanceId,
     });
     syncMeetingSummary(repositories, meetingInstanceId);
-    await syncRealtimeRoomState(env, meetingInstanceId, {
-      recordingState: "recording",
-      event: {
-        type: "recording.started",
-        actorParticipantId: actor.userId,
-        payload: {
-          recordingId: recording.id,
+    pendingRealtime.run = () =>
+      syncRealtimeRoomState(env, meetingInstanceId, {
+        recordingState: "recording",
+        event: {
+          type: "recording.started",
+          actorParticipantId: actor.userId,
+          payload: {
+            recordingId: recording.id,
+          },
         },
-      },
-    });
+      });
 
     return {
       body: recording,
@@ -79,6 +83,10 @@ export async function startRecording(
     workspaceId: actor.workspaceId,
   });
   await repositories.commit();
+  const runRealtime = pendingRealtime.run;
+  if (typeof runRealtime === "function") {
+    await runRealtime();
+  }
   return response;
 }
 
@@ -124,16 +132,17 @@ export async function stopRecording(
     target: repositories.meetings.getById(meetingInstanceId)?.title ?? meetingInstanceId,
   });
   syncMeetingSummary(repositories, meetingInstanceId);
-  await syncRealtimeRoomState(env, meetingInstanceId, {
-    recordingState: "stopped",
-    event: {
-      type: "recording.stopped",
-      actorParticipantId: actor.userId,
-      payload: {
-        recordingId: recording.id,
+  const syncRealtime = () =>
+    syncRealtimeRoomState(env, meetingInstanceId, {
+      recordingState: "stopped",
+      event: {
+        type: "recording.stopped",
+        actorParticipantId: actor.userId,
+        payload: {
+          recordingId: recording.id,
+        },
       },
-    },
-  });
+    });
 
   const response = json(recording, { status: 202 });
   recordApiMetric(env, {
@@ -144,5 +153,6 @@ export async function stopRecording(
     workspaceId: actor.workspaceId,
   });
   await repositories.commit();
+  await syncRealtime();
   return response;
 }

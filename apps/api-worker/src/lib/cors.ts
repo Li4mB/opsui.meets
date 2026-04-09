@@ -26,11 +26,11 @@ const ALLOWED_METHODS = ["GET", "POST", "PATCH", "OPTIONS"];
 
 export function getCorsHeaders(request: Request): Headers {
   const headers = new Headers();
+  appendVary(headers, "Origin");
   const origin = request.headers.get("origin");
   if (origin && ALLOWED_ORIGINS.has(origin)) {
     headers.set("access-control-allow-origin", origin);
     headers.set("access-control-allow-credentials", "true");
-    headers.set("vary", "Origin");
   }
 
   headers.set("access-control-allow-methods", ALLOWED_METHODS.join(", "));
@@ -61,4 +61,22 @@ export function handleCorsPreflight(request: Request): Response | null {
     status: 204,
     headers: getCorsHeaders(request),
   });
+}
+
+function appendVary(headers: Headers, value: string): void {
+  const existing = headers.get("vary");
+  if (!existing) {
+    headers.set("vary", value);
+    return;
+  }
+
+  const existingValues = existing
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  if (existingValues.includes(value.toLowerCase())) {
+    return;
+  }
+
+  headers.set("vary", `${existing}, ${value}`);
 }

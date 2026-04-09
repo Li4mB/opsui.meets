@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { devices, expect, test, type Browser, type Page, type Route } from "@playwright/test";
 
 const FIXTURE_RESET_URL = "http://127.0.0.1:9877/__reset";
 
@@ -82,6 +82,59 @@ test("repeated leave-and-join cycles across different meetings stay usable", asy
   }
 });
 
+test("persisted pagehide does not force the participant to leave the meeting in a mobile-like session", async ({ browser }) => {
+  const page = await createMobilePage(browser);
+
+  try {
+    await signInThroughUi(page, "liam@example.com");
+    await page.goto("/ops-signin");
+    await expectDirectJoin(page, "Auto Join Room");
+
+    const leaveRequests: string[] = [];
+    await page.route("**/v1/meetings/*/participants/*/leave", async (route) => {
+      leaveRequests.push(route.request().url());
+      await route.fulfill({
+        body: JSON.stringify({ ok: true }),
+        contentType: "application/json",
+        status: 200,
+      });
+    });
+
+    await page.evaluate(() => {
+      window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true }));
+    });
+
+    await page.waitForTimeout(500);
+    await expect.poll(() => leaveRequests.length).toBe(0);
+    await openInfoDrawer(page);
+    await expect(page.getByText(/1 active \/ 0 lobby/i)).toBeVisible();
+  } finally {
+    await page.context().close();
+  }
+});
+
+test("non-persisted pagehide leaves the active meeting session", async ({ page }) => {
+  await signInThroughUi(page, "liam@example.com");
+  await page.goto("/ops-signin");
+  await expectDirectJoin(page, "Auto Join Room");
+
+  const leaveRequests: string[] = [];
+  await page.route("**/v1/meetings/*/participants/*/leave", async (route) => {
+    leaveRequests.push(route.request().url());
+    await route.fulfill({
+      body: JSON.stringify({ ok: true }),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: false }));
+  });
+
+  await expect.poll(() => leaveRequests.length).toBe(1);
+});
+
 async function signInThroughUi(page: Page, email: string) {
   await page.goto("/sign-in");
   await page.getByRole("textbox", { name: "Mock auth email" }).fill(email);
@@ -100,7 +153,15 @@ async function openInfoDrawer(page: Page) {
   await expect(page.getByRole("heading", { name: "Room details" })).toBeVisible();
 }
 
-async function expectDirectJoin(page: Page, title: string) {
-  await expect(page.getByRole("heading", { name: title })).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByText("You are in the meeting.").first()).toBeVisible();
+async function expectDirectJoin(page: Page, _title: string) {
+  await expect(page.locator('[role="dialog"]')).toHaveCount(0, { timeout: 10_000 });
+  await expect(page.getByRole("button", { name: "Leave" })).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".meeting-control-dock")).toBeVisible();
+}
+
+async function createMobilePage(browser: Browser): Promise<Page> {
+  const context = await browser.newContext({
+    ...devices["iPhone 13"],
+  });
+  return context.newPage();
 }

@@ -12,6 +12,7 @@ import type {
 
 export interface StoredParticipantState extends ParticipantState {
   joinSessionId?: string;
+  sessionLastSeenAt?: string;
 }
 
 export interface MemoryStore {
@@ -27,6 +28,14 @@ export interface MemoryStore {
   roomEvents: RoomEvent[];
   workspacePolicy: WorkspacePolicy;
 }
+
+const MAX_AUDIT_LOGS = 200;
+const MAX_HOOK_DELIVERIES = 200;
+const MAX_LEFT_PARTICIPANTS_PER_MEETING = 40;
+const MAX_TOTAL_PARTICIPANTS = 1_500;
+const LEFT_PARTICIPANT_RETENTION_MS = 7 * 24 * 60 * 60_000;
+const MAX_ROOM_EVENTS_PER_MEETING = 100;
+const MAX_TOTAL_ROOM_EVENTS = 1_000;
 
 const globalKey = "__opsui_meets_memory_store__";
 
@@ -260,6 +269,27 @@ export function createSeedStore(): MemoryStore {
   };
 }
 
+export function compactRuntimeStore(store: MemoryStore): boolean {
+  let changed = false;
+
+  changed = trimArray(store.auditLogs, MAX_AUDIT_LOGS) || changed;
+  changed = trimArray(store.hookDeliveries, MAX_HOOK_DELIVERIES) || changed;
+
+  const compactedParticipants = compactParticipants(store.participants);
+  if (compactedParticipants !== store.participants) {
+    store.participants = compactedParticipants;
+    changed = true;
+  }
+
+  const compactedRoomEvents = compactRoomEvents(store.roomEvents);
+  if (compactedRoomEvents !== store.roomEvents) {
+    store.roomEvents = compactedRoomEvents;
+    changed = true;
+  }
+
+  return changed;
+}
+
 export function getMemoryStore(): MemoryStore {
   const globalScope = globalThis as typeof globalThis & {
     [globalKey]?: MemoryStore;
@@ -270,4 +300,83 @@ export function getMemoryStore(): MemoryStore {
   }
 
   return globalScope[globalKey];
+}
+
+function trimArray<T>(values: T[], limit: number): boolean {
+  if (values.length <= limit) {
+    return false;
+  }
+
+  values.length = limit;
+  return true;
+}
+
+function compactRoomEvents(events: RoomEvent[]): RoomEvent[] {
+  if (events.length <= MAX_TOTAL_ROOM_EVENTS) {
+    return events;
+  }
+
+  const countsByMeeting = new Map<string, number>();
+  const nextEvents: RoomEvent[] = [];
+
+  for (const event of events) {
+    const currentCount = countsByMeeting.get(event.meetingInstanceId) ?? 0;
+    if (currentCount >= MAX_ROOM_EVENTS_PER_MEETING) {
+      continue;
+    }
+
+    countsByMeeting.set(event.meetingInstanceId, currentCount + 1);
+    nextEvents.push(event);
+
+    if (nextEvents.length >= MAX_TOTAL_ROOM_EVENTS) {
+      break;
+    }
+  }
+
+  return nextEvents.length === events.length ? events : nextEvents;
+}
+
+function compactParticipants(participants: StoredParticipantState[]): StoredParticipantState[] {
+  const nextParticipants: StoredParticipantState[] = [];
+  const leftCountsByMeeting = new Map<string, number>();
+  const now = Date.now();
+
+  for (const participant of participants) {
+    if (participant.presence !== "left") {
+      nextParticipants.push(participant);
+      continue;
+    }
+
+    if (isExpiredLeftParticipant(participant, now)) {
+      continue;
+    }
+
+    const currentCount = leftCountsByMeeting.get(participant.meetingInstanceId) ?? 0;
+    if (currentCount >= MAX_LEFT_PARTICIPANTS_PER_MEETING) {
+      continue;
+    }
+
+    if (nextParticipants.length >= MAX_TOTAL_PARTICIPANTS) {
+      continue;
+    }
+
+    leftCountsByMeeting.set(participant.meetingInstanceId, currentCount + 1);
+    nextParticipants.push(participant);
+  }
+
+  return nextParticipants.length === participants.length ? participants : nextParticipants;
+}
+
+function isExpiredLeftParticipant(participant: StoredParticipantState, now: number): boolean {
+  const recencyTimestamp = participant.sessionLastSeenAt ?? participant.joinedAt;
+  if (!recencyTimestamp) {
+    return true;
+  }
+
+  const recencyMs = Date.parse(recencyTimestamp);
+  if (!Number.isFinite(recencyMs)) {
+    return true;
+  }
+
+  return now - recencyMs > LEFT_PARTICIPANT_RETENTION_MS;
 }

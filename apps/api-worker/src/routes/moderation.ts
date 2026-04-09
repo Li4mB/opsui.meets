@@ -26,16 +26,17 @@ export async function muteAllParticipants(request: Request, meetingInstanceId: s
     target: meetingTitle,
   });
   syncMeetingSummary(repositories, meetingInstanceId);
-  await syncRealtimeRoomState(env, meetingInstanceId, {
-    mutedAllAt: new Date().toISOString(),
-    event: {
-      type: "participants.muted_all",
-      actorParticipantId: actor.userId,
-      payload: {
-        count: participants.length,
+  const syncRealtime = () =>
+    syncRealtimeRoomState(env, meetingInstanceId, {
+      mutedAllAt: new Date().toISOString(),
+      event: {
+        type: "participants.muted_all",
+        actorParticipantId: actor.userId,
+        payload: {
+          count: participants.length,
+        },
       },
-    },
-  });
+    });
 
   const response = json({ items: participants });
   recordApiMetric(env, {
@@ -46,6 +47,7 @@ export async function muteAllParticipants(request: Request, meetingInstanceId: s
     workspaceId: actor.workspaceId,
   });
   await repositories.commit();
+  await syncRealtime();
   return response;
 }
 
@@ -90,38 +92,29 @@ export async function endMeeting(request: Request, meetingInstanceId: string, en
     target: meeting.title,
   });
   syncMeetingSummary(repositories, meetingInstanceId);
-  await syncRealtimeRoomState(env, meetingInstanceId, {
-    endedAt: new Date().toISOString(),
-    meetingStatus: "ended",
-    recordingState: recording?.status === "recording" ? "stopped" : undefined,
-    participants: repositories.participants.listByMeetingInstance(meetingInstanceId).map((participant) => ({
-      participantId: participant.participantId,
-      displayName: participant.displayName,
-      role: participant.role,
-      presence: "left",
-    })),
-    event: {
-      type: "room.ended",
-      actorParticipantId: actor.userId,
-      payload: {
-        meetingTitle: meeting.title,
+  const syncRealtime = () =>
+    syncRealtimeRoomState(env, meetingInstanceId, {
+      endedAt: new Date().toISOString(),
+      meetingStatus: "ended",
+      recordingState: recording?.status === "recording" ? "stopped" : undefined,
+      participants: repositories.participants.listByMeetingInstance(meetingInstanceId).map((participant) => ({
+        participantId: participant.participantId,
+        displayName: participant.displayName,
+        role: participant.role,
+        presence: "left",
+      })),
+      event: {
+        type: "room.ended",
+        actorParticipantId: actor.userId,
+        payload: {
+          meetingTitle: meeting.title,
+        },
       },
-    },
-  });
+    });
 
   const workspacePolicy = repositories.policies.getWorkspacePolicy(meeting.workspaceId);
-  if (workspacePolicy?.postMeetingHook.enabled && workspacePolicy.postMeetingHook.deliveryMode === "on_end") {
-    try {
-      await dispatchConfiguredFollowUp({
-        env,
-        request,
-        repositories,
-        meetingInstanceId,
-        actorLabel: actor.email ?? actor.userId,
-        trigger: "meeting_end_auto",
-      });
-    } catch {}
-  }
+  const shouldDispatchAutoFollowUp =
+    workspacePolicy?.postMeetingHook.enabled && workspacePolicy.postMeetingHook.deliveryMode === "on_end";
 
   const response = json(meeting);
   recordApiMetric(env, {
@@ -132,6 +125,23 @@ export async function endMeeting(request: Request, meetingInstanceId: string, en
     workspaceId: actor.workspaceId,
   });
   await repositories.commit();
+  await syncRealtime();
+
+  if (shouldDispatchAutoFollowUp) {
+    try {
+      const followUpRepositories = await getRepositories(env);
+      await dispatchConfiguredFollowUp({
+        env,
+        request,
+        repositories: followUpRepositories,
+        meetingInstanceId,
+        actorLabel: actor.email ?? actor.userId,
+        trigger: "meeting_end_auto",
+      });
+      await followUpRepositories.commit();
+    } catch {}
+  }
+
   return response;
 }
 
@@ -164,25 +174,26 @@ export async function admitParticipant(
     target: participant.displayName,
   });
   syncMeetingSummary(repositories, meetingInstanceId);
-  await syncRealtimeRoomState(env, meetingInstanceId, {
-    meetingStatus: "live",
-    participants: [
-      {
-        participantId: participant.participantId,
-        displayName: participant.displayName,
-        role: participant.role,
-        presence: "active",
+  const syncRealtime = () =>
+    syncRealtimeRoomState(env, meetingInstanceId, {
+      meetingStatus: "live",
+      participants: [
+        {
+          participantId: participant.participantId,
+          displayName: participant.displayName,
+          role: participant.role,
+          presence: "active",
+        },
+      ],
+      event: {
+        type: "participant.admitted",
+        actorParticipantId: actor.userId,
+        payload: {
+          participantId: participant.participantId,
+          displayName: participant.displayName,
+        },
       },
-    ],
-    event: {
-      type: "participant.admitted",
-      actorParticipantId: actor.userId,
-      payload: {
-        participantId: participant.participantId,
-        displayName: participant.displayName,
-      },
-    },
-  });
+    });
 
   const response = json(participant);
   recordApiMetric(env, {
@@ -193,6 +204,7 @@ export async function admitParticipant(
     workspaceId: actor.workspaceId,
   });
   await repositories.commit();
+  await syncRealtime();
   return response;
 }
 
@@ -224,22 +236,23 @@ export async function removeParticipant(
     target: participant.displayName,
   });
   syncMeetingSummary(repositories, meetingInstanceId);
-  await syncRealtimeRoomState(env, meetingInstanceId, {
-    participants: [
-      {
-        participantId: participant.participantId,
-        presence: "removed",
+  const syncRealtime = () =>
+    syncRealtimeRoomState(env, meetingInstanceId, {
+      participants: [
+        {
+          participantId: participant.participantId,
+          presence: "removed",
+        },
+      ],
+      event: {
+        type: "participant.removed",
+        actorParticipantId: actor.userId,
+        payload: {
+          participantId: participant.participantId,
+          displayName: participant.displayName,
+        },
       },
-    ],
-    event: {
-      type: "participant.removed",
-      actorParticipantId: actor.userId,
-      payload: {
-        participantId: participant.participantId,
-        displayName: participant.displayName,
-      },
-    },
-  });
+    });
 
   const response = json(participant);
   recordApiMetric(env, {
@@ -250,6 +263,7 @@ export async function removeParticipant(
     workspaceId: actor.workspaceId,
   });
   await repositories.commit();
+  await syncRealtime();
   return response;
 }
 
@@ -338,16 +352,17 @@ async function setMeetingLockState(
     target: meeting.title,
   });
   syncMeetingSummary(repositories, meetingInstanceId);
-  await syncRealtimeRoomState(env, meetingInstanceId, {
-    lockState: isLocked ? "locked" : "unlocked",
-    event: {
-      type: isLocked ? "room.locked" : "room.unlocked",
-      actorParticipantId: actor.userId,
-      payload: {
-        isLocked,
+  const syncRealtime = () =>
+    syncRealtimeRoomState(env, meetingInstanceId, {
+      lockState: isLocked ? "locked" : "unlocked",
+      event: {
+        type: isLocked ? "room.locked" : "room.unlocked",
+        actorParticipantId: actor.userId,
+        payload: {
+          isLocked,
+        },
       },
-    },
-  });
+    });
 
   const response = json(meeting);
   recordApiMetric(env, {
@@ -358,5 +373,6 @@ async function setMeetingLockState(
     workspaceId: actor.workspaceId,
   });
   await repositories.commit();
+  await syncRealtime();
   return response;
 }

@@ -223,7 +223,7 @@ test("chat and activity share the same conversation log", async ({ page }) => {
     .toBe("auto");
 });
 
-test("transient room refresh failures do not replace an open meeting with a fatal error page", async ({ page }) => {
+test("a single transient room refresh failure keeps the meeting usable without surfacing a warning banner", async ({ page }) => {
   await signInThroughUi(page, "liam@example.com");
   await page.goto("/");
   await page.getByRole("button", { name: "Start Meeting" }).click();
@@ -231,16 +231,51 @@ test("transient room refresh failures do not replace an open meeting with a fata
   await expectSoloImmersiveStage(page);
   await openInfoDrawer(page);
 
-  await page.route("**/v1/meetings", async (route) => {
-    await route.abort("failed");
+  let failed = false;
+  await page.route("**/v1/rooms/resolve/*/state", async (route) => {
+    if (!failed) {
+      failed = true;
+      await route.abort("failed");
+      return;
+    }
+
+    await route.continue();
   });
 
   await page.getByRole("button", { name: "Refresh" }).click();
 
   await expect(page.locator(".meeting-stage-runtime")).toBeVisible();
   await expect(page.locator(".meeting-control-dock")).toBeVisible();
-  await expectRoomNotice(page, "Connection to meeting services was interrupted.");
   await expect(page.getByText("Meeting services are temporarily unavailable.")).toHaveCount(0);
+  await expect(page.getByText("Connection to meeting services was interrupted.")).toHaveCount(0);
+});
+
+test("repeated room refresh failures surface a recoverable warning that clears after the next successful refresh", async ({ page }) => {
+  await signInThroughUi(page, "liam@example.com");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Start Meeting" }).click();
+
+  await expectSoloImmersiveStage(page);
+  await openInfoDrawer(page);
+
+  let remainingFailures = 2;
+  await page.route("**/v1/rooms/resolve/*/state", async (route) => {
+    if (remainingFailures > 0) {
+      remainingFailures -= 1;
+      await route.abort("failed");
+      return;
+    }
+
+    await route.continue();
+  });
+
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expectRoomNotice(page, "Connection to meeting services was interrupted.");
+
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByText("Connection to meeting services was interrupted.")).toHaveCount(0);
+  await expect(page.locator(".meeting-stage-runtime")).toBeVisible();
 });
 
 test("sign out clears the signed-in session state", async ({ page }) => {

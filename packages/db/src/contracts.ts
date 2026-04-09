@@ -48,6 +48,18 @@ export interface ParticipantsRepositoryContract {
     presence: ParticipantState["presence"];
     role?: ParticipantState["role"];
   }): ParticipantState;
+  touchSessionLease(
+    meetingInstanceId: string,
+    participantId: string,
+    joinSessionId?: string,
+  ): ParticipantState | null;
+  expireStaleSessions(
+    meetingInstanceId: string,
+    options?: {
+      now?: Date;
+      staleAfterMs?: number;
+    },
+  ): ParticipantState[];
   admitToMeeting(meetingInstanceId: string, participantId: string): ParticipantState | null;
   leaveMeeting(meetingInstanceId: string, participantId: string): ParticipantState | null;
   removeFromMeeting(meetingInstanceId: string, participantId: string): ParticipantState | null;

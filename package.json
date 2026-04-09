@@ -25,6 +25,7 @@
     "smoke:published-readiness": "node scripts/check-published-readiness-assets.mjs",
     "smoke:production": "node scripts/smoke-production.mjs",
     "smoke:preview": "node scripts/smoke-preview.mjs",
+    "smoke:production:meetings": "node scripts/smoke-production-meetings.mjs",
     "smoke:readiness": "node scripts/check-readiness-artifacts.mjs",
     "smoke:manifest": "node scripts/check-topology-manifest.mjs",
     "smoke:published-assets": "node scripts/check-published-topology-assets.mjs",

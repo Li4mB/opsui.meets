@@ -49,6 +49,37 @@ const apiServer = http.createServer(async (request, response) => {
     return;
   }
 
+  const roomStateMatch = url.pathname.match(/^\/v1\/rooms\/resolve\/([^/]+)\/state$/);
+  if (request.method === "GET" && roomStateMatch) {
+    const room = getRoomBySlug(decodeURIComponent(roomStateMatch[1]));
+    if (!room) {
+      sendJson(request, response, 404, { error: "room_not_found" });
+      return;
+    }
+
+    const meeting = pickMeetingForRoom([...state.meetings.values()], room.id);
+    if (!meeting) {
+      sendJson(request, response, 200, {
+        events: [],
+        meeting: null,
+        participants: [],
+        recording: null,
+        room,
+      });
+      return;
+    }
+
+    expireStaleParticipants(meeting.id);
+    sendJson(request, response, 200, {
+      events: state.events.get(meeting.id) ?? [],
+      meeting,
+      participants: state.participants.get(meeting.id) ?? [],
+      recording: state.recordings.get(meeting.id) ?? null,
+      room,
+    });
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/v1/rooms") {
     const body = await readJsonBody(request);
     const room = createRoom({
@@ -176,6 +207,7 @@ const apiServer = http.createServer(async (request, response) => {
     });
     participant.displayName = displayName;
     participant.presence = sessionType === "user" ? "active" : "lobby";
+    participant.sessionLastSeenAt = new Date().toISOString();
     participant.audio = room.policy.mutedOnEntry ? "muted" : "unmuted";
     participant.video = room.policy.cameraOffOnEntry ? "off" : "on";
     if (!(state.participants.get(meeting.id) ?? []).some((entry) => entry.participantId === participant.participantId)) {
@@ -271,6 +303,28 @@ const apiServer = http.createServer(async (request, response) => {
     participant.video = "off";
     addEvent(leaveMatch[1], "participant.leave", { participantId: participant.participantId });
     sendJson(request, response, 200, { ok: true });
+    return;
+  }
+
+  const heartbeatMatch = url.pathname.match(/^\/v1\/meetings\/([^/]+)\/participants\/([^/]+)\/heartbeat$/);
+  if (request.method === "POST" && heartbeatMatch) {
+    const participant = findParticipant(heartbeatMatch[1], heartbeatMatch[2]);
+    if (!participant || participant.presence === "left") {
+      sendJson(request, response, 404, { error: "participant_not_found" });
+      return;
+    }
+
+    const body = await readJsonBody(request);
+    const clientSessionId = typeof body?.clientSessionId === "string" && body.clientSessionId.trim()
+      ? body.clientSessionId.trim()
+      : null;
+    if (clientSessionId && participant.joinSessionId && participant.joinSessionId !== clientSessionId) {
+      sendJson(request, response, 404, { error: "participant_not_found" });
+      return;
+    }
+
+    participant.sessionLastSeenAt = new Date().toISOString();
+    sendJson(request, response, 200, participant);
     return;
   }
 
@@ -594,8 +648,44 @@ function createParticipant(input) {
     participantId: `participant_${state.nextParticipantNumber++}`,
     presence: "lobby",
     role: input.role,
+    sessionLastSeenAt: new Date().toISOString(),
     video: "off",
   };
+}
+
+function pickMeetingForRoom(meetings, roomId) {
+  const candidates = meetings.filter((meeting) => meeting.roomId === roomId);
+  if (!candidates.length) {
+    return null;
+  }
+
+  candidates.sort((left, right) => {
+    const statusDelta = getMeetingPriority(left.status) - getMeetingPriority(right.status);
+    if (statusDelta !== 0) {
+      return statusDelta;
+    }
+
+    return Date.parse(right.createdAt) - Date.parse(left.createdAt);
+  });
+
+  return candidates[0] ?? null;
+}
+
+function getMeetingPriority(status) {
+  switch (status) {
+    case "live":
+      return 0;
+    case "prejoin":
+      return 1;
+    case "scheduled":
+      return 2;
+    case "ending":
+      return 3;
+    case "ended":
+      return 4;
+    default:
+      return 5;
+  }
 }
 
 function addEvent(meetingId, type, payload, actorParticipantId = undefined) {
@@ -663,6 +753,24 @@ function findParticipantByJoinSession(meetingId, joinSessionId) {
   }
 
   return (state.participants.get(meetingId) ?? []).find((participant) => participant.joinSessionId === joinSessionId) ?? null;
+}
+
+function expireStaleParticipants(meetingId, staleAfterMs = 2 * 60_000) {
+  const cutoff = Date.now() - staleAfterMs;
+  for (const participant of state.participants.get(meetingId) ?? []) {
+    if (participant.presence === "left" || !participant.sessionLastSeenAt) {
+      continue;
+    }
+
+    if (Date.parse(participant.sessionLastSeenAt) > cutoff) {
+      continue;
+    }
+
+    participant.presence = "left";
+    participant.audio = "muted";
+    participant.video = "off";
+    participant.handRaised = false;
+  }
 }
 
 function getCurrentSession(request) {

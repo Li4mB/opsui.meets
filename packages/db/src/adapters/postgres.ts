@@ -11,7 +11,7 @@ import { RecordingsRepository } from "../repositories/recordings";
 import { RoomsRepository } from "../repositories/rooms";
 import { TemplatesRepository } from "../repositories/templates";
 import type { RequestRepositoryContext } from "../contracts";
-import { createSeedStore, type MemoryStore } from "../store";
+import { compactRuntimeStore, createSeedStore, type MemoryStore } from "../store";
 
 const DEFAULT_SCOPE = "global";
 
@@ -54,7 +54,7 @@ export async function createPostgresRepositoryContext(
   }
 
   const getStore = () => persisted.store;
-  let dirty = false;
+  let dirty = compactRuntimeStore(persisted.store);
 
   const rooms = new RoomsRepository(getStore);
   const meetings = new MeetingsRepository(getStore);
@@ -143,6 +143,8 @@ export async function createPostgresRepositoryContext(
     events,
     async commit(): Promise<void> {
       try {
+        dirty = compactRuntimeStore(persisted.store) || dirty;
+
         if (!dirty) {
           return;
         }

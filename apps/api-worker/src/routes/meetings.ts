@@ -12,6 +12,9 @@ export async function createMeeting(request: Request, env: Env): Promise<Respons
   const actor = getActorContext(request);
   const repositories = await getRepositories(env);
   const payload = await parseJson<CreateMeetingInput>(request);
+  const pendingRealtime = {
+    run: null as null | (() => Promise<void>),
+  };
 
   const result = await withIdempotency(request, "meetings.create", async () => {
     const roomId = requireNonEmptyString(payload.roomId, "room_id_required");
@@ -59,11 +62,12 @@ export async function createMeeting(request: Request, env: Env): Promise<Respons
       action: "meeting.created",
       target: meeting.title,
     });
-    await syncRealtimeRoomState(env, meeting.id, {
-      meetingStatus: meeting.status,
-      lockState: "unlocked",
-      recordingState: "idle",
-    });
+    pendingRealtime.run = () =>
+      syncRealtimeRoomState(env, meeting.id, {
+        meetingStatus: meeting.status,
+        lockState: "unlocked",
+        recordingState: "idle",
+      });
 
     return {
       body: meeting,
@@ -71,8 +75,14 @@ export async function createMeeting(request: Request, env: Env): Promise<Respons
     };
   });
 
+  const response = json(result.body, { status: result.status });
   await repositories.commit();
-  return json(result.body, { status: result.status });
+  const runRealtime = pendingRealtime.run;
+  if (typeof runRealtime === "function") {
+    await runRealtime();
+  }
+
+  return response;
 }
 
 export async function listMeetings(request: Request, env: Env): Promise<Response> {

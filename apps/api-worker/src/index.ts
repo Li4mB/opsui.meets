@@ -31,9 +31,11 @@ import {
   unlockMeeting,
 } from "./routes/moderation";
 import { listParticipants } from "./routes/participants";
+import { touchParticipantSession } from "./routes/participants";
 import { testPostMeetingHook } from "./routes/post-meeting-hook-test";
 import { getWorkspacePolicy, updateWorkspacePolicy } from "./routes/policies";
 import { resolveRoom } from "./routes/room-resolve";
+import { getRoomState } from "./routes/room-state";
 import { startRecording, stopRecording } from "./routes/recordings";
 import { createRoom, listRooms } from "./routes/rooms";
 import { createTemplate } from "./routes/templates-create";
@@ -52,6 +54,7 @@ import {
   getMeetingFollowUpExportPath,
   getMeetingFollowUpRetryPath,
   getMeetingParticipantsPath,
+  getMeetingParticipantHeartbeatPath,
   getMeetingEventsPath,
   getMeetingEndPath,
   getMeetingLockPath,
@@ -64,6 +67,7 @@ import {
   getMeetingSummaryPath,
   getMeetingUnlockPath,
   getRoomResolvePath,
+  getRoomStatePath,
 } from "./lib/route-params";
 
 export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
@@ -127,6 +131,12 @@ export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
       }
 
       if (request.method === "GET") {
+        const roomStatePath = getRoomStatePath(url.pathname);
+        if (roomStatePath) {
+          routeResponse = await getRoomState(roomStatePath.slug, env);
+          return withCors(routeResponse, request);
+        }
+
         const roomResolvePath = getRoomResolvePath(url.pathname);
         if (roomResolvePath) {
           routeResponse = await resolveRoom(roomResolvePath.slug, env);
@@ -221,6 +231,17 @@ export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
       }
 
       if (request.method === "POST") {
+        const heartbeatPath = getMeetingParticipantHeartbeatPath(url.pathname);
+        if (heartbeatPath) {
+          routeResponse = await touchParticipantSession(
+            request,
+            heartbeatPath.meetingInstanceId,
+            heartbeatPath.participantId,
+            env,
+          );
+          return withCors(routeResponse, request);
+        }
+
         const joinPath = getMeetingJoinPath(url.pathname);
         if (joinPath) {
           routeResponse = await joinMeeting(request, joinPath.meetingInstanceId, env);

@@ -29,6 +29,7 @@ import {
   sendChatMessage,
   startRecording,
   stopRecording,
+  touchMeetingParticipantSession,
   unlockMeeting,
 } from "../lib/commands";
 import { REALTIME_BASE_URL } from "../lib/config";
@@ -54,6 +55,11 @@ type LoadState =
 type JoinUiState = "idle" | "joining" | "direct" | "lobby" | "blocked" | "error";
 type ActiveDrawer = "chat" | "info" | "participants" | null;
 const DRAWER_SWITCH_DELAY_MS = 220;
+const HEARTBEAT_INTERVAL_MS = 15_000;
+const REALTIME_PING_INTERVAL_MS = 20_000;
+const REALTIME_RECONNECT_MAX_DELAY_MS = 10_000;
+const ROOM_REFRESH_DEBOUNCE_MS = 250;
+const ROOM_REFRESH_WARNING_GRACE_MS = 15_000;
 
 export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
@@ -76,6 +82,11 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const lastLeaveRequestKeyRef = useRef<string | null>(null);
   const meetingCodeRef = useRef(props.meetingCode);
   const meetingScopeRef = useRef(0);
+  const roomRefreshFailureCountRef = useRef(0);
+  const roomRefreshPromiseRef = useRef<Promise<void> | null>(null);
+  const roomRefreshQueuedRef = useRef(false);
+  const roomRefreshTimeoutRef = useRef<number | null>(null);
+  const lastSuccessfulRoomRefreshAtRef = useRef(0);
   const sessionRef = useRef(props.session);
 
   useEffect(() => {
@@ -87,6 +98,24 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       if (drawerSwitchTimeoutRef.current) {
         window.clearTimeout(drawerSwitchTimeoutRef.current);
       }
+      if (roomRefreshTimeoutRef.current) {
+        window.clearTimeout(roomRefreshTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const handlePageHide = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        return;
+      }
+
+      leaveActiveMeetingSession();
+    };
+
+    window.addEventListener("pagehide", handlePageHide);
+    return () => {
+      window.removeEventListener("pagehide", handlePageHide);
     };
   }, []);
 
@@ -113,12 +142,15 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     leaveMeetingParticipantInBackground(activeSession.meetingId, activeSession.participantId, sessionRef.current);
   });
 
-  const refreshRoom = useEffectEvent(async (scopeId = meetingScopeRef.current) => {
+  const performRoomRefresh = useEffectEvent(async (scopeId = meetingScopeRef.current) => {
     try {
       const nextData = await loadMeetingRoomData(props.meetingCode);
       if (!isActiveMeetingScope(scopeId)) {
         return;
       }
+
+      roomRefreshFailureCountRef.current = 0;
+      lastSuccessfulRoomRefreshAtRef.current = Date.now();
 
       if (!nextData) {
         setLoadState((current) => {
@@ -141,6 +173,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
         return;
       }
 
+      roomRefreshFailureCountRef.current += 1;
       setLoadState((current) => {
         if (current.status === "ready") {
           return current;
@@ -151,8 +184,65 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
           status: "error",
         };
       });
-      setServiceMessage("Connection to meeting services was interrupted. Retrying in the background.");
+      if (
+        roomRefreshFailureCountRef.current >= 2 ||
+        Date.now() - lastSuccessfulRoomRefreshAtRef.current >= ROOM_REFRESH_WARNING_GRACE_MS
+      ) {
+        setServiceMessage("Connection to meeting services was interrupted. Retrying in the background.");
+      }
     }
+  });
+
+  const flushRoomRefresh = useEffectEvent(async (scopeId = meetingScopeRef.current) => {
+    if (!isActiveMeetingScope(scopeId)) {
+      return;
+    }
+
+    if (roomRefreshPromiseRef.current) {
+      roomRefreshQueuedRef.current = true;
+      return roomRefreshPromiseRef.current;
+    }
+
+    const refreshPromise = (async () => {
+      do {
+        roomRefreshQueuedRef.current = false;
+        await performRoomRefresh(scopeId);
+      } while (roomRefreshQueuedRef.current && isActiveMeetingScope(scopeId));
+    })();
+
+    roomRefreshPromiseRef.current = refreshPromise;
+    return refreshPromise.finally(() => {
+      if (roomRefreshPromiseRef.current === refreshPromise) {
+        roomRefreshPromiseRef.current = null;
+      }
+    });
+  });
+
+  const scheduleRoomRefresh = useEffectEvent((options?: { delayMs?: number; immediate?: boolean; scopeId?: number }) => {
+    const scopeId = options?.scopeId ?? meetingScopeRef.current;
+    if (!isActiveMeetingScope(scopeId)) {
+      return;
+    }
+
+    roomRefreshQueuedRef.current = true;
+
+    if (options?.immediate) {
+      if (roomRefreshTimeoutRef.current) {
+        window.clearTimeout(roomRefreshTimeoutRef.current);
+        roomRefreshTimeoutRef.current = null;
+      }
+      void flushRoomRefresh(scopeId);
+      return;
+    }
+
+    if (roomRefreshTimeoutRef.current) {
+      return;
+    }
+
+    roomRefreshTimeoutRef.current = window.setTimeout(() => {
+      roomRefreshTimeoutRef.current = null;
+      void flushRoomRefresh(scopeId);
+    }, options?.delayMs ?? ROOM_REFRESH_DEBOUNCE_MS);
   });
 
   useEffect(() => {
@@ -164,6 +254,14 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
 
     meetingScopeRef.current += 1;
     const scopeId = meetingScopeRef.current;
+    roomRefreshFailureCountRef.current = 0;
+    roomRefreshPromiseRef.current = null;
+    roomRefreshQueuedRef.current = false;
+    lastSuccessfulRoomRefreshAtRef.current = 0;
+    if (roomRefreshTimeoutRef.current) {
+      window.clearTimeout(roomRefreshTimeoutRef.current);
+      roomRefreshTimeoutRef.current = null;
+    }
     autoJoinKeyRef.current = null;
     setJoinState("idle");
     setActiveDrawer(null);
@@ -176,7 +274,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     setGuestModalOpen(false);
     setLoadState({ status: "loading" });
 
-    void refreshRoom(scopeId);
+    void flushRoomRefresh(scopeId);
   }, [props.meetingCode]);
 
   const meeting = loadState.status === "ready" ? loadState.data.meeting : null;
@@ -218,6 +316,23 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     };
   }, [meeting?.id, participantId]);
 
+  const heartbeatMeetingSession = useEffectEvent(async (scopeId = meetingScopeRef.current) => {
+    if (!meeting?.id || !participantId || (joinState !== "direct" && joinState !== "lobby")) {
+      return;
+    }
+
+    const participant = await touchMeetingParticipantSession(meeting.id, participantId);
+    if (!isActiveMeetingScope(scopeId) || !participant) {
+      return;
+    }
+
+    if (participant.presence === "left") {
+      setParticipantId(null);
+      setJoinState("idle");
+      setJoinMessage("Meeting connection expired. Rejoining...");
+    }
+  });
+
   useEffect(() => {
     if (props.isAuthLoading || loadState.status !== "ready" || !loadState.data.meeting || !props.session) {
       return;
@@ -247,7 +362,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     }
 
     const intervalId = window.setInterval(() => {
-      void refreshRoom();
+      scheduleRoomRefresh({ immediate: true });
     }, joinState === "lobby" ? 4_000 : 12_000);
 
     return () => {
@@ -264,45 +379,126 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     let closed = false;
     let socket: WebSocket | null = null;
     let reconnectTimeoutId: number | null = null;
+    let pingIntervalId: number | null = null;
+    let reconnectAttempt = 0;
+
+    const clearPingInterval = () => {
+      if (pingIntervalId) {
+        window.clearInterval(pingIntervalId);
+        pingIntervalId = null;
+      }
+    };
 
     function connect() {
       socket = new WebSocket(`${REALTIME_BASE_URL}/v1/rooms/${meetingId}`);
       socket.addEventListener("open", () => {
+        reconnectAttempt = 0;
+        clearPingInterval();
+        pingIntervalId = window.setInterval(() => {
+          if (socket?.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: "ping" }));
+          }
+        }, REALTIME_PING_INTERVAL_MS);
         socket?.send(JSON.stringify({ type: "snapshot.request" }));
+        scheduleRoomRefresh({ immediate: true });
       });
-      socket.addEventListener("message", () => {
-        void refreshRoom();
+      socket.addEventListener("message", (event) => {
+        if (parseRealtimeMessageType(event.data) === "pong") {
+          return;
+        }
+
+        scheduleRoomRefresh();
+      });
+      socket.addEventListener("error", () => {
+        socket?.close();
       });
       socket.addEventListener("close", () => {
+        clearPingInterval();
+        socket = null;
         if (!closed) {
-          reconnectTimeoutId = window.setTimeout(connect, 3_000);
+          const reconnectDelay = Math.min(
+            1_000 * Math.max(1, 2 ** reconnectAttempt),
+            REALTIME_RECONNECT_MAX_DELAY_MS,
+          );
+          reconnectAttempt += 1;
+          reconnectTimeoutId = window.setTimeout(connect, reconnectDelay);
         }
       });
     }
 
+    const resumeRealtime = () => {
+      if (closed) {
+        return;
+      }
+
+      if (document.visibilityState !== "hidden") {
+        scheduleRoomRefresh({ immediate: true });
+      }
+
+      if (!socket || socket.readyState === WebSocket.CLOSED) {
+        if (reconnectTimeoutId) {
+          window.clearTimeout(reconnectTimeoutId);
+          reconnectTimeoutId = null;
+        }
+        connect();
+      }
+    };
+
     connect();
+    document.addEventListener("visibilitychange", resumeRealtime);
+    window.addEventListener("focus", resumeRealtime);
+    window.addEventListener("online", resumeRealtime);
 
     return () => {
       closed = true;
       if (reconnectTimeoutId) {
         window.clearTimeout(reconnectTimeoutId);
       }
+      clearPingInterval();
+      document.removeEventListener("visibilitychange", resumeRealtime);
+      window.removeEventListener("focus", resumeRealtime);
+      window.removeEventListener("online", resumeRealtime);
       socket?.close();
     };
   }, [meeting?.id]);
 
   useEffect(() => {
-    const notifyLeave = () => {
-      leaveActiveMeetingSession();
+    const resumeMeetingSession = () => {
+      if (document.visibilityState === "hidden") {
+        return;
+      }
+
+      const scopeId = meetingScopeRef.current;
+      scheduleRoomRefresh({ immediate: true, scopeId });
+      void heartbeatMeetingSession(scopeId);
     };
 
-    window.addEventListener("pagehide", notifyLeave);
+    document.addEventListener("visibilitychange", resumeMeetingSession);
+    window.addEventListener("focus", resumeMeetingSession);
+    window.addEventListener("online", resumeMeetingSession);
 
     return () => {
-      window.removeEventListener("pagehide", notifyLeave);
-      notifyLeave();
+      document.removeEventListener("visibilitychange", resumeMeetingSession);
+      window.removeEventListener("focus", resumeMeetingSession);
+      window.removeEventListener("online", resumeMeetingSession);
     };
   }, []);
+
+  useEffect(() => {
+    if (!meeting?.id || !participantId || (joinState !== "direct" && joinState !== "lobby")) {
+      return;
+    }
+
+    const scopeId = meetingScopeRef.current;
+    void heartbeatMeetingSession(scopeId);
+    const intervalId = window.setInterval(() => {
+      void heartbeatMeetingSession(scopeId);
+    }, HEARTBEAT_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [joinState, meeting?.id, participantId]);
 
   async function submitJoin(displayName: string, sessionType: string) {
     if (loadState.status !== "ready" || !loadState.data.meeting) {
@@ -336,7 +532,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     setGuestModalOpen(false);
     setJoinState(result.joinState);
     setJoinMessage(getJoinMessage(result.joinState, result.reason));
-    await refreshRoom(scopeId);
+    await flushRoomRefresh(scopeId);
   }
 
   async function runAction(
@@ -359,7 +555,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       return;
     }
 
-    await refreshRoom(scopeId);
+    await flushRoomRefresh(scopeId);
     if (!isActiveMeetingScope(scopeId)) {
       return;
     }
@@ -401,7 +597,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       return;
     }
 
-    await refreshRoom(scopeId);
+    await flushRoomRefresh(scopeId);
     if (!isActiveMeetingScope(scopeId)) {
       return;
     }
@@ -487,7 +683,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
             <button
               className="button button--primary"
               onClick={() => {
-                void refreshRoom();
+                scheduleRoomRefresh({ immediate: true });
               }}
               type="button"
             >
@@ -564,7 +760,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       };
     });
 
-    void refreshRoom();
+    scheduleRoomRefresh({ immediate: true });
     return {};
   }
 
@@ -785,7 +981,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
                 );
               }}
               onRefresh={() => {
-                void refreshRoom();
+                scheduleRoomRefresh({ immediate: true });
               }}
               onRemoveParticipant={(nextParticipantId) => {
                 if (!meeting) {
@@ -922,6 +1118,15 @@ function getJoinMessage(
   }
 
   return "You cannot join this meeting right now.";
+}
+
+function parseRealtimeMessageType(raw: string): string | null {
+  try {
+    const parsed = JSON.parse(raw) as { type?: string };
+    return typeof parsed.type === "string" ? parsed.type : null;
+  } catch {
+    return null;
+  }
 }
 
 function getChatDisabledReason(input: {

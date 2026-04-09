@@ -6,6 +6,7 @@ import type {
   JoinMeetingResult,
   MeetingMediaSession,
   MeetingDetail,
+  ParticipantState,
   RoomEvent,
   RoomSummary,
   SessionInfo,
@@ -188,6 +189,28 @@ export function leaveMeetingParticipantInBackground(
       keepalive: true,
     });
   } catch {}
+}
+
+export async function touchMeetingParticipantSession(
+  meetingInstanceId: string,
+  participantId: string,
+): Promise<ParticipantState | null> {
+  try {
+    const headers = await getActorHeaders(undefined, { includeJsonContentType: true });
+    const response = await fetch(`${API_BASE_URL}/v1/meetings/${meetingInstanceId}/participants/${participantId}/heartbeat`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        clientSessionId: getJoinSessionId(),
+      }),
+    });
+
+    if (response.ok) {
+      return (await response.json()) as ParticipantState;
+    }
+  } catch {}
+
+  return null;
 }
 
 export function startRecording(meetingInstanceId: string): Promise<boolean> {

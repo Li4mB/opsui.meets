@@ -16,6 +16,22 @@ export function getMeetingParticipantsPath(pathname: string): { meetingInstanceI
   return { meetingInstanceId: match.groups.meetingInstanceId };
 }
 
+export function getMeetingParticipantHeartbeatPath(
+  pathname: string,
+): { meetingInstanceId: string; participantId: string } | null {
+  const match = pathname.match(
+    /^\/v1\/meetings\/(?<meetingInstanceId>[^/]+)\/participants\/(?<participantId>[^/]+)\/heartbeat$/,
+  );
+  if (!match?.groups?.meetingInstanceId || !match.groups.participantId) {
+    return null;
+  }
+
+  return {
+    meetingInstanceId: match.groups.meetingInstanceId,
+    participantId: match.groups.participantId,
+  };
+}
+
 export function getMeetingAttendanceExportPath(pathname: string): { meetingInstanceId: string } | null {
   const match = pathname.match(/^\/v1\/meetings\/(?<meetingInstanceId>[^/]+)\/attendance\/export$/);
   if (!match?.groups?.meetingInstanceId) {
@@ -195,6 +211,15 @@ export function getMeetingParticipantModerationPath(
 
 export function getRoomResolvePath(pathname: string): { slug: string } | null {
   const match = pathname.match(/^\/v1\/rooms\/resolve\/(?<slug>[^/]+)$/);
+  if (!match?.groups?.slug) {
+    return null;
+  }
+
+  return { slug: match.groups.slug };
+}
+
+export function getRoomStatePath(pathname: string): { slug: string } | null {
+  const match = pathname.match(/^\/v1\/rooms\/resolve\/(?<slug>[^/]+)\/state$/);
   if (!match?.groups?.slug) {
     return null;
   }

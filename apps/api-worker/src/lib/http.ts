@@ -2,6 +2,7 @@ export function json<T>(body: T, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), {
     ...init,
     headers: {
+      "cache-control": "private, no-store",
       "content-type": "application/json; charset=utf-8",
       ...(init?.headers ?? {}),
     },

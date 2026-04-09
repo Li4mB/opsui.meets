@@ -15,6 +15,7 @@ export async function createMeetingMediaSession(
   const actor = getActorContext(request);
   const repositories = await getRepositories(env);
   const meeting = repositories.meetings.getById(meetingInstanceId);
+  await repositories.commit();
   if (!meeting) {
     throw new ApiError(404, "meeting_not_found");
   }
@@ -48,12 +49,6 @@ export async function createMeetingMediaSession(
     );
   }
 
-  repositories.audit.append({
-    actor: actor.email ?? actor.userId,
-    action: "media_session.created",
-    target: `${meeting.title} / ${participantId}`,
-  });
-
   const response = json(session, { status: 201 });
   recordApiMetric(env, {
     route: "media-session-create",
@@ -62,6 +57,5 @@ export async function createMeetingMediaSession(
     outcome: role,
     workspaceId: actor.workspaceId,
   });
-  await repositories.commit();
   return response;
 }

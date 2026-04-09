@@ -55,6 +55,7 @@ export async function joinMeeting(
   const canBypassLobby = Boolean(
     elevatedRole && ["owner", "host", "co_host", "moderator", "presenter"].includes(elevatedRole),
   );
+  let syncRealtime: (() => Promise<void>) | null = null;
 
   let joinState: JoinMeetingResult["joinState"] = "direct";
   let reason: JoinMeetingResult["reason"];
@@ -106,27 +107,28 @@ export async function joinMeeting(
         displayName,
       },
     });
-    await syncRealtimeRoomState(env, meetingInstanceId, {
-      meetingStatus: "live",
-      participants: participant
-        ? [
-            {
-              participantId: participant.participantId,
-              displayName: participant.displayName,
-              role: participant.role,
-              presence: "active",
-            },
-          ]
-        : [],
-      event: {
-        type: "participant.join",
-        actorParticipantId: participant?.participantId,
-        payload: {
-          participantId: participant?.participantId,
-          displayName,
+    syncRealtime = () =>
+      syncRealtimeRoomState(env, meetingInstanceId, {
+        meetingStatus: "live",
+        participants: participant
+          ? [
+              {
+                participantId: participant.participantId,
+                displayName: participant.displayName,
+                role: participant.role,
+                presence: "active",
+              },
+            ]
+          : [],
+        event: {
+          type: "participant.join",
+          actorParticipantId: participant?.participantId,
+          payload: {
+            participantId: participant?.participantId,
+            displayName,
+          },
         },
-      },
-    });
+      });
   } else if (joinState === "lobby") {
     repositories.events.append({
       meetingInstanceId,
@@ -137,28 +139,29 @@ export async function joinMeeting(
         state: "waiting",
       },
     });
-    await syncRealtimeRoomState(env, meetingInstanceId, {
-      meetingStatus: "prejoin",
-      participants: participant
-        ? [
-            {
-              participantId: participant.participantId,
-              displayName: participant.displayName,
-              role: participant.role,
-              presence: "lobby",
-            },
-          ]
-        : [],
-      event: {
-        type: "lobby.updated",
-        actorParticipantId: participant?.participantId,
-        payload: {
-          participantId: participant?.participantId,
-          displayName,
-          state: "waiting",
+    syncRealtime = () =>
+      syncRealtimeRoomState(env, meetingInstanceId, {
+        meetingStatus: "prejoin",
+        participants: participant
+          ? [
+              {
+                participantId: participant.participantId,
+                displayName: participant.displayName,
+                role: participant.role,
+                presence: "lobby",
+              },
+            ]
+          : [],
+        event: {
+          type: "lobby.updated",
+          actorParticipantId: participant?.participantId,
+          payload: {
+            participantId: participant?.participantId,
+            displayName,
+            state: "waiting",
+          },
         },
-      },
-    });
+      });
   }
 
   repositories.audit.append({
@@ -182,5 +185,8 @@ export async function joinMeeting(
     workspaceId: actor.workspaceId,
   });
   await repositories.commit();
+  if (syncRealtime) {
+    await syncRealtime();
+  }
   return response;
 }
