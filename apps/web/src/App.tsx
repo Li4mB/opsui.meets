@@ -6,6 +6,7 @@ import { useAppRoute } from "./lib/router";
 import { HomePage } from "./pages/HomePage";
 import { LegacyJoinPage } from "./pages/LegacyJoinPage";
 import { MeetingRoomPage } from "./pages/MeetingRoomPage";
+import { MeetingStageLabPage } from "./pages/MeetingStageLabPage";
 import { SignInPage } from "./pages/SignInPage";
 
 export function App() {
@@ -77,6 +78,7 @@ export function App() {
           }}
         />
       ) : null}
+      {route.kind === "stage-lab" ? <MeetingStageLabPage search={window.location.search} /> : null}
       {route.kind === "meeting" ? (
         <MeetingRoomPage
           authCapabilities={authCapabilities}

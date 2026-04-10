@@ -1271,18 +1271,38 @@ button {
 
 .meeting-stage-canvas {
   display: grid;
-  grid-template-rows: minmax(0, 1fr);
-  gap: 16px;
+  --stage-gap: 16px;
+  --stage-columns: 1;
+  --stage-grid-max-width: 100%;
+  --stage-rail-size: 220px;
+  --stage-tile-aspect-ratio: 1.6;
+  gap: var(--stage-gap);
+  height: 100%;
   min-height: 0;
-  transition: gap 220ms ease;
+  align-content: stretch;
+  transition:
+    gap 220ms ease,
+    grid-template-columns 220ms ease,
+    grid-template-rows 220ms ease;
 }
 
-.meeting-stage-canvas--sharing {
-  grid-template-rows: minmax(0, 1.6fr) minmax(180px, 0.78fr);
+.meeting-stage-canvas--grid {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.meeting-stage-canvas--share-side {
+  grid-template-columns: minmax(0, 1fr) minmax(0, var(--stage-rail-size));
+  align-items: stretch;
+}
+
+.meeting-stage-canvas--share-bottom {
+  grid-template-rows: minmax(0, 1fr) auto;
+  align-items: stretch;
 }
 
 .meeting-stage-canvas--solo {
   gap: 0;
+  height: 100%;
 }
 
 .stage-media {
@@ -1293,27 +1313,29 @@ button {
 
 .stage-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  grid-auto-rows: minmax(220px, 1fr);
-  gap: 16px;
+  grid-template-columns: repeat(var(--stage-columns), minmax(0, 1fr));
+  gap: var(--stage-gap);
   min-height: 0;
-  margin: 0;
+  width: min(100%, var(--stage-grid-max-width));
+  max-width: 100%;
+  margin: 0 auto;
+  align-content: center;
+  justify-content: center;
   transition:
+    width 220ms ease,
     gap 220ms ease,
-    grid-template-columns 220ms ease,
-    grid-auto-rows 220ms ease;
+    grid-template-columns 220ms ease;
 }
 
 .stage-tiles--supporting {
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  grid-auto-rows: minmax(170px, 1fr);
+  align-self: center;
 }
 
 .stage-tiles--solo {
   grid-template-columns: minmax(0, 1fr);
-  grid-auto-rows: minmax(0, 1fr);
   gap: 0;
   height: 100%;
+  width: 100%;
 }
 
 .stage-tiles > .participant-tile:only-child,
@@ -1332,15 +1354,53 @@ button {
 
 .participant-tile--media {
   min-height: 0;
+  width: 100%;
+  aspect-ratio: var(--stage-tile-aspect-ratio);
+  justify-self: stretch;
+}
+
+.participant-tile--summary {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: var(--stage-tile-aspect-ratio);
+  padding: 22px;
+  text-align: center;
+  background:
+    radial-gradient(circle at top right, rgba(125, 211, 252, 0.12), transparent 34%),
+    linear-gradient(180deg, rgba(14, 25, 42, 0.98) 0%, rgba(8, 15, 28, 0.98) 100%);
+}
+
+.participant-tile__summary-copy {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+}
+
+.participant-tile__summary-copy strong {
+  font-family: "Space Grotesk", "Manrope", sans-serif;
+  font-size: clamp(2rem, 4vw, 3rem);
+  line-height: 0.95;
+}
+
+.participant-tile__summary-copy span {
+  color: var(--muted);
 }
 
 .participant-tile--immersive,
 .stage-tiles--solo > .participant-tile {
   min-height: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+}
+
+.participant-tile--supporting {
+  border-radius: 24px;
 }
 
 .participant-tile__media-shell {
   min-height: inherit;
+  height: 100%;
 }
 
 .participant-tile__overlay {
@@ -1356,9 +1416,15 @@ button {
   justify-content: flex-start;
 }
 
+.participant-tile__overlay--supporting {
+  inset: auto 12px 12px 12px;
+  gap: 10px;
+}
+
 .screen-share-stage {
   position: relative;
   min-height: 0;
+  height: 100%;
   overflow: hidden;
   border-radius: 30px;
   border: 1px solid var(--border);
@@ -1381,6 +1447,38 @@ button {
   background:
     radial-gradient(circle at top right, rgba(56, 189, 248, 0.08), transparent 30%),
     linear-gradient(180deg, rgba(2, 8, 23, 0.98) 0%, rgba(2, 6, 14, 0.98) 100%);
+}
+
+.screen-share-stage__placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(56, 189, 248, 0.12), transparent 22%),
+    linear-gradient(135deg, rgba(8, 17, 31, 0.3) 0%, rgba(8, 17, 31, 0) 55%),
+    repeating-linear-gradient(
+      135deg,
+      rgba(148, 163, 184, 0.06) 0,
+      rgba(148, 163, 184, 0.06) 12px,
+      rgba(15, 23, 42, 0) 12px,
+      rgba(15, 23, 42, 0) 28px
+    );
+}
+
+.screen-share-stage__placeholder-copy {
+  display: grid;
+  gap: 10px;
+  padding: 20px 24px;
+  border-radius: 22px;
+  text-align: center;
+  background: rgba(4, 10, 20, 0.62);
+  border: 1px solid rgba(149, 184, 209, 0.18);
+  backdrop-filter: blur(18px);
+}
+
+.screen-share-stage__placeholder-copy span {
+  color: var(--muted);
 }
 
 .screen-share-stage__overlay {
@@ -1412,6 +1510,31 @@ button {
 
 .participant-tile__nameplate {
   max-width: min(100%, 320px);
+}
+
+.participant-tile--supporting .participant-tile__nameplate {
+  max-width: 100%;
+  padding: 10px 12px;
+}
+
+.participant-tile--supporting .participant-tile__nameplate span {
+  font-size: 0.78rem;
+}
+
+.participant-tile--supporting .participant-tile__avatar {
+  min-width: 60px;
+  height: 60px;
+  border-radius: 20px;
+  font-size: 1.2rem;
+}
+
+.participant-tile--supporting .participant-tile__badges {
+  gap: 6px;
+}
+
+.participant-tile--supporting .status-pill {
+  padding: 7px 10px;
+  font-size: 0.72rem;
 }
 
 .meeting-control-surface {
@@ -1699,6 +1822,77 @@ button {
   margin-right: 8px;
 }
 
+.stage-lab {
+  display: grid;
+  gap: 16px;
+  height: 100%;
+  min-height: 0;
+  padding: 16px 18px 18px;
+}
+
+.stage-lab__controls {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.stage-lab__copy {
+  display: grid;
+  gap: 10px;
+  max-width: 64ch;
+}
+
+.stage-lab__title {
+  margin: 0;
+  font-family: "Space Grotesk", "Manrope", sans-serif;
+  font-size: clamp(2rem, 4vw, 3.1rem);
+  line-height: 0.98;
+}
+
+.stage-lab__description {
+  margin: 0;
+  color: var(--muted);
+}
+
+.stage-lab__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.chip-button--muted {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+}
+
+.stage-lab__summary {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.stage-lab__surface {
+  display: flex;
+  flex-direction: column;
+  height: max(480px, calc(100vh - var(--header-height) - 230px));
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 32px;
+  background: rgba(8, 17, 31, 0.84);
+  backdrop-filter: blur(24px);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.stage-lab__surface > .meeting-stage-canvas {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 @media (max-width: 1200px) {
   .meeting-room-shell--chat-open .meeting-room-drawer--chat {
     width: min(336px, 31vw);
@@ -1782,6 +1976,20 @@ button {
 }
 
 @media (max-width: 820px) {
+  .stage-lab {
+    padding: 14px;
+  }
+
+  .stage-lab__controls {
+    align-items: flex-start;
+  }
+
+  .stage-lab__surface {
+    height: max(420px, calc(100vh - var(--header-height) - 250px));
+    padding: 16px;
+    border-radius: 28px;
+  }
+
   .meeting-room-stage-surface__title {
     font-size: clamp(1.7rem, 7vw, 2.5rem);
   }
@@ -1791,20 +1999,11 @@ button {
     align-items: flex-start;
   }
 
-  .stage-tiles {
-    grid-template-columns: 1fr;
-    grid-auto-rows: minmax(180px, 1fr);
-  }
-
   .meeting-control-dock {
     width: 100%;
     flex-wrap: wrap;
     justify-content: center;
     border-radius: 28px;
-  }
-
-  .meeting-stage-canvas--sharing {
-    grid-template-rows: minmax(0, 1.25fr) minmax(160px, 0.75fr);
   }
 
   .meeting-control-dock__cluster--secondary {
@@ -1832,6 +2031,16 @@ button {
 }
 
 @media (max-width: 640px) {
+  .stage-lab {
+    padding: 12px;
+  }
+
+  .stage-lab__surface {
+    height: max(360px, calc(100vh - var(--header-height) - 250px));
+    padding: 14px;
+    border-radius: 24px;
+  }
+
   .page--room {
     padding: 12px;
   }
@@ -1882,10 +2091,6 @@ button {
     justify-content: center;
   }
 
-  .meeting-stage-canvas--sharing {
-    grid-template-rows: minmax(0, 1.1fr) minmax(150px, 0.8fr);
-  }
-
   .screen-share-stage__overlay {
     padding: 14px;
   }
@@ -1902,6 +2107,20 @@ button {
     flex: initial;
     min-width: 0;
     scroll-snap-align: unset;
+  }
+
+  .stage-tiles {
+    width: 100%;
+  }
+
+  .participant-tile__overlay {
+    inset: auto 12px 12px 12px;
+  }
+
+  .participant-tile--supporting .participant-tile__avatar {
+    min-width: 54px;
+    height: 54px;
+    font-size: 1.08rem;
   }
 
   .meeting-participants-panel__row,

@@ -5,6 +5,7 @@ export type AppRoute =
   | { kind: "home"; pathname: "/" }
   | { kind: "sign-in"; pathname: "/sign-in" }
   | { kind: "legacy-join"; meetingCode: string | null; pathname: "/join" }
+  | { kind: "stage-lab"; pathname: "/__stage-lab" }
   | { kind: "meeting"; meetingCode: string; pathname: string };
 
 interface NavigateOptions {
@@ -63,6 +64,10 @@ function parseRoute(location: Location): AppRoute {
       meetingCode: normalizeMeetingCode(params.get("room") ?? ""),
       pathname,
     };
+  }
+
+  if (import.meta.env.DEV && pathname === "/__stage-lab") {
+    return { kind: "stage-lab", pathname };
   }
 
   return {

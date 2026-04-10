@@ -9,6 +9,11 @@ import type { ParticipantState } from "@opsui/shared-types";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createMediaSession } from "../lib/commands";
+import {
+  MeetingStageScene,
+  type MeetingStageParticipantTile,
+  type MeetingStageShareSourceMeta,
+} from "./MeetingStageScene";
 import { MeetingControlButton } from "./MeetingControlButton";
 import {
   LeaveCallIcon,
@@ -24,7 +29,6 @@ import type { ParticipantMediaIndicators } from "./MeetingParticipantsPanel";
 type MediaStatus = "idle" | "connecting" | "connected" | "warning" | "error";
 type MediaActionKind = "audio" | "video" | "screenshare";
 type MediaClient = Awaited<ReturnType<ReturnType<typeof useRealtimeKitClient>[1]>> | undefined;
-type ScreenShareSurface = "application" | "screen" | "browser" | "unknown";
 type ScreenshareConfiguration = {
   displaySurface?: "browser" | "monitor" | "window";
   frameRate: {
@@ -40,19 +44,12 @@ type ScreenshareConfiguration = {
   };
 };
 
-interface ScreenShareSourceMeta {
-  audioIncluded: boolean;
-  displaySurface: ScreenShareSurface;
-  label: string;
-  sourceId: string;
-}
-
 interface StageScreenShare {
   audioTrack?: MediaStreamTrack | null;
   displayName: string;
   isSelf?: boolean;
-  source: ScreenShareSourceMeta;
-  videoTrack: MediaStreamTrack;
+  source: MeetingStageShareSourceMeta;
+  videoTrack?: MediaStreamTrack | null;
 }
 
 interface MeetingMediaStageProps {
@@ -304,7 +301,7 @@ function ConnectedMediaStage(props: {
     currentMeeting.participants.active.toArray(),
   );
   const [isShareActionPending, setIsShareActionPending] = useState(false);
-  const [selfShareSource, setSelfShareSource] = useState<ScreenShareSourceMeta | null>(null);
+  const [selfShareSource, setSelfShareSource] = useState<MeetingStageShareSourceMeta | null>(null);
   const participantDirectory = useMemo(
     () => new Map(props.activeParticipants.map((participant) => [participant.participantId, participant])),
     [props.activeParticipants],
@@ -312,7 +309,6 @@ function ConnectedMediaStage(props: {
   const otherRemoteParticipants = remoteParticipants.filter(
     (participant) => participant.id !== self.id && participant.customParticipantId !== self.customParticipantId,
   );
-  const visibleRemoteParticipants = otherRemoteParticipants.slice(0, 3);
   const shareSupported = useMemo(
     () => typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getDisplayMedia),
     [],
@@ -327,11 +323,11 @@ function ConnectedMediaStage(props: {
       buildStageScreenShares({
         participantDirectory,
         participantDisplayName: props.participantDisplayName,
-        remoteParticipants: visibleRemoteParticipants,
+        remoteParticipants: otherRemoteParticipants,
         self,
         selfShareSource,
       }),
-    [participantDirectory, props.participantDisplayName, self, selfShareSource, visibleRemoteParticipants],
+    [otherRemoteParticipants, participantDirectory, props.participantDisplayName, self, selfShareSource],
   );
   const primaryScreenShare = stageScreenShares[0] ?? null;
   const additionalShareCount = Math.max(stageScreenShares.length - 1, 0);
@@ -341,6 +337,46 @@ function ConnectedMediaStage(props: {
       roomJoined &&
       !primaryScreenShare &&
       otherRemoteParticipants.length === 0,
+  );
+  const stageParticipantTiles = useMemo<MeetingStageParticipantTile[]>(
+    () => [
+      {
+        audioEnabled: self.audioEnabled,
+        displayName: props.participantDisplayName,
+        isSelf: true,
+        shareBadgeLabel:
+          self.screenShareEnabled && selfShareSource ? getShareBadgeLabel(selfShareSource) : null,
+        subtitle: buildTileSubtitle(self.audioEnabled, self.videoEnabled, true),
+        videoEnabled: self.videoEnabled,
+        videoTrack: self.videoTrack,
+      },
+      ...otherRemoteParticipants.map((participant) => {
+        const remoteShareTrack = participant.screenShareEnabled ? getScreenShareVideoTrack(participant) : null;
+        const remoteShareSource = remoteShareTrack
+          ? describeScreenShareSource(remoteShareTrack, getScreenShareAudioTrack(participant))
+          : null;
+
+        return {
+          audioEnabled: participant.audioEnabled,
+          audioTrack: participant.audioTrack,
+          displayName: resolveParticipantName(participant, participantDirectory),
+          shareBadgeLabel: remoteShareSource ? getShareBadgeLabel(remoteShareSource) : null,
+          subtitle: buildTileSubtitle(participant.audioEnabled, participant.videoEnabled, false),
+          videoEnabled: participant.videoEnabled,
+          videoTrack: participant.videoTrack,
+        } satisfies MeetingStageParticipantTile;
+      }),
+    ],
+    [
+      otherRemoteParticipants,
+      participantDirectory,
+      props.participantDisplayName,
+      self.audioEnabled,
+      self.screenShareEnabled,
+      self.videoEnabled,
+      self.videoTrack,
+      selfShareSource,
+    ],
   );
   const liveMediaStateByParticipantId = useMemo(() => {
     const nextState: Record<string, ParticipantMediaIndicators> = {};
@@ -473,50 +509,13 @@ function ConnectedMediaStage(props: {
     void handleStartScreenShare();
   }
 
-  const stageTiles = (
-    <div
-      className={`stage-tiles${primaryScreenShare ? " stage-tiles--supporting" : ""}${showImmersiveSoloStage ? " stage-tiles--solo" : ""}`}
-    >
-      <MediaTile
-        audioEnabled={self.audioEnabled}
-        displayName={props.participantDisplayName}
-        immersive={showImmersiveSoloStage}
-        isSelf
-        shareBadgeLabel={self.screenShareEnabled && selfShareSource ? getShareBadgeLabel(selfShareSource) : null}
-        subtitle={buildTileSubtitle(self.audioEnabled, self.videoEnabled, true)}
-        videoEnabled={self.videoEnabled}
-        videoTrack={self.videoTrack}
-      />
-
-      {visibleRemoteParticipants.map((participant) => {
-        const remoteShareTrack = participant.screenShareEnabled ? getScreenShareVideoTrack(participant) : null;
-        const remoteShareSource = remoteShareTrack
-          ? describeScreenShareSource(remoteShareTrack, getScreenShareAudioTrack(participant))
-          : null;
-
-        return (
-          <MediaTile
-            audioEnabled={participant.audioEnabled}
-            audioTrack={participant.audioTrack}
-            displayName={resolveParticipantName(participant, participantDirectory)}
-            key={participant.id}
-            shareBadgeLabel={remoteShareSource ? getShareBadgeLabel(remoteShareSource) : null}
-            subtitle={buildTileSubtitle(participant.audioEnabled, participant.videoEnabled, false)}
-            videoEnabled={participant.videoEnabled}
-            videoTrack={participant.videoTrack}
-          />
-        );
-      })}
-    </div>
-  );
-
   return (
     <div
       className={`meeting-stage-runtime${primaryScreenShare ? " meeting-stage-runtime--sharing" : ""}${showImmersiveSoloStage ? " meeting-stage-runtime--solo" : ""}`}
     >
       {!roomJoined ? (
-        <div className="meeting-stage-canvas">
-          <div className="stage-tiles">
+        <div className="meeting-stage-canvas meeting-stage-canvas--grid">
+          <div className="stage-tiles" style={{ ["--stage-columns" as string]: "1" }}>
             <article className="participant-tile participant-tile--empty">
               <div className="participant-tile__avatar participant-tile__avatar--ghost">O</div>
               <div className="participant-tile__meta">
@@ -527,22 +526,18 @@ function ConnectedMediaStage(props: {
           </div>
         </div>
       ) : (
-        <div
-          className={`meeting-stage-canvas${primaryScreenShare ? " meeting-stage-canvas--sharing" : ""}${showImmersiveSoloStage ? " meeting-stage-canvas--solo" : ""}`}
-        >
-          {primaryScreenShare ? (
-            <ScreenShareTile
-              audioTrack={primaryScreenShare.audioTrack}
-              displayName={primaryScreenShare.displayName}
-              extraShareCount={additionalShareCount}
-              isSelf={primaryScreenShare.isSelf}
-              source={primaryScreenShare.source}
-              videoTrack={primaryScreenShare.videoTrack}
-            />
-          ) : null}
-
-          {stageTiles}
-        </div>
+        <MeetingStageScene
+          immersiveSoloMode={showImmersiveSoloStage}
+          participantTiles={stageParticipantTiles}
+          primaryScreenShare={
+            primaryScreenShare
+              ? {
+                  ...primaryScreenShare,
+                  extraShareCount: additionalShareCount,
+                }
+              : null
+          }
+        />
       )}
 
       <MediaToolbar
@@ -664,144 +659,6 @@ function MediaToolbar(props: {
   );
 }
 
-function MediaTile(props: {
-  audioEnabled: boolean;
-  audioTrack?: MediaStreamTrack | null;
-  displayName: string;
-  immersive?: boolean;
-  isSelf?: boolean;
-  shareBadgeLabel?: string | null;
-  subtitle: string;
-  videoEnabled: boolean;
-  videoTrack?: MediaStreamTrack | null;
-}) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
-
-  useEffect(() => {
-    if (!videoRef.current) {
-      return;
-    }
-
-    if (props.videoEnabled && props.videoTrack) {
-      const stream = new MediaStream([props.videoTrack]);
-      videoRef.current.srcObject = stream;
-      return;
-    }
-
-    videoRef.current.srcObject = null;
-  }, [props.videoEnabled, props.videoTrack]);
-
-  useEffect(() => {
-    if (!audioRef.current || props.isSelf) {
-      return;
-    }
-
-    if (props.audioEnabled && props.audioTrack) {
-      const stream = new MediaStream([props.audioTrack]);
-      audioRef.current.srcObject = stream;
-      void audioRef.current.play().catch(() => {});
-      return;
-    }
-
-    audioRef.current.srcObject = null;
-  }, [props.audioEnabled, props.audioTrack, props.isSelf]);
-
-  return (
-    <article
-      className={`participant-tile participant-tile--media${props.videoEnabled ? "" : " participant-tile--muted"}${props.immersive ? " participant-tile--immersive" : ""}`}
-    >
-      <div className="participant-tile__media-shell">
-        <video
-          autoPlay
-          className="participant-tile__video"
-          muted={Boolean(props.isSelf)}
-          playsInline
-          ref={videoRef}
-        />
-        {!props.isSelf ? <audio autoPlay className="sr-only" ref={audioRef} /> : null}
-        {!props.videoEnabled ? (
-          <div className="participant-tile__placeholder">
-            <div className="participant-tile__avatar">{getInitials(props.displayName)}</div>
-          </div>
-        ) : null}
-        <div className={`participant-tile__overlay${props.immersive ? " participant-tile__overlay--immersive" : ""}`}>
-          <div className="participant-tile__nameplate">
-            <strong>{props.displayName}</strong>
-            <span>{props.subtitle}</span>
-          </div>
-          <div className={`participant-tile__badges${props.immersive ? " participant-tile__badges--immersive" : ""}`}>
-            {props.shareBadgeLabel ? <span className="status-pill status-pill--accent">{props.shareBadgeLabel}</span> : null}
-            {!props.immersive && props.isSelf ? <span className="status-pill">You</span> : null}
-            {!props.immersive ? <span className="status-pill">{props.audioEnabled ? "Mic On" : "Mic Off"}</span> : null}
-            {!props.immersive ? <span className="status-pill">{props.videoEnabled ? "Camera On" : "Camera Off"}</span> : null}
-          </div>
-        </div>
-      </div>
-    </article>
-  );
-}
-
-function ScreenShareTile(props: {
-  audioTrack?: MediaStreamTrack | null;
-  displayName: string;
-  extraShareCount: number;
-  isSelf?: boolean;
-  source: ScreenShareSourceMeta;
-  videoTrack: MediaStreamTrack;
-}) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
-
-  useEffect(() => {
-    if (!videoRef.current) {
-      return;
-    }
-
-    videoRef.current.srcObject = new MediaStream([props.videoTrack]);
-  }, [props.videoTrack]);
-
-  useEffect(() => {
-    if (!audioRef.current || props.isSelf) {
-      return;
-    }
-
-    if (props.audioTrack) {
-      audioRef.current.srcObject = new MediaStream([props.audioTrack]);
-      void audioRef.current.play().catch(() => {});
-      return;
-    }
-
-    audioRef.current.srcObject = null;
-  }, [props.audioTrack, props.isSelf]);
-
-  return (
-    <article className="screen-share-stage">
-      <div className="screen-share-stage__media-shell">
-        <video
-          autoPlay
-          className="screen-share-stage__video"
-          muted={Boolean(props.isSelf)}
-          playsInline
-          ref={videoRef}
-        />
-        {!props.isSelf ? <audio autoPlay className="sr-only" ref={audioRef} /> : null}
-        <div className="screen-share-stage__overlay">
-          <div className="screen-share-stage__badges">
-            <span className="status-pill status-pill--accent">{getShareBadgeLabel(props.source)}</span>
-            {props.source.audioIncluded ? <span className="status-pill">Audio Included</span> : null}
-            {props.extraShareCount ? <span className="status-pill">+{props.extraShareCount} more share{props.extraShareCount > 1 ? "s" : ""}</span> : null}
-          </div>
-          <div className="screen-share-stage__nameplate participant-tile__nameplate">
-            <strong>{props.isSelf ? "You are sharing" : `${props.displayName} is sharing`}</strong>
-            <span>{props.source.label}</span>
-          </div>
-        </div>
-      </div>
-    </article>
-  );
-}
-
 function StageFallback(props: {
   activeParticipants: ParticipantState[];
   extraControls?: ReactNode;
@@ -815,12 +672,25 @@ function StageFallback(props: {
   onRetry: (() => void) | null;
   screenShareDisabledReason: string | null;
 }) {
-  const visibleParticipants = props.activeParticipants.slice(0, 4);
-  const showImmersiveSoloStage = Boolean(props.immersiveSoloMode && visibleParticipants.length === 1);
+  const showImmersiveSoloStage = Boolean(
+    props.immersiveSoloMode && props.activeParticipants.length === 1,
+  );
+  const fallbackStageTiles = useMemo<MeetingStageParticipantTile[]>(
+    () =>
+      props.activeParticipants.map((participant) => ({
+        audioEnabled: participant.audio === "unmuted",
+        displayName: participant.displayName,
+        subtitle: `${participant.audio} audio / ${participant.video} video`,
+        videoEnabled: participant.video === "on",
+      })),
+    [props.activeParticipants],
+  );
 
   useEffect(() => {
-    props.onLiveParticipantCountChange?.(props.meetingActive ? visibleParticipants.length : null);
-  }, [props.meetingActive, props.onLiveParticipantCountChange, visibleParticipants.length]);
+    props.onLiveParticipantCountChange?.(
+      props.meetingActive ? props.activeParticipants.length : null,
+    );
+  }, [props.activeParticipants.length, props.meetingActive, props.onLiveParticipantCountChange]);
 
   useEffect(() => {
     const nextState = Object.fromEntries(
@@ -839,26 +709,15 @@ function StageFallback(props: {
 
   return (
     <div className={`meeting-stage-runtime${showImmersiveSoloStage ? " meeting-stage-runtime--solo" : ""}`}>
-      <div className="meeting-stage-canvas">
-        <div className={`stage-tiles${showImmersiveSoloStage ? " stage-tiles--solo" : ""}`}>
-          {visibleParticipants.length > 0 ? (
-            visibleParticipants.map((participant) => (
-              <article
-                className={`participant-tile${showImmersiveSoloStage ? " participant-tile--fallback-summary-solo" : ""}`}
-                key={participant.participantId}
-              >
-                <div className="participant-tile__avatar">
-                  {getInitials(participant.displayName)}
-                </div>
-                <div className="participant-tile__meta">
-                  <strong>{participant.displayName}</strong>
-                  <span>
-                    {participant.audio} audio / {participant.video} video
-                  </span>
-                </div>
-              </article>
-            ))
-          ) : (
+      {fallbackStageTiles.length > 0 ? (
+        <MeetingStageScene
+          immersiveSoloMode={showImmersiveSoloStage}
+          participantTiles={fallbackStageTiles}
+          primaryScreenShare={null}
+        />
+      ) : (
+        <div className="meeting-stage-canvas meeting-stage-canvas--grid">
+          <div className={`stage-tiles${showImmersiveSoloStage ? " stage-tiles--solo" : ""}`}>
             <article className="participant-tile participant-tile--empty">
               <div className="participant-tile__avatar participant-tile__avatar--ghost">O</div>
               <div className="participant-tile__meta">
@@ -870,9 +729,9 @@ function StageFallback(props: {
                 </span>
               </div>
             </article>
-          )}
+          </div>
         </div>
-      </div>
+      )}
 
       <MediaToolbar
         extraControls={props.extraControls}
@@ -897,7 +756,7 @@ function buildStageScreenShares(input: {
   participantDisplayName: string;
   remoteParticipants: RTKParticipant[];
   self: RTKSelf;
-  selfShareSource: ScreenShareSourceMeta | null;
+  selfShareSource: MeetingStageShareSourceMeta | null;
 }): StageScreenShare[] {
   const stageShares: StageScreenShare[] = [];
 
@@ -1119,7 +978,7 @@ function getScreenShareAudioTrack(
 function describeScreenShareSource(
   videoTrack: MediaStreamTrack,
   audioTrack?: MediaStreamTrack | null,
-): ScreenShareSourceMeta {
+): MeetingStageShareSourceMeta {
   const settings = typeof videoTrack.getSettings === "function" ? videoTrack.getSettings() : {};
   const surface = normaliseDisplaySurface(settings.displaySurface);
   const defaultLabel = getDefaultShareLabel(surface);
@@ -1135,7 +994,7 @@ function describeScreenShareSource(
 
 function normaliseDisplaySurface(
   displaySurface: string | undefined,
-): ScreenShareSurface {
+): MeetingStageShareSourceMeta["displaySurface"] {
   if (displaySurface === "window") {
     return "application";
   }
@@ -1151,7 +1010,7 @@ function normaliseDisplaySurface(
   return "unknown";
 }
 
-function getDefaultShareLabel(surface: ScreenShareSurface): string {
+function getDefaultShareLabel(surface: MeetingStageShareSourceMeta["displaySurface"]): string {
   if (surface === "application") {
     return "Application window";
   }
@@ -1167,7 +1026,7 @@ function getDefaultShareLabel(surface: ScreenShareSurface): string {
   return "Shared surface";
 }
 
-function getShareBadgeLabel(source: ScreenShareSourceMeta): string {
+function getShareBadgeLabel(source: MeetingStageShareSourceMeta): string {
   if (source.displaySurface === "application") {
     return "Sharing Application";
   }
@@ -1181,16 +1040,4 @@ function getShareBadgeLabel(source: ScreenShareSourceMeta): string {
   }
 
   return "Sharing";
-}
-
-function getInitials(value: string): string {
-  const words = value.trim().split(/\s+/).filter(Boolean);
-  if (!words.length) {
-    return "OM";
-  }
-
-  return words
-    .slice(0, 2)
-    .map((word) => word[0]?.toUpperCase() ?? "")
-    .join("");
 }
