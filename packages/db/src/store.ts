@@ -12,6 +12,8 @@ import type {
 
 export interface StoredParticipantState extends ParticipantState {
   joinSessionId?: string;
+  reconnectingSinceAt?: string;
+  reconnectingToPresence?: Exclude<ParticipantState["presence"], "left" | "reconnecting">;
   sessionLastSeenAt?: string;
 }
 

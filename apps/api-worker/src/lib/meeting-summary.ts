@@ -14,7 +14,7 @@ export function syncMeetingSummary(
   const actionItems = repositories.actionItems.listByMeetingInstance(meetingInstanceId);
   const recording = repositories.recordings.getByMeetingInstanceId(meetingInstanceId);
   const attendanceCount = participants.filter((participant) => Boolean(participant.joinedAt)).length;
-  const activeCount = participants.filter((participant) => participant.presence === "active").length;
+  const activeCount = participants.filter((participant) => isInMeetingPresence(participant.presence)).length;
   const lobbyCount = participants.filter((participant) => participant.presence === "lobby").length;
   const openActionItems = actionItems.filter((item) => item.status === "open");
   const actionItemCount = openActionItems.length;
@@ -39,6 +39,10 @@ export function syncMeetingSummary(
     recordingStatus: recording?.status ?? "idle",
     followUps,
   });
+}
+
+function isInMeetingPresence(presence: "active" | "breakout" | "left" | "lobby" | "reconnecting"): boolean {
+  return presence === "active" || presence === "reconnecting";
 }
 
 function buildHeadline(input: {

@@ -31,7 +31,7 @@ export function buildMeetingFollowUpPackage(
     actionItems,
     attendance: {
       joined: participants.filter((participant) => Boolean(participant.joinedAt)).length,
-      active: participants.filter((participant) => participant.presence === "active").length,
+      active: participants.filter((participant) => isInMeetingPresence(participant.presence)).length,
       lobby: participants.filter((participant) => participant.presence === "lobby").length,
       left: participants.filter((participant) => participant.presence === "left").length,
     },
@@ -120,4 +120,8 @@ export function buildFollowUpMarkdown(pkg: MeetingFollowUpPackage): string {
 
 export function buildFollowUpFilename(title: string): string {
   return `follow-up-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "meeting"}`;
+}
+
+function isInMeetingPresence(presence: string): boolean {
+  return presence === "active" || presence === "reconnecting";
 }

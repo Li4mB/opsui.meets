@@ -24,6 +24,28 @@ const apiServer = http.createServer(async (request, response) => {
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/__participants/stale") {
+    const body = await readJsonBody(request);
+    const meetingId = String(body?.meetingInstanceId ?? "");
+    const participantId = String(body?.participantId ?? "");
+    const olderThanMs = Number(body?.olderThanMs ?? 3 * 60_000);
+    const participant = findParticipant(meetingId, participantId);
+
+    if (!participant) {
+      sendJson(request, response, 404, { error: "participant_not_found" });
+      return;
+    }
+
+    participant.sessionLastSeenAt = new Date(Date.now() - Math.max(olderThanMs, 0)).toISOString();
+    sendJson(request, response, 200, {
+      meetingInstanceId: meetingId,
+      ok: true,
+      participantId,
+      sessionLastSeenAt: participant.sessionLastSeenAt,
+    });
+    return;
+  }
+
   if (request.method === "GET" && (url.pathname === "/health" || url.pathname === "/v1/health")) {
     sendJson(request, response, 200, {
       ok: true,
@@ -207,6 +229,8 @@ const apiServer = http.createServer(async (request, response) => {
     });
     participant.displayName = displayName;
     participant.presence = sessionType === "user" ? "active" : "lobby";
+    participant.reconnectingSinceAt = null;
+    participant.reconnectingToPresence = null;
     participant.sessionLastSeenAt = new Date().toISOString();
     participant.audio = room.policy.mutedOnEntry ? "muted" : "unmuted";
     participant.video = room.policy.cameraOffOnEntry ? "off" : "on";
@@ -271,6 +295,8 @@ const apiServer = http.createServer(async (request, response) => {
     }
 
     participant.presence = "active";
+    participant.reconnectingSinceAt = null;
+    participant.reconnectingToPresence = null;
     addEvent(admitMatch[1], "participant.admitted", { participantId: participant.participantId });
     sendJson(request, response, 200, { ok: true });
     return;
@@ -285,6 +311,8 @@ const apiServer = http.createServer(async (request, response) => {
     }
 
     participant.presence = "left";
+    participant.reconnectingSinceAt = null;
+    participant.reconnectingToPresence = null;
     addEvent(removeMatch[1], "participant.removed", { participantId: participant.participantId });
     sendJson(request, response, 200, { ok: true });
     return;
@@ -299,6 +327,8 @@ const apiServer = http.createServer(async (request, response) => {
     }
 
     participant.presence = "left";
+    participant.reconnectingSinceAt = null;
+    participant.reconnectingToPresence = null;
     participant.audio = "muted";
     participant.video = "off";
     addEvent(leaveMatch[1], "participant.leave", { participantId: participant.participantId });
@@ -324,6 +354,11 @@ const apiServer = http.createServer(async (request, response) => {
     }
 
     participant.sessionLastSeenAt = new Date().toISOString();
+    if (participant.presence === "reconnecting") {
+      participant.presence = participant.reconnectingToPresence ?? "active";
+      participant.reconnectingSinceAt = null;
+      participant.reconnectingToPresence = null;
+    }
     sendJson(request, response, 200, participant);
     return;
   }
@@ -647,6 +682,8 @@ function createParticipant(input) {
     meetingInstanceId: input.meetingId,
     participantId: `participant_${state.nextParticipantNumber++}`,
     presence: "lobby",
+    reconnectingSinceAt: null,
+    reconnectingToPresence: null,
     role: input.role,
     sessionLastSeenAt: new Date().toISOString(),
     video: "off",
@@ -757,6 +794,7 @@ function findParticipantByJoinSession(meetingId, joinSessionId) {
 
 function expireStaleParticipants(meetingId, staleAfterMs = 2 * 60_000) {
   const cutoff = Date.now() - staleAfterMs;
+  const reconnectGraceMs = 5 * 60_000;
   for (const participant of state.participants.get(meetingId) ?? []) {
     if (participant.presence === "left" || !participant.sessionLastSeenAt) {
       continue;
@@ -766,10 +804,26 @@ function expireStaleParticipants(meetingId, staleAfterMs = 2 * 60_000) {
       continue;
     }
 
-    participant.presence = "left";
-    participant.audio = "muted";
-    participant.video = "off";
-    participant.handRaised = false;
+    if (participant.presence === "reconnecting") {
+      const reconnectingSinceAt = participant.reconnectingSinceAt
+        ? Date.parse(participant.reconnectingSinceAt)
+        : Number.NaN;
+      if (Number.isFinite(reconnectingSinceAt) && Date.now() - reconnectingSinceAt <= reconnectGraceMs) {
+        continue;
+      }
+
+      participant.presence = "left";
+      participant.audio = "muted";
+      participant.video = "off";
+      participant.handRaised = false;
+      participant.reconnectingSinceAt = null;
+      participant.reconnectingToPresence = null;
+      continue;
+    }
+
+    participant.reconnectingSinceAt = new Date().toISOString();
+    participant.reconnectingToPresence = participant.presence === "lobby" ? "lobby" : "active";
+    participant.presence = "reconnecting";
   }
 }
 

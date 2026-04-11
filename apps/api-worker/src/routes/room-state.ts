@@ -7,6 +7,7 @@ import { syncRealtimeRoomState } from "../lib/realtime";
 import type { Env } from "../types";
 
 const STALE_PARTICIPANT_SESSION_MS = 2 * 60_000;
+const RECONNECTING_PARTICIPANT_GRACE_MS = 5 * 60_000;
 
 export async function getRoomState(slug: string, env: Env): Promise<Response> {
   const repositories = await getRepositories(env);
@@ -31,6 +32,7 @@ export async function getRoomState(slug: string, env: Env): Promise<Response> {
   }
 
   const expiredParticipants = repositories.participants.expireStaleSessions(meeting.id, {
+    reconnectGraceMs: RECONNECTING_PARTICIPANT_GRACE_MS,
     staleAfterMs: STALE_PARTICIPANT_SESSION_MS,
   });
   if (expiredParticipants.length) {
@@ -48,9 +50,9 @@ export async function getRoomState(slug: string, env: Env): Promise<Response> {
 
   if (expiredParticipants.length) {
     void syncRealtimeRoomState(env, meeting.id, {
-      participants: expiredParticipants.map((participant) => ({
+      participants: expiredParticipants.map(({ action, participant }) => ({
         participantId: participant.participantId,
-        presence: "removed" as const,
+        presence: action === "expired" ? ("removed" as const) : "reconnecting",
       })),
     });
   }

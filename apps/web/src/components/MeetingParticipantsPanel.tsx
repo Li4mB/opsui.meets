@@ -134,7 +134,13 @@ function ParticipantListRow(props: {
     screenShareEnabled: false,
     videoEnabled: props.participant.video === "on",
   };
-  const inMeeting = props.participant.presence === "active";
+  const inMeeting = props.participant.presence === "active" || props.participant.presence === "reconnecting";
+  const participantStatusLabel =
+    props.participant.presence === "reconnecting"
+      ? "Reconnecting"
+      : inMeeting
+        ? "In meeting"
+        : "Waiting in lobby";
 
   return (
     <article className="meeting-participants-panel__row">
@@ -147,7 +153,7 @@ function ParticipantListRow(props: {
             {props.showHostLabel ? <span className="status-pill status-pill--accent">Host</span> : null}
           </div>
           <span className="meeting-participants-panel__meta">
-            {inMeeting ? "In meeting" : "Waiting in lobby"}
+            {participantStatusLabel}
           </span>
         </div>
       </div>

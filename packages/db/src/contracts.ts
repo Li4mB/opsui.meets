@@ -40,6 +40,8 @@ export interface MeetingsRepositoryContract {
 }
 
 export interface ParticipantsRepositoryContract {
+  // Sweeps stale session leases into a recoverable reconnecting state before a later terminal expiry.
+  // This prevents brief transport/background interruptions from being treated like explicit leaves.
   listByMeetingInstance(meetingInstanceId: string): ParticipantState[];
   registerJoin(input: {
     meetingInstanceId: string;
@@ -57,9 +59,13 @@ export interface ParticipantsRepositoryContract {
     meetingInstanceId: string,
     options?: {
       now?: Date;
+      reconnectGraceMs?: number;
       staleAfterMs?: number;
     },
-  ): ParticipantState[];
+  ): Array<{
+    action: "expired" | "reconnecting";
+    participant: ParticipantState;
+  }>;
   admitToMeeting(meetingInstanceId: string, participantId: string): ParticipantState | null;
   leaveMeeting(meetingInstanceId: string, participantId: string): ParticipantState | null;
   removeFromMeeting(meetingInstanceId: string, participantId: string): ParticipantState | null;

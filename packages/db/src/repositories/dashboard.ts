@@ -16,7 +16,7 @@ export class DashboardRepository {
     return {
       roomsCount,
       meetingsCount,
-      activeParticipants: participants.filter((participant) => participant.presence === "active").length,
+      activeParticipants: participants.filter((participant) => isInMeetingPresence(participant.presence)).length,
       lobbyParticipants: participants.filter((participant) => participant.presence === "lobby").length,
       raisedHands: participants.filter((participant) => participant.handRaised).length,
     };
@@ -31,7 +31,7 @@ export class DashboardRepository {
       store.participants
         .filter(
           (participant) =>
-            participant.presence === "active" && meetingIds.has(participant.meetingInstanceId),
+            isInMeetingPresence(participant.presence) && meetingIds.has(participant.meetingInstanceId),
         )
         .map((participant) => participant.meetingInstanceId),
     );
@@ -66,6 +66,10 @@ export class DashboardRepository {
       ],
     };
   }
+}
+
+function isInMeetingPresence(presence: string): boolean {
+  return presence === "active" || presence === "reconnecting";
 }
 
 function getLatestMeetingAttempts(attempts: HookDeliveryAttempt[]): HookDeliveryAttempt[] {

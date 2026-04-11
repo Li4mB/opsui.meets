@@ -298,6 +298,11 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       return;
     }
 
+    if (currentParticipant.presence === "reconnecting") {
+      setServiceMessage((current) => current ?? "Connection to meeting services was interrupted. Reconnecting...");
+      return;
+    }
+
     if (joinState === "lobby" && currentParticipant.presence === "active") {
       setJoinState("direct");
       setJoinMessage("You were admitted to the room.");
@@ -400,7 +405,10 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
           }
         }, REALTIME_PING_INTERVAL_MS);
         socket?.send(JSON.stringify({ type: "snapshot.request" }));
-        scheduleRoomRefresh({ immediate: true });
+        const scopeId = meetingScopeRef.current;
+        void heartbeatMeetingSession(scopeId).finally(() => {
+          scheduleRoomRefresh({ immediate: true, scopeId });
+        });
       });
       socket.addEventListener("message", (event) => {
         if (parseRealtimeMessageType(event.data) === "pong") {
@@ -431,8 +439,11 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
         return;
       }
 
+      const scopeId = meetingScopeRef.current;
       if (document.visibilityState !== "hidden") {
-        scheduleRoomRefresh({ immediate: true });
+        void heartbeatMeetingSession(scopeId).finally(() => {
+          scheduleRoomRefresh({ immediate: true, scopeId });
+        });
       }
 
       if (!socket || socket.readyState === WebSocket.CLOSED) {
@@ -469,8 +480,9 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       }
 
       const scopeId = meetingScopeRef.current;
-      scheduleRoomRefresh({ immediate: true, scopeId });
-      void heartbeatMeetingSession(scopeId);
+      void heartbeatMeetingSession(scopeId).finally(() => {
+        scheduleRoomRefresh({ immediate: true, scopeId });
+      });
     };
 
     document.addEventListener("visibilitychange", resumeMeetingSession);
@@ -704,7 +716,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     );
   }
 
-  const activeParticipants = participants.filter((entry) => entry.presence === "active");
+  const activeParticipants = participants.filter((entry) => isInMeetingPresence(entry.presence));
   const lobbyParticipants = participants.filter((entry) => entry.presence === "lobby");
   const canManageMeeting =
     Boolean(props.session?.authenticated) ||
@@ -1108,6 +1120,12 @@ function getChatDisabledReason(input: {
   }
 
   return null;
+}
+
+function isInMeetingPresence(
+  presence: ParticipantState["presence"],
+): boolean {
+  return presence === "active" || presence === "reconnecting";
 }
 
 function getScreenShareDisabledReason(input: {

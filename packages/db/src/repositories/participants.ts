@@ -2,6 +2,7 @@ import type { ParticipantState } from "@opsui/shared-types";
 import { getMemoryStore, type MemoryStoreAccessor, type StoredParticipantState } from "../store";
 
 const DEFAULT_STALE_SESSION_MS = 2 * 60_000;
+const DEFAULT_RECONNECT_GRACE_MS = 5 * 60_000;
 
 export class ParticipantsRepository {
   constructor(private readonly getStore: MemoryStoreAccessor = getMemoryStore) {}
@@ -38,6 +39,7 @@ export class ParticipantsRepository {
       existing.joinSessionId = input.joinSessionId ?? existing.joinSessionId;
       existing.role = input.role ?? existing.role;
       existing.sessionLastSeenAt = new Date().toISOString();
+      clearReconnectLease(existing);
       existing.joinedAt =
         input.presence === "active" ? existing.joinedAt ?? new Date().toISOString() : existing.joinedAt;
       return toPublicParticipant(existing);
@@ -79,6 +81,10 @@ export class ParticipantsRepository {
     }
 
     participant.sessionLastSeenAt = new Date().toISOString();
+    if (participant.presence === "reconnecting") {
+      participant.presence = participant.reconnectingToPresence ?? "active";
+      clearReconnectLease(participant);
+    }
     return toPublicParticipant(participant);
   }
 
@@ -86,13 +92,22 @@ export class ParticipantsRepository {
     meetingInstanceId: string,
     options?: {
       now?: Date;
+      reconnectGraceMs?: number;
       staleAfterMs?: number;
     },
-  ): ParticipantState[] {
+  ): Array<{
+    action: "expired" | "reconnecting";
+    participant: ParticipantState;
+  }> {
     const now = options?.now ?? new Date();
+    const reconnectGraceMs = options?.reconnectGraceMs ?? DEFAULT_RECONNECT_GRACE_MS;
     const staleAfterMs = options?.staleAfterMs ?? DEFAULT_STALE_SESSION_MS;
     const cutoff = now.getTime() - staleAfterMs;
-    const expired: ParticipantState[] = [];
+    const expired: Array<{
+      action: "expired" | "reconnecting";
+      participant: ParticipantState;
+    }> = [];
+    const nowIso = now.toISOString();
 
     for (const participant of this.getStore().participants) {
       if (participant.meetingInstanceId !== meetingInstanceId || participant.presence === "left") {
@@ -104,11 +119,34 @@ export class ParticipantsRepository {
         continue;
       }
 
-      participant.presence = "left";
-      participant.audio = "muted";
-      participant.video = "off";
-      participant.handRaised = false;
-      expired.push(toPublicParticipant(participant));
+      if (participant.presence === "reconnecting") {
+        const reconnectingSinceAt = participant.reconnectingSinceAt
+          ? Date.parse(participant.reconnectingSinceAt)
+          : Number.NaN;
+        if (Number.isFinite(reconnectingSinceAt) && now.getTime() - reconnectingSinceAt <= reconnectGraceMs) {
+          continue;
+        }
+
+        participant.presence = "left";
+        participant.sessionLastSeenAt = nowIso;
+        participant.audio = "muted";
+        participant.video = "off";
+        participant.handRaised = false;
+        clearReconnectLease(participant);
+        expired.push({
+          action: "expired",
+          participant: toPublicParticipant(participant),
+        });
+        continue;
+      }
+
+      participant.reconnectingToPresence = toReconnectTargetPresence(participant.presence);
+      participant.reconnectingSinceAt = nowIso;
+      participant.presence = "reconnecting";
+      expired.push({
+        action: "reconnecting",
+        participant: toPublicParticipant(participant),
+      });
     }
 
     return expired;
@@ -125,6 +163,7 @@ export class ParticipantsRepository {
 
     participant.presence = "active";
     participant.sessionLastSeenAt = new Date().toISOString();
+    clearReconnectLease(participant);
     participant.joinedAt = participant.joinedAt ?? new Date().toISOString();
     return participant ? toPublicParticipant(participant) : null;
   }
@@ -140,6 +179,7 @@ export class ParticipantsRepository {
 
     participant.presence = "left";
     participant.sessionLastSeenAt = new Date().toISOString();
+    clearReconnectLease(participant);
     participant.audio = "muted";
     participant.video = "off";
     participant.handRaised = false;
@@ -157,6 +197,7 @@ export class ParticipantsRepository {
 
     participant.presence = "left";
     participant.sessionLastSeenAt = new Date().toISOString();
+    clearReconnectLease(participant);
     participant.audio = "blocked";
     participant.video = "blocked";
     participant.handRaised = false;
@@ -186,6 +227,7 @@ export class ParticipantsRepository {
     for (const participant of participants) {
       participant.presence = "left";
       participant.sessionLastSeenAt = new Date().toISOString();
+      clearReconnectLease(participant);
       participant.audio = "blocked";
       participant.video = "blocked";
       participant.handRaised = false;
@@ -198,8 +240,25 @@ export class ParticipantsRepository {
 function toPublicParticipant(participant: StoredParticipantState): ParticipantState {
   const {
     joinSessionId: _joinSessionId,
+    reconnectingSinceAt: _reconnectingSinceAt,
+    reconnectingToPresence: _reconnectingToPresence,
     sessionLastSeenAt: _sessionLastSeenAt,
     ...publicParticipant
   } = participant;
   return publicParticipant;
+}
+
+function clearReconnectLease(participant: StoredParticipantState): void {
+  participant.reconnectingSinceAt = undefined;
+  participant.reconnectingToPresence = undefined;
+}
+
+function toReconnectTargetPresence(
+  presence: ParticipantState["presence"],
+): Exclude<ParticipantState["presence"], "left" | "reconnecting"> {
+  if (presence === "lobby" || presence === "breakout") {
+    return presence;
+  }
+
+  return "active";
 }
