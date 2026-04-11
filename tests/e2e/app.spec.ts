@@ -435,8 +435,23 @@ async function expectRoomNotice(page: Page, text: string) {
 }
 
 async function expectSoloImmersiveStage(page: Page) {
-  await expect(page.locator(".stage-tiles--solo")).toBeVisible();
-  await expect(page.locator(".participant-tile--immersive, .participant-tile--fallback-summary-solo").first()).toBeVisible();
+  const canvas = page.locator(".meeting-stage-canvas");
+  const tile = page.locator(".participant-tile--immersive, .participant-tile--fallback-summary-solo").first();
+
+  await expect(canvas).toHaveAttribute("data-stage-layout", "grid");
+  await expect(canvas).toHaveAttribute("data-stage-columns", "1");
+  await expect(tile).toBeVisible();
+
+  const [canvasBox, tileBox] = await Promise.all([canvas.boundingBox(), tile.boundingBox()]);
+  if (!canvasBox || !tileBox) {
+    throw new Error("Expected solo meeting stage to expose measurable geometry");
+  }
+
+  const tileRatio = tileBox.width / tileBox.height;
+  expect(tileRatio).toBeGreaterThan(1.72);
+  expect(tileRatio).toBeLessThan(1.84);
+  expect(tileBox.width).toBeLessThan(canvasBox.width * 0.8);
+  expect(tileBox.height).toBeLessThan(canvasBox.height * 0.72);
   await expect(page.getByRole("heading", { name: /Meeting OPS-/i })).toHaveCount(0);
   await expect(page.getByText("Waiting for more people")).toHaveCount(0);
 }

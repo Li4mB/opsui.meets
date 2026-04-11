@@ -1302,11 +1302,6 @@ button {
   align-items: stretch;
 }
 
-.meeting-stage-canvas--solo {
-  gap: 0;
-  height: 100%;
-}
-
 .stage-media {
   display: grid;
   grid-template-rows: minmax(0, 1fr);
@@ -1342,19 +1337,6 @@ button {
   align-self: center;
 }
 
-.stage-tiles--solo {
-  flex: 1 1 auto;
-  height: 100%;
-  justify-content: stretch;
-  width: 100%;
-  max-height: none;
-}
-
-.stage-tiles--solo > .stage-tiles__row {
-  flex: 1 1 auto;
-}
-
-.stage-tiles__row > .participant-tile:only-child,
 .participant-tile--empty {
   width: 100%;
   max-width: 100%;
@@ -1406,15 +1388,6 @@ button {
   color: var(--muted);
 }
 
-.participant-tile--immersive,
-.stage-tiles--solo > .stage-tiles__row > .participant-tile {
-  min-height: 100%;
-  flex: 1 1 auto;
-  height: 100%;
-  aspect-ratio: auto;
-  width: 100%;
-}
-
 .participant-tile--supporting {
   border-radius: 24px;
 }
@@ -1444,8 +1417,8 @@ button {
 
 .screen-share-stage {
   position: relative;
+  align-self: stretch;
   min-height: 0;
-  height: 100%;
   overflow: hidden;
   border-radius: 30px;
   border: 1px solid var(--border);
@@ -2114,20 +2087,6 @@ button {
 
   .screen-share-stage__overlay {
     padding: 14px;
-  }
-
-  .stage-tiles--solo {
-    display: grid;
-    margin: 0;
-    overflow: visible;
-    padding-bottom: 0;
-    scroll-snap-type: none;
-  }
-
-  .stage-tiles--solo > .participant-tile {
-    flex: initial;
-    min-width: 0;
-    scroll-snap-align: unset;
   }
 
   .stage-tiles {

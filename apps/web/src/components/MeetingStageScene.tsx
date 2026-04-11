@@ -36,7 +36,7 @@ interface MeetingStageSceneProps {
   primaryScreenShare: MeetingStageShareTile | null;
 }
 
-type StageLayoutMode = "grid" | "share-bottom" | "share-side" | "solo";
+type StageLayoutMode = "grid" | "share-bottom" | "share-side";
 
 interface StageLayout {
   columns: number;
@@ -114,7 +114,7 @@ export function MeetingStageScene(props: MeetingStageSceneProps) {
       ) : null}
 
       <div
-        className={`stage-tiles${supportingStage ? " stage-tiles--supporting" : ""}${showImmersiveSoloStage ? " stage-tiles--solo" : ""}`}
+        className={`stage-tiles${supportingStage ? " stage-tiles--supporting" : ""}`}
         style={tilesStyle}
       >
         {stageRows.map((row, rowIndex) => (
@@ -344,21 +344,6 @@ function computeStageLayout(input: {
   const width = Math.max(320, input.width);
   const height = Math.max(220, input.height);
 
-  if (input.showImmersiveSoloStage) {
-    return {
-      columns: 1,
-      gridHeight: height,
-      gridWidth: width,
-      mode: "solo",
-      overflowCount: 0,
-      railSize: null,
-      rowCounts: participantCount ? [participantCount] : [],
-      tileAspectRatio: PARTICIPANT_TILE_ASPECT_RATIO,
-      tileWidth: width,
-      visibleParticipantCount: participantCount,
-    };
-  }
-
   if (!participantCount) {
     return {
       columns: 1,
@@ -408,7 +393,7 @@ function getGridLayout(input: {
     const rowCounts = buildBalancedRowCounts(input.participantCount, columns);
     const candidate = evaluateGridCandidate({
       height: input.height,
-      maxTileWidth: getGridTileWidthCap(input.participantCount, input.width),
+      maxTileWidth: getGridTileWidthCap(input.participantCount, input.width, input.height),
       rowCounts,
       width: input.width,
     });
@@ -712,7 +697,11 @@ function getGridColumnLimit(participantCount: number, width: number) {
   return Math.min(participantCount, widthLimit, countLimit);
 }
 
-function getGridTileWidthCap(participantCount: number, width: number) {
+function getGridTileWidthCap(participantCount: number, width: number, height: number) {
+  if (participantCount <= 1) {
+    return Math.min(720, width * 0.62, height * PARTICIPANT_TILE_ASPECT_RATIO * 0.7);
+  }
+
   if (participantCount <= 2) {
     return Math.min(520, width * 0.44);
   }

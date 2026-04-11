@@ -1,13 +1,63 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-test("solo participant stays immersive without an oversized grid", async ({ page }) => {
+const GEOMETRY_TOLERANCE_PX = 5;
+
+test("solo participant stays centered, contained, and ratio-stable instead of stretching to fill the room", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/__stage-lab?participants=1");
 
   const canvas = page.locator(".meeting-stage-canvas");
-  await expect(canvas).toHaveAttribute("data-stage-layout", "solo");
-  await expect(page.locator(".stage-tiles--solo")).toBeVisible();
+  const tile = page.locator('[data-stage-role="participant"]').first();
+
+  await expect(canvas).toHaveAttribute("data-stage-layout", "grid");
+  await expect(canvas).toHaveAttribute("data-stage-columns", "1");
   await expect(page.locator('[data-stage-role="participant"]')).toHaveCount(1);
+
+  const [canvasBox, tileBox] = await Promise.all([getBox(canvas), getBox(tile)]);
+  const tileRatio = tileBox.width / tileBox.height;
+
+  expect(tileRatio).toBeGreaterThan(1.72);
+  expect(tileRatio).toBeLessThan(1.84);
+  expect(tileBox.width).toBeLessThan(canvasBox.width * 0.75);
+  expect(tileBox.height).toBeLessThan(canvasBox.height * 0.7);
+  await expectTilesContained(canvas, tile);
+});
+
+test("participant tiles keep the same aspect ratio while rescaling as people join", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/__stage-lab?participants=1");
+
+  const canvas = page.locator(".meeting-stage-canvas");
+  const firstTile = page.locator('[data-stage-role="participant"]').first();
+  const soloTileBox = await getBox(firstTile);
+  const soloRatio = soloTileBox.width / soloTileBox.height;
+
+  await page.getByRole("button", { name: "Add participant" }).click();
+  await page.getByRole("button", { name: "Add participant" }).click();
+
+  await expect(page.getByRole("status")).toContainText("3 participants");
+  await expect(canvas).toHaveAttribute("data-stage-layout", "grid");
+  await expect(canvas).toHaveAttribute("data-stage-columns", "2");
+
+  const multiTileBox = await getBox(firstTile);
+  const multiRatio = multiTileBox.width / multiTileBox.height;
+
+  expect(Math.abs(soloRatio - multiRatio)).toBeLessThan(0.05);
+  expect(multiTileBox.width).toBeLessThan(soloTileBox.width);
+  expect(multiTileBox.height).toBeLessThan(soloTileBox.height);
+  await expectTilesContained(canvas, page.locator('[data-stage-role="participant"]'));
+
+  await page.getByRole("button", { name: "Remove participant" }).click();
+  await page.getByRole("button", { name: "Remove participant" }).click();
+
+  await expect(page.getByRole("status")).toContainText("1 participants");
+  const restoredSoloTileBox = await getBox(firstTile);
+  const restoredSoloRatio = restoredSoloTileBox.width / restoredSoloTileBox.height;
+
+  expect(Math.abs(restoredSoloRatio - soloRatio)).toBeLessThan(0.05);
+  expect(restoredSoloTileBox.width).toBeGreaterThan(multiTileBox.width);
+  expect(restoredSoloTileBox.height).toBeGreaterThan(multiTileBox.height);
+  await expectTilesContained(canvas, firstTile);
 });
 
 test("two participants without sharing stay in a balanced side-by-side grid", async ({ page }) => {
@@ -137,6 +187,21 @@ test("multi-participant grid on tablet-sized widths avoids giant stretched tiles
   await expectTilesContained(canvas, page.locator('[data-stage-role="participant"], [data-stage-role="overflow"]'));
 });
 
+test("solo participant stays ratio-stable and contained on narrower desktop widths", async ({ page }) => {
+  await page.setViewportSize({ width: 980, height: 760 });
+  await page.goto("/__stage-lab?participants=1");
+
+  const canvas = page.locator(".meeting-stage-canvas");
+  const tile = page.locator('[data-stage-role="participant"]').first();
+  const [canvasBox, tileBox] = await Promise.all([getBox(canvas), getBox(tile)]);
+
+  expect(tileBox.width / tileBox.height).toBeGreaterThan(1.72);
+  expect(tileBox.width / tileBox.height).toBeLessThan(1.84);
+  expect(tileBox.width).toBeLessThan(canvasBox.width * 0.78);
+  expect(tileBox.height).toBeLessThan(canvasBox.height * 0.74);
+  await expectTilesContained(canvas, tile);
+});
+
 test("larger participant counts stay fully contained inside the meeting room border", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.goto("/__stage-lab?participants=7");
@@ -161,14 +226,25 @@ async function getBox(locator: Locator) {
 }
 
 async function expectTilesContained(canvas: Locator, tiles: Locator) {
-  const canvasBox = await getBox(canvas);
-  const tileCount = await tiles.count();
+  await expect
+    .poll(async () => {
+      const canvasBox = await getBox(canvas);
+      const tileCount = await tiles.count();
+      let maxOutsidePx = 0;
 
-  for (let index = 0; index < tileCount; index += 1) {
-    const tileBox = await getBox(tiles.nth(index));
-    expect(tileBox.x).toBeGreaterThanOrEqual(canvasBox.x - 1);
-    expect(tileBox.y).toBeGreaterThanOrEqual(canvasBox.y - 1);
-    expect(tileBox.x + tileBox.width).toBeLessThanOrEqual(canvasBox.x + canvasBox.width + 1);
-    expect(tileBox.y + tileBox.height).toBeLessThanOrEqual(canvasBox.y + canvasBox.height + 1);
-  }
+      for (let index = 0; index < tileCount; index += 1) {
+        const tileBox = await getBox(tiles.nth(index));
+
+        maxOutsidePx = Math.max(
+          maxOutsidePx,
+          canvasBox.x - tileBox.x,
+          canvasBox.y - tileBox.y,
+          tileBox.x + tileBox.width - (canvasBox.x + canvasBox.width),
+          tileBox.y + tileBox.height - (canvasBox.y + canvasBox.height),
+        );
+      }
+
+      return maxOutsidePx;
+    })
+    .toBeLessThanOrEqual(GEOMETRY_TOLERANCE_PX);
 }
