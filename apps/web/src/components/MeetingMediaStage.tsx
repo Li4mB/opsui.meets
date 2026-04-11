@@ -65,6 +65,7 @@ interface MeetingMediaStageProps {
   participantId: string | null;
   participantRole: string;
   screenShareDisabledReason?: string | null;
+  stageMessages?: Array<{ kind: "default" | "warning"; text: string }>;
   shouldConnect: boolean;
 }
 
@@ -243,6 +244,7 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
           : null
       }
       screenShareDisabledReason={props.screenShareDisabledReason ?? null}
+      stageMessages={props.stageMessages ?? []}
     />
   );
 
@@ -266,13 +268,14 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
           onLeave={props.onLeave}
           onLiveMediaStateChange={props.onLiveMediaStateChange}
           onLiveParticipantCountChange={props.onLiveParticipantCountChange}
-      onRetry={() => {
-        setRetryNonce((current) => current + 1);
-      }}
+          onRetry={() => {
+            setRetryNonce((current) => current + 1);
+          }}
           immersiveSoloMode={props.immersiveSoloMode}
           participantDisplayName={props.participantDisplayName}
           participantId={props.participantId}
           screenShareDisabledReason={props.screenShareDisabledReason ?? null}
+          stageMessages={props.stageMessages ?? []}
         />
       </RealtimeKitProvider>
     </div>
@@ -294,6 +297,7 @@ function ConnectedMediaStage(props: {
   participantDisplayName: string;
   participantId: string | null;
   screenShareDisabledReason: string | null;
+  stageMessages: Array<{ kind: "default" | "warning"; text: string }>;
 }) {
   const roomJoined = useRealtimeKitSelector((currentMeeting) => currentMeeting.self.roomJoined);
   const self = useRealtimeKitSelector((currentMeeting) => currentMeeting.self);
@@ -516,13 +520,15 @@ function ConnectedMediaStage(props: {
       {!roomJoined ? (
         <div className="meeting-stage-canvas meeting-stage-canvas--grid">
           <div className="stage-tiles" style={{ ["--stage-columns" as string]: "1" }}>
-            <article className="participant-tile participant-tile--empty">
-              <div className="participant-tile__avatar participant-tile__avatar--ghost">O</div>
-              <div className="participant-tile__meta">
-                <strong>Joining the media room</strong>
-                <span>Your camera and microphone are still being connected.</span>
-              </div>
-            </article>
+            <div className="stage-tiles__row" data-stage-row="1" data-stage-row-size="1">
+              <article className="participant-tile participant-tile--empty">
+                <div className="participant-tile__avatar participant-tile__avatar--ghost">O</div>
+                <div className="participant-tile__meta">
+                  <strong>Joining the media room</strong>
+                  <span>Your camera and microphone are still being connected.</span>
+                </div>
+              </article>
+            </div>
           </div>
         </div>
       ) : (
@@ -547,6 +553,7 @@ function ConnectedMediaStage(props: {
         onLeave={props.onLeave}
         onRetry={props.onRetry}
         onShareScreen={handleShareButtonClick}
+        stageMessages={props.stageMessages}
         onToggleAudio={async () => {
           try {
             if (self.audioEnabled) {
@@ -597,14 +604,33 @@ function MediaToolbar(props: {
   screenShareDisabled: boolean;
   screenShareTitle: string;
   self: RTKSelf | null;
+  stageMessages: Array<{ kind: "default" | "warning"; text: string }>;
 }) {
+  const visibleMessages = [
+    ...props.stageMessages,
+    ...(props.mediaMessage
+      ? [
+          {
+            kind:
+              props.mediaStatus === "error" || props.mediaStatus === "warning"
+                ? ("warning" as const)
+                : ("default" as const),
+            text: props.mediaMessage,
+          },
+        ]
+      : []),
+  ];
+
   return (
     <div className="meeting-control-surface">
-      {props.mediaMessage ? (
-        <p className={`meeting-control-surface__message${props.mediaStatus === "error" || props.mediaStatus === "warning" ? " meeting-control-surface__message--warning" : ""}`}>
-          {props.mediaMessage}
+      {visibleMessages.map((message) => (
+        <p
+          className={`meeting-control-surface__message${message.kind === "warning" ? " meeting-control-surface__message--warning" : ""}`}
+          key={`${message.kind}:${message.text}`}
+        >
+          {message.text}
         </p>
-      ) : null}
+      ))}
       <div className="meeting-control-dock">
         <div className="meeting-control-dock__cluster">
           <MeetingControlButton
@@ -671,6 +697,7 @@ function StageFallback(props: {
   onLiveParticipantCountChange?: (count: number | null) => void;
   onRetry: (() => void) | null;
   screenShareDisabledReason: string | null;
+  stageMessages: Array<{ kind: "default" | "warning"; text: string }>;
 }) {
   const showImmersiveSoloStage = Boolean(
     props.immersiveSoloMode && props.activeParticipants.length === 1,
@@ -718,17 +745,19 @@ function StageFallback(props: {
       ) : (
         <div className="meeting-stage-canvas meeting-stage-canvas--grid">
           <div className={`stage-tiles${showImmersiveSoloStage ? " stage-tiles--solo" : ""}`}>
-            <article className="participant-tile participant-tile--empty">
-              <div className="participant-tile__avatar participant-tile__avatar--ghost">O</div>
-              <div className="participant-tile__meta">
-                <strong>{props.meetingActive ? "Waiting for people" : "Meeting not started"}</strong>
-                <span>
-                  {props.meetingActive
-                    ? "Joined participants will appear here as soon as they enter."
-                    : "This room code exists, but no active meeting instance is attached yet."}
-                </span>
-              </div>
-            </article>
+            <div className="stage-tiles__row" data-stage-row="1" data-stage-row-size="1">
+              <article className="participant-tile participant-tile--empty">
+                <div className="participant-tile__avatar participant-tile__avatar--ghost">O</div>
+                <div className="participant-tile__meta">
+                  <strong>{props.meetingActive ? "Waiting for people" : "Meeting not started"}</strong>
+                  <span>
+                    {props.meetingActive
+                      ? "Joined participants will appear here as soon as they enter."
+                      : "This room code exists, but no active meeting instance is attached yet."}
+                  </span>
+                </div>
+              </article>
+            </div>
           </div>
         </div>
       )}
@@ -746,6 +775,7 @@ function StageFallback(props: {
         screenShareDisabled
         screenShareTitle={props.screenShareDisabledReason ?? "Join the room to share your screen."}
         self={null}
+        stageMessages={props.stageMessages}
       />
     </div>
   );

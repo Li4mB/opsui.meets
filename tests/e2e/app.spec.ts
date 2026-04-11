@@ -82,6 +82,38 @@ test("signed-in users can start a meeting from home and enter directly", async (
   await expect(page.getByText("You are waiting in the lobby for a host to admit you.")).toHaveCount(0);
 });
 
+test("meeting viewport removes the old top-left status chrome even after multiple participants join", async ({ browser }) => {
+  const hostContext = await browser.newContext();
+  const guestContext = await browser.newContext();
+  const hostPage = await hostContext.newPage();
+  const guestPage = await guestContext.newPage();
+
+  try {
+    await signInThroughUi(hostPage, "liam@example.com");
+    await hostPage.goto("/");
+    await hostPage.getByRole("button", { name: "Start Meeting" }).click();
+    await expect(hostPage).toHaveURL(/\/ops-/);
+
+    const meetingPath = new URL(hostPage.url()).pathname;
+
+    await signInThroughUi(guestPage, "sam@example.com");
+    await guestPage.goto(meetingPath);
+
+    await openInfoDrawer(hostPage);
+    await hostPage.getByRole("button", { name: "Refresh" }).click();
+
+    const stageSurface = hostPage.locator(".meeting-room-stage-surface");
+    await expect(stageSurface.locator(".meeting-room-stage-surface__chrome")).toHaveCount(0);
+    await expect(stageSurface.locator(".meeting-room-stage-surface__notices")).toHaveCount(0);
+    await expect(stageSurface.getByRole("heading", { name: /Meeting OPS-/i })).toHaveCount(0);
+    await expect(stageSurface.getByText(/^LIVE$/)).toHaveCount(0);
+    await expect(stageSurface.getByText(/^DIRECT$/)).toHaveCount(0);
+    await expect(stageSurface.getByText("You are in the meeting.")).toHaveCount(0);
+  } finally {
+    await Promise.allSettled([hostContext.close(), guestContext.close()]);
+  }
+});
+
 test("screen share control sits beside the camera control in the bottom dock", async ({ page }) => {
   await signInThroughUi(page, "liam@example.com");
 
@@ -399,7 +431,7 @@ async function openInfoDrawer(page: Page) {
 }
 
 async function expectRoomNotice(page: Page, text: string) {
-  await expect(page.locator(".meeting-room-stage-surface__notice").filter({ hasText: text }).first()).toBeVisible();
+  await expect(page.locator(".meeting-control-surface__message").filter({ hasText: text }).first()).toBeVisible();
 }
 
 async function expectSoloImmersiveStage(page: Page) {

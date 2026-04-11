@@ -770,20 +770,14 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const isParticipantsOpen = activeDrawer === "participants";
   const effectiveStageParticipantCount = liveStageParticipantCount ?? activeParticipants.length;
   const immersiveSoloMode = joinState === "direct" && effectiveStageParticipantCount === 1;
-  const stageBadges = [
-    formatMeetingCodeLabel(props.meetingCode),
-    meeting?.status ?? "waiting",
-    joinState === "idle" ? "not joined" : joinState,
-    recording?.status === "recording" ? "recording" : null,
-  ].filter((value): value is string => Boolean(value));
-  const visibleStageMessages = [
+  const stageMessages = [
     serviceMessage
       ? { kind: "warning" as const, text: serviceMessage }
       : null,
-    !immersiveSoloMode && joinMessage
+    joinState !== "direct" && joinMessage
       ? { kind: "default" as const, text: joinMessage }
       : null,
-    !immersiveSoloMode && actionMessage
+    actionMessage
       ? { kind: "default" as const, text: actionMessage }
       : null,
   ].filter((value): value is { kind: "default" | "warning"; text: string } => Boolean(value));
@@ -859,41 +853,6 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
             <section
               className={`meeting-room-stage-surface${immersiveSoloMode ? " meeting-room-stage-surface--immersive" : ""}`}
             >
-              <div
-                aria-hidden={immersiveSoloMode}
-                className={`meeting-room-stage-surface__chrome${immersiveSoloMode ? " meeting-room-stage-surface__chrome--hidden" : ""}`}
-              >
-                <div className="meeting-room-stage-surface__header">
-                  <div className="meeting-room-stage-surface__title-group">
-                    <div className="meeting-room-stage-surface__badges">
-                      {stageBadges.map((badge, index) => (
-                        <span className="meeting-room-stage-surface__badge" key={`${badge}-${index}`}>
-                          {badge}
-                        </span>
-                      ))}
-                    </div>
-                    <h1 className="meeting-room-stage-surface__title">
-                      {meeting?.title ?? room?.name ?? `Meeting ${formatMeetingCodeLabel(props.meetingCode)}`}
-                    </h1>
-                  </div>
-                </div>
-              </div>
-
-              {visibleStageMessages.length ? (
-                <div
-                  className={`meeting-room-stage-surface__notices${immersiveSoloMode ? " meeting-room-stage-surface__notices--immersive" : ""}`}
-                >
-                  {visibleStageMessages.map((message) => (
-                    <p
-                      className={`meeting-room-stage-surface__notice${message.kind === "warning" ? " meeting-room-stage-surface__notice--warning" : ""}`}
-                      key={`${message.kind}:${message.text}`}
-                    >
-                      {message.text}
-                    </p>
-                  ))}
-                </div>
-              ) : null}
-
               <MeetingMediaStage
                 activeParticipants={activeParticipants}
                 extraControls={
@@ -934,6 +893,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
                 participantId={participantId}
                 participantRole={participantRole}
                 screenShareDisabledReason={screenShareDisabledReason}
+                stageMessages={stageMessages}
                 shouldConnect={shouldConnectMedia}
               />
             </section>
