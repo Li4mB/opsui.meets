@@ -83,18 +83,28 @@ const BASE_SCREEN_SHARE_CONFIGURATION: ScreenshareConfiguration = {
   },
 };
 
+const MEDIA_CLIENT_INIT_TIMEOUT_MS = 30_000;
+const MEDIA_JOIN_SOFT_TIMEOUT_MS = 12_000;
+const MEDIA_JOIN_HARD_TIMEOUT_MS = 45_000;
+const MEDIA_RECOVERABLE_RETRY_DELAY_MS = 1_500;
+const MAX_MEDIA_CONNECTION_ATTEMPTS = 3;
+
 export function MeetingMediaStage(props: MeetingMediaStageProps) {
   const [client, initClient] = useRealtimeKitClient({ resetOnLeave: true });
   const [mediaStatus, setMediaStatus] = useState<MediaStatus>("idle");
   const [mediaMessage, setMediaMessage] = useState<string | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
   const clientRef = useRef<MediaClient>(undefined);
+  const connectionAttemptRef = useRef(0);
+  const connectionIdentityRef = useRef<string | null>(null);
   const connectionKeyRef = useRef<string | null>(null);
   const mediaConfigurationRef = useRef<{ screenshare: ScreenshareConfiguration }>({
     screenshare: {
       ...BASE_SCREEN_SHARE_CONFIGURATION,
     },
   });
+  const recoverableFailureRef = useRef(false);
+  const retryTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     clientRef.current = client;
@@ -102,31 +112,53 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
 
   useEffect(() => {
     return () => {
+      if (retryTimeoutRef.current) {
+        window.clearTimeout(retryTimeoutRef.current);
+      }
       void leaveMediaClient(clientRef.current);
     };
   }, []);
 
   useEffect(() => {
     if (!props.shouldConnect || !props.meetingId || !props.participantId) {
+      if (retryTimeoutRef.current) {
+        window.clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = null;
+      }
+      connectionAttemptRef.current = 0;
+      connectionIdentityRef.current = null;
       connectionKeyRef.current = null;
+      recoverableFailureRef.current = false;
       setMediaStatus("idle");
       setMediaMessage(null);
       void leaveMediaClient(clientRef.current);
       return;
     }
 
-    const connectionKey = [
+    const connectionIdentity = [
       props.meetingId,
       props.participantId,
       props.participantDisplayName,
       props.participantRole,
-      retryNonce,
     ].join(":");
+    if (connectionIdentityRef.current !== connectionIdentity) {
+      connectionAttemptRef.current = 0;
+      connectionIdentityRef.current = connectionIdentity;
+      recoverableFailureRef.current = false;
+      if (retryTimeoutRef.current) {
+        window.clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = null;
+      }
+    }
+
+    const connectionKey = [connectionIdentity, retryNonce].join(":");
     if (connectionKeyRef.current === connectionKey) {
       return;
     }
 
     connectionKeyRef.current = connectionKey;
+    const attemptNumber = connectionAttemptRef.current + 1;
+    connectionAttemptRef.current = attemptNumber;
     let cancelled = false;
 
     void (async () => {
@@ -166,13 +198,33 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
               Sentry.captureException(error);
             },
           }),
-          15_000,
+          MEDIA_CLIENT_INIT_TIMEOUT_MS,
           "Media client initialisation timed out.",
         );
       } catch (error) {
-        Sentry.captureException(error);
-        setMediaStatus("error");
-        setMediaMessage(toMediaErrorMessage(error));
+        reportMediaConnectionException(error, { attemptNumber, stage: "init" });
+        if (!cancelled) {
+          const recovery = handleMediaConnectionFailure(error, {
+            attemptNumber,
+            onRetry: () => {
+              if (retryTimeoutRef.current) {
+                return;
+              }
+
+              retryTimeoutRef.current = window.setTimeout(() => {
+                retryTimeoutRef.current = null;
+                if (connectionKeyRef.current !== connectionKey || !props.shouldConnect) {
+                  return;
+                }
+
+                setRetryNonce((current) => current + 1);
+              }, MEDIA_RECOVERABLE_RETRY_DELAY_MS);
+            },
+            setMediaMessage,
+            setMediaStatus,
+          });
+          recoverableFailureRef.current = recovery.recoverable;
+        }
         return;
       }
 
@@ -190,7 +242,18 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
       try {
         nextClient.self.setName(props.participantDisplayName);
         setMediaMessage("Joining live media room...");
-        await withTimeout(nextClient.joinRoom(), 15_000, "Joining the media room timed out.");
+        await joinMediaRoomWithProgress(nextClient, {
+          hardTimeoutMs: MEDIA_JOIN_HARD_TIMEOUT_MS,
+          onSlow: () => {
+            if (cancelled) {
+              return;
+            }
+
+            setMediaStatus("warning");
+            setMediaMessage("Joining live media room is taking longer than usual. Keeping the connection attempt alive...");
+          },
+          softTimeoutMs: MEDIA_JOIN_SOFT_TIMEOUT_MS,
+        });
 
         setMediaMessage("Enabling camera and microphone...");
         const [audioResult, videoResult] = await Promise.allSettled([
@@ -203,12 +266,37 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
           return;
         }
 
+        connectionAttemptRef.current = 0;
+        recoverableFailureRef.current = false;
         setMediaStatus("connected");
         setMediaMessage(getMediaReadyMessage(audioResult, videoResult));
       } catch (error) {
-        Sentry.captureException(error);
-        setMediaStatus("error");
-        setMediaMessage(toMediaErrorMessage(error));
+        await leaveMediaClient(nextClient);
+        if (cancelled) {
+          return;
+        }
+
+        reportMediaConnectionException(error, { attemptNumber, stage: "join" });
+        const recovery = handleMediaConnectionFailure(error, {
+          attemptNumber,
+          onRetry: () => {
+            if (retryTimeoutRef.current) {
+              return;
+            }
+
+            retryTimeoutRef.current = window.setTimeout(() => {
+              retryTimeoutRef.current = null;
+              if (connectionKeyRef.current !== connectionKey || !props.shouldConnect) {
+                return;
+              }
+
+              setRetryNonce((current) => current + 1);
+            }, MEDIA_RECOVERABLE_RETRY_DELAY_MS);
+          },
+          setMediaMessage,
+          setMediaStatus,
+        });
+        recoverableFailureRef.current = recovery.recoverable;
       }
     })();
 
@@ -224,6 +312,31 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
     props.shouldConnect,
     retryNonce,
   ]);
+
+  useEffect(() => {
+    if (!props.shouldConnect) {
+      return;
+    }
+
+    const resumeRecoverableJoin = () => {
+      if (document.visibilityState === "hidden" || !recoverableFailureRef.current || retryTimeoutRef.current) {
+        return;
+      }
+
+      connectionAttemptRef.current = 0;
+      setRetryNonce((current) => current + 1);
+    };
+
+    document.addEventListener("visibilitychange", resumeRecoverableJoin);
+    window.addEventListener("focus", resumeRecoverableJoin);
+    window.addEventListener("online", resumeRecoverableJoin);
+
+    return () => {
+      document.removeEventListener("visibilitychange", resumeRecoverableJoin);
+      window.removeEventListener("focus", resumeRecoverableJoin);
+      window.removeEventListener("online", resumeRecoverableJoin);
+    };
+  }, [props.shouldConnect]);
 
   const mediaFallback = (
     <StageFallback
@@ -269,6 +382,8 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
           onLiveMediaStateChange={props.onLiveMediaStateChange}
           onLiveParticipantCountChange={props.onLiveParticipantCountChange}
           onRetry={() => {
+            connectionAttemptRef.current = 0;
+            recoverableFailureRef.current = false;
             setRetryNonce((current) => current + 1);
           }}
           immersiveSoloMode={props.immersiveSoloMode}
@@ -918,6 +1033,26 @@ function reportMediaException(
   });
 }
 
+function reportMediaConnectionException(
+  error: unknown,
+  context: {
+    attemptNumber: number;
+    stage: "init" | "join";
+  },
+) {
+  const message = normaliseMediaErrorMessage(error);
+  if (message && /internet_disconnected/i.test(message)) {
+    return;
+  }
+
+  Sentry.withScope((scope) => {
+    scope.setTag("media_connection_attempt", String(context.attemptNumber));
+    scope.setTag("media_connection_recoverable", String(isRecoverableMediaConnectionError(error)));
+    scope.setTag("media_connection_stage", context.stage);
+    Sentry.captureException(error);
+  });
+}
+
 function isExpectedLocalMediaIssue(error: unknown): boolean {
   const message = normaliseMediaErrorMessage(error);
   return Boolean(
@@ -944,6 +1079,39 @@ function normaliseMediaErrorMessage(error: unknown): string {
   return "";
 }
 
+function isRecoverableMediaConnectionError(error: unknown): boolean {
+  const message = normaliseMediaErrorMessage(error);
+  return Boolean(
+    message &&
+      /(joining the media room timed out|media client initialisation timed out|internet_disconnected|networkerror|failed to initialize|could not connect to media servers|socket|reconnect|temporarily unavailable|\[err0001\]|\[err0002\])/i.test(
+        message,
+      ),
+  );
+}
+
+function handleMediaConnectionFailure(
+  error: unknown,
+  input: {
+    attemptNumber: number;
+    onRetry(): void;
+    setMediaMessage(message: string): void;
+    setMediaStatus(status: MediaStatus): void;
+  },
+): { recoverable: boolean } {
+  const recoverable = isRecoverableMediaConnectionError(error);
+
+  if (recoverable && input.attemptNumber < MAX_MEDIA_CONNECTION_ATTEMPTS) {
+    input.setMediaStatus("warning");
+    input.setMediaMessage("Live media connection was interrupted. Retrying...");
+    input.onRetry();
+    return { recoverable };
+  }
+
+  input.setMediaStatus("error");
+  input.setMediaMessage(toMediaErrorMessage(error));
+  return { recoverable };
+}
+
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   return await Promise.race([
     promise,
@@ -953,6 +1121,57 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
       }, timeoutMs);
     }),
   ]);
+}
+
+async function joinMediaRoomWithProgress(
+  client: NonNullable<MediaClient>,
+  options: {
+    hardTimeoutMs: number;
+    onSlow?(): void;
+    softTimeoutMs: number;
+  },
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const complete = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      if (slowTimeoutId) {
+        window.clearTimeout(slowTimeoutId);
+      }
+      if (hardTimeoutId) {
+        window.clearTimeout(hardTimeoutId);
+      }
+      client.self.off("roomJoined", handleRoomJoined);
+      callback();
+    };
+    const handleRoomJoined = () => {
+      complete(resolve);
+    };
+    const slowTimeoutId = window.setTimeout(() => {
+      options.onSlow?.();
+    }, options.softTimeoutMs);
+    const hardTimeoutId = window.setTimeout(() => {
+      complete(() => {
+        reject(new Error("Joining the media room timed out."));
+      });
+    }, options.hardTimeoutMs);
+
+    client.self.on("roomJoined", handleRoomJoined);
+    void client.joinRoom().then(
+      () => {
+        complete(resolve);
+      },
+      (error) => {
+        complete(() => {
+          reject(error);
+        });
+      },
+    );
+  });
 }
 
 async function waitForScreenShareEnabled(self: RTKSelf, timeoutMs = 900): Promise<boolean> {
