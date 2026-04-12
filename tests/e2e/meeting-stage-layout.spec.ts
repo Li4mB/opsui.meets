@@ -18,8 +18,9 @@ test("solo participant stays centered, contained, and ratio-stable instead of st
 
   expect(tileRatio).toBeGreaterThan(1.72);
   expect(tileRatio).toBeLessThan(1.84);
-  expect(tileBox.width).toBeLessThan(canvasBox.width * 0.75);
-  expect(tileBox.height).toBeLessThan(canvasBox.height * 0.7);
+  expect(tileBox.width).toBeLessThanOrEqual(canvasBox.width - 8);
+  expect(tileBox.height).toBeGreaterThan(canvasBox.height * 0.97);
+  expect(tileBox.height).toBeLessThanOrEqual(canvasBox.height + 1);
   await expectTilesContained(canvas, tile);
 });
 
@@ -197,8 +198,9 @@ test("solo participant stays ratio-stable and contained on narrower desktop widt
 
   expect(tileBox.width / tileBox.height).toBeGreaterThan(1.72);
   expect(tileBox.width / tileBox.height).toBeLessThan(1.84);
-  expect(tileBox.width).toBeLessThan(canvasBox.width * 0.78);
-  expect(tileBox.height).toBeLessThan(canvasBox.height * 0.74);
+  expect(tileBox.width).toBeLessThanOrEqual(canvasBox.width - 8);
+  expect(tileBox.height).toBeGreaterThan(canvasBox.height * 0.97);
+  expect(tileBox.height).toBeLessThanOrEqual(canvasBox.height + 1);
   await expectTilesContained(canvas, tile);
 });
 

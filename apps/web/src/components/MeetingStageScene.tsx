@@ -56,6 +56,7 @@ const DEFAULT_STAGE_HEIGHT = 720;
 const STAGE_GAP = 16;
 const PARTICIPANT_TILE_ASPECT_RATIO = 16 / 9;
 const SIDE_SHARE_MIN_WIDTH = 540;
+const SOLO_STAGE_EDGE_BUFFER = 5;
 
 export function MeetingStageScene(props: MeetingStageSceneProps) {
   const [canvasNode, setCanvasNode] = useState<HTMLDivElement | null>(null);
@@ -699,7 +700,10 @@ function getGridColumnLimit(participantCount: number, width: number) {
 
 function getGridTileWidthCap(participantCount: number, width: number, height: number) {
   if (participantCount <= 1) {
-    return Math.min(720, width * 0.62, height * PARTICIPANT_TILE_ASPECT_RATIO * 0.7);
+    return Math.min(
+      Math.max(0, width - SOLO_STAGE_EDGE_BUFFER * 2),
+      Math.max(0, height * PARTICIPANT_TILE_ASPECT_RATIO),
+    );
   }
 
   if (participantCount <= 2) {

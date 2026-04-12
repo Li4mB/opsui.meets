@@ -84,8 +84,8 @@ export function App() {
           authCapabilities={authCapabilities}
           isAuthLoading={!session || !authCapabilities}
           meetingCode={route.meetingCode}
-          onNavigate={(pathname) => {
-            navigate(pathname);
+          onNavigate={(pathname, options) => {
+            navigate(pathname, options);
           }}
           onRefreshSession={(forceRefresh) => {
             return refreshAuth(forceRefresh);

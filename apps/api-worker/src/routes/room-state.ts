@@ -1,9 +1,9 @@
-import type { MeetingRecord } from "@opsui/db";
 import type { RoomSummary } from "@opsui/shared-types";
 import { getRepositories } from "../lib/data";
 import { json, notFound } from "../lib/http";
 import { syncMeetingSummary } from "../lib/meeting-summary";
 import { syncRealtimeRoomState } from "../lib/realtime";
+import { ensureSystemRoom } from "../lib/system-room";
 import type { Env } from "../types";
 
 const STALE_PARTICIPANT_SESSION_MS = 2 * 60_000;
@@ -11,13 +11,12 @@ const RECONNECTING_PARTICIPANT_GRACE_MS = 5 * 60_000;
 
 export async function getRoomState(slug: string, env: Env): Promise<Response> {
   const repositories = await getRepositories(env);
-  const roomRecord = repositories.rooms.getBySlug(slug);
+  const { meeting, room: roomRecord } = ensureSystemRoom(repositories, slug);
   if (!roomRecord) {
     return notFound();
   }
 
   const room = toRoomSummary(roomRecord);
-  const meeting = pickMeetingForRoom(repositories.meetings.listByWorkspace(room.workspaceId), room.id);
 
   if (!meeting) {
     const response = json({
@@ -58,41 +57,6 @@ export async function getRoomState(slug: string, env: Env): Promise<Response> {
   }
 
   return response;
-}
-
-function pickMeetingForRoom(meetings: MeetingRecord[], roomId: string): MeetingRecord | null {
-  const candidates = meetings.filter((meeting) => meeting.roomId === roomId);
-  if (!candidates.length) {
-    return null;
-  }
-
-  candidates.sort((left, right) => {
-    const statusDelta = getMeetingPriority(left.status) - getMeetingPriority(right.status);
-    if (statusDelta !== 0) {
-      return statusDelta;
-    }
-
-    return Date.parse(right.createdAt) - Date.parse(left.createdAt);
-  });
-
-  return candidates[0] ?? null;
-}
-
-function getMeetingPriority(status: MeetingRecord["status"]): number {
-  switch (status) {
-    case "live":
-      return 0;
-    case "prejoin":
-      return 1;
-    case "scheduled":
-      return 2;
-    case "ending":
-      return 3;
-    case "ended":
-      return 4;
-    default:
-      return 5;
-  }
 }
 
 function toRoomSummary(room: {

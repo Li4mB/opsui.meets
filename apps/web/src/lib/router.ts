@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { normalizeMeetingCode } from "./meeting-code";
 
 export type AppRoute =
@@ -17,9 +17,7 @@ export function useAppRoute() {
 
   useEffect(() => {
     function handlePopState() {
-      startTransition(() => {
-        setRoute(parseRoute(window.location));
-      });
+      setRoute(parseRoute(window.location));
     }
 
     window.addEventListener("popstate", handlePopState);
@@ -35,9 +33,7 @@ export function useAppRoute() {
 
     const method = options?.replace ? "replaceState" : "pushState";
     window.history[method]({}, "", pathname);
-    startTransition(() => {
-      setRoute(parseRoute(window.location));
-    });
+    setRoute(parseRoute(window.location));
   }
 
   return {

@@ -436,22 +436,36 @@ async function expectRoomNotice(page: Page, text: string) {
 
 async function expectSoloImmersiveStage(page: Page) {
   const canvas = page.locator(".meeting-stage-canvas");
+  const stageSurface = page.locator(".meeting-room-stage-surface");
+  const firstControlSurfaceChild = page.locator(".meeting-control-surface > *").first();
   const tile = page.locator(".participant-tile--immersive, .participant-tile--fallback-summary-solo").first();
 
   await expect(canvas).toHaveAttribute("data-stage-layout", "grid");
   await expect(canvas).toHaveAttribute("data-stage-columns", "1");
   await expect(tile).toBeVisible();
 
-  const [canvasBox, tileBox] = await Promise.all([canvas.boundingBox(), tile.boundingBox()]);
-  if (!canvasBox || !tileBox) {
+  const [canvasBox, stageSurfaceBox, firstControlSurfaceChildBox, tileBox] = await Promise.all([
+    canvas.boundingBox(),
+    stageSurface.boundingBox(),
+    firstControlSurfaceChild.boundingBox(),
+    tile.boundingBox(),
+  ]);
+  if (!canvasBox || !stageSurfaceBox || !firstControlSurfaceChildBox || !tileBox) {
     throw new Error("Expected solo meeting stage to expose measurable geometry");
   }
 
   const tileRatio = tileBox.width / tileBox.height;
+  const topGap = tileBox.y - stageSurfaceBox.y;
+  const bottomGap = firstControlSurfaceChildBox.y - (tileBox.y + tileBox.height);
   expect(tileRatio).toBeGreaterThan(1.72);
   expect(tileRatio).toBeLessThan(1.84);
-  expect(tileBox.width).toBeLessThan(canvasBox.width * 0.8);
-  expect(tileBox.height).toBeLessThan(canvasBox.height * 0.72);
+  expect(tileBox.width).toBeLessThanOrEqual(canvasBox.width - 8);
+  expect(tileBox.height).toBeGreaterThan(canvasBox.height * 0.97);
+  expect(tileBox.height).toBeLessThanOrEqual(canvasBox.height + 1);
+  expect(topGap).toBeGreaterThanOrEqual(4);
+  expect(topGap).toBeLessThanOrEqual(8);
+  expect(bottomGap).toBeGreaterThanOrEqual(4);
+  expect(bottomGap).toBeLessThanOrEqual(8);
   await expect(page.getByRole("heading", { name: /Meeting OPS-/i })).toHaveCount(0);
   await expect(page.getByText("Waiting for more people")).toHaveCount(0);
 }

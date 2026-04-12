@@ -1,10 +1,11 @@
 import { getRepositories } from "../lib/data";
 import { json, notFound } from "../lib/http";
+import { ensureSystemRoom } from "../lib/system-room";
 import type { Env } from "../types";
 
 export async function resolveRoom(slug: string, env: Env): Promise<Response> {
   const repositories = await getRepositories(env);
-  const room = repositories.rooms.getBySlug(slug);
+  const { room } = ensureSystemRoom(repositories, slug);
   if (!room) {
     return notFound();
   }

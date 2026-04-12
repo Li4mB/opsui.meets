@@ -7,6 +7,44 @@ test.beforeEach(async ({ request }) => {
   expect(response.ok()).toBeTruthy();
 });
 
+test("guest leave returns home and clears meeting state for a clean rejoin", async ({ page, request }) => {
+  await page.goto("/ops-signin");
+  await joinAsGuest(page, "Guest Runner");
+  await expect(page.getByRole("button", { name: "Leave" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Leave" }).click();
+
+  await expect(page).toHaveURL("/");
+  await expect(page.getByRole("heading", { name: "Join as a guest" })).toHaveCount(0);
+  await expect(page.getByText("Meetings without the clutter.")).toBeVisible();
+
+  await expect.poll(async () => {
+    const roomState = await getRoomState(request, "ops-signin");
+    return roomState.participants.filter((participant) => participant.presence !== "left").length;
+  }).toBe(0);
+
+  await page.goto("/ops-signin");
+  await expect(page.getByRole("heading", { name: "Join as a guest" })).toBeVisible();
+  await joinAsGuest(page, "Guest Runner");
+  await expect(page.getByRole("button", { name: "Leave" })).toBeVisible();
+});
+
+test("sidebar home leaves the meeting and returns guests to the landing page", async ({ page, request }) => {
+  await page.goto("/ops-signin");
+  await joinAsGuest(page, "Guest Runner");
+
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: "Home" }).click();
+
+  await expect(page).toHaveURL("/");
+  await expect(page.getByText("Meetings without the clutter.")).toBeVisible();
+
+  await expect.poll(async () => {
+    const roomState = await getRoomState(request, "ops-signin");
+    return roomState.participants.filter((participant) => participant.presence !== "left").length;
+  }).toBe(0);
+});
+
 test("leaving and quickly rejoining the same meeting keeps the new session active", async ({ page }) => {
   await signInThroughUi(page, "liam@example.com");
   await page.goto("/ops-signin");
@@ -164,4 +202,19 @@ async function createMobilePage(browser: Browser): Promise<Page> {
     ...devices["iPhone 13"],
   });
   return context.newPage();
+}
+
+async function joinAsGuest(page: Page, name: string) {
+  await expect(page.getByRole("heading", { name: "Join as a guest" })).toBeVisible();
+  await page.getByRole("textbox", { name: "Display name" }).fill(name);
+  await page.getByRole("button", { name: "Enter Room" }).click();
+  await expect(page.locator('[role="dialog"]')).toHaveCount(0);
+}
+
+async function getRoomState(request: Parameters<typeof test.beforeEach>[0]["request"], meetingCode: string) {
+  const response = await request.get(`http://127.0.0.1:9877/v1/rooms/resolve/${meetingCode}/state`);
+  expect(response.ok()).toBeTruthy();
+  return response.json() as Promise<{
+    participants: Array<{ presence: string }>;
+  }>;
 }

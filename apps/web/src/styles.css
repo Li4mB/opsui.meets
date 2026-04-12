@@ -1258,15 +1258,21 @@ button {
 
 .meeting-stage-runtime {
   position: relative;
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
-  gap: 18px;
+  --meeting-stage-runtime-gap: 18px;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--meeting-stage-runtime-gap);
   min-height: 0;
-  transition: gap 220ms ease;
+  transition:
+    gap 220ms ease,
+    padding 220ms ease;
 }
 
 .meeting-stage-runtime--solo {
   height: 100%;
+  --meeting-stage-runtime-gap: 5px;
+  padding-top: 5px;
 }
 
 .meeting-stage-canvas {
@@ -1278,6 +1284,7 @@ button {
   --stage-rail-size: 220px;
   --stage-tile-aspect-ratio: 1.7777777778;
   --stage-tile-width: 100%;
+  flex: 1 1 auto;
   gap: var(--stage-gap);
   height: 100%;
   min-height: 0;
@@ -1532,13 +1539,15 @@ button {
 }
 
 .meeting-control-surface {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   gap: 10px;
-  align-content: end;
+  align-self: end;
 }
 
 .meeting-room-stage-surface--immersive .meeting-control-surface {
-  padding: 0 20px 20px;
+  padding: 0 5px 5px;
 }
 
 .meeting-control-surface__message {
@@ -2020,7 +2029,7 @@ button {
   }
 
   .meeting-room-stage-surface--immersive .meeting-control-surface {
-    padding: 0 16px 16px;
+    padding: 0 5px 5px;
   }
 }
 
@@ -2115,7 +2124,7 @@ button {
   }
 
   .meeting-room-stage-surface--immersive .meeting-control-surface {
-    padding: 0 14px 14px;
+    padding: 0 5px 5px;
   }
 
   .meeting-room-stage-surface__notices--immersive {

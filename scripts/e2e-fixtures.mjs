@@ -571,6 +571,13 @@ function createInitialState() {
     title: "Legacy Planning",
   });
   seedRoom(nextState, {
+    isPersistent: true,
+    name: "OpsUI Demo",
+    roomType: "persistent",
+    slug: "opsui-demo",
+    title: "OpsUI Demo Meeting",
+  });
+  seedRoom(nextState, {
     name: "Auto Join Room",
     slug: "ops-signin",
     title: "Auto Join Room",
@@ -590,7 +597,7 @@ function seedRoom(nextState, input) {
     workspaceId: "workspace_local",
     name: input.name,
     policy: createDefaultPolicy(),
-    roomType: "instant",
+    roomType: input.roomType ?? "instant",
     slug: input.slug,
   };
 
