@@ -1048,9 +1048,14 @@ button {
 }
 
 .meeting-room-shell {
+  --meeting-control-dock-gap: 12px;
+  --meeting-control-cluster-gap: 10px;
+  --meeting-control-button-padding-x: 16px;
+  --meeting-control-button-gap: 10px;
+  --meeting-room-drawer-offset: 0px;
   position: relative;
   display: flex;
-  gap: 18px;
+  gap: 0;
   height: 100%;
   min-height: 0;
   transition: filter 220ms ease, opacity 220ms ease, transform 220ms ease;
@@ -1073,6 +1078,16 @@ button {
   min-width: 0;
   min-height: 0;
   order: 1;
+}
+
+.meeting-room-shell--chat-open,
+.meeting-room-shell--participants-open,
+.meeting-room-shell--info-open {
+  --meeting-control-dock-gap: 10px;
+  --meeting-control-cluster-gap: 8px;
+  --meeting-control-button-padding-x: 14px;
+  --meeting-control-button-gap: 8px;
+  --meeting-room-drawer-offset: 18px;
 }
 
 .meeting-room-stage-surface {
@@ -1199,6 +1214,7 @@ button {
   position: relative;
   flex: 0 0 0;
   width: 0;
+  margin-left: 0;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -1207,6 +1223,7 @@ button {
   transition:
     width 240ms ease,
     flex-basis 240ms ease,
+    margin-left 240ms ease,
     opacity 180ms ease,
     transform 240ms ease;
 }
@@ -1229,6 +1246,7 @@ button {
 .meeting-room-shell--chat-open .meeting-room-drawer--chat {
   width: min(360px, 29vw);
   flex-basis: min(360px, 29vw);
+  margin-left: var(--meeting-room-drawer-offset);
   opacity: 1;
   pointer-events: auto;
   transform: translateX(0);
@@ -1237,6 +1255,7 @@ button {
 .meeting-room-shell--participants-open .meeting-room-drawer--participants {
   width: min(360px, 29vw);
   flex-basis: min(360px, 29vw);
+  margin-left: var(--meeting-room-drawer-offset);
   opacity: 1;
   pointer-events: auto;
   transform: translateX(0);
@@ -1245,6 +1264,7 @@ button {
 .meeting-room-shell--info-open .meeting-room-drawer--info {
   width: min(340px, 27vw);
   flex-basis: min(340px, 27vw);
+  margin-left: var(--meeting-room-drawer-offset);
   opacity: 1;
   pointer-events: auto;
   transform: translateX(0);
@@ -1543,7 +1563,9 @@ button {
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  align-self: end;
+  align-self: stretch;
+  width: 100%;
+  transition: width 240ms ease, padding 240ms ease;
 }
 
 .meeting-room-stage-surface--immersive .meeting-control-surface {
@@ -1572,22 +1594,31 @@ button {
   align-items: center;
   justify-content: center;
   justify-self: center;
-  gap: 12px;
+  gap: var(--meeting-control-dock-gap);
   width: fit-content;
-  max-width: 100%;
+  max-width: min(100%, calc(100vw - 48px));
   padding: 10px 14px;
   border-radius: 999px;
   background: rgba(4, 10, 20, 0.88);
   border: 1px solid var(--border);
   box-shadow: 0 18px 48px rgba(2, 8, 23, 0.28);
   backdrop-filter: blur(18px);
+  flex-wrap: nowrap;
+  margin-inline: auto;
+  transition:
+    gap 240ms ease,
+    padding 240ms ease,
+    transform 240ms ease,
+    max-width 240ms ease;
 }
 
 .meeting-control-dock__cluster {
   display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+  flex-wrap: nowrap;
+  gap: var(--meeting-control-cluster-gap);
   justify-content: center;
+  min-width: 0;
+  transition: gap 240ms ease;
 }
 
 .meeting-control-dock__cluster--secondary {
@@ -1598,10 +1629,11 @@ button {
 
 .meeting-control-button {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
-  gap: 10px;
+  gap: var(--meeting-control-button-gap);
   min-height: 52px;
-  padding: 0 16px;
+  padding: 0 var(--meeting-control-button-padding-x);
   border: 1px solid var(--border);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.04);
@@ -1645,6 +1677,7 @@ button {
 .meeting-control-button__label {
   font-size: 0.94rem;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .meeting-drawer-panel {
@@ -1910,6 +1943,15 @@ button {
   .meeting-room-shell--info-open .meeting-room-drawer--info {
     width: min(320px, 29vw);
     flex-basis: min(320px, 29vw);
+  }
+
+  .meeting-room-shell--chat-open,
+  .meeting-room-shell--participants-open,
+  .meeting-room-shell--info-open {
+    --meeting-control-dock-gap: 8px;
+    --meeting-control-cluster-gap: 6px;
+    --meeting-control-button-padding-x: 12px;
+    --meeting-control-button-gap: 7px;
   }
 }
 

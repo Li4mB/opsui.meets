@@ -962,12 +962,12 @@ async function leaveMediaClient(client: MediaClient): Promise<void> {
 function getMediaReadyMessage(
   audioResult: PromiseSettledResult<void>,
   videoResult: PromiseSettledResult<void>,
-): string {
+): string | null {
   const audioReady = audioResult.status === "fulfilled";
   const videoReady = videoResult.status === "fulfilled";
 
   if (audioReady && videoReady) {
-    return "Camera and microphone are live.";
+    return null;
   }
 
   if (audioReady) {
