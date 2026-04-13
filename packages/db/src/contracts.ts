@@ -13,7 +13,76 @@ import type {
 } from "@opsui/shared-types";
 import type { RoomEvent } from "@opsui/shared-types";
 import type { WorkspacePolicy } from "@opsui/shared-types";
-import type { MeetingRecord, MeetingSummaryRecord, RoomRecord } from "./types";
+import type {
+  DirectMessageMessageRecord,
+  DirectMessageThreadMemberRecord,
+  DirectMessageThreadRecord,
+  ExternalAuthIdentityRecord,
+  MeetingRecord,
+  MeetingSummaryRecord,
+  RoomRecord,
+  UserPasswordCredentialRecord,
+  UserRecord,
+  WorkspaceMembershipRecord,
+  WorkspaceRecord,
+} from "./types";
+
+export interface WorkspacesRepositoryContract {
+  create(workspace: WorkspaceRecord): WorkspaceRecord;
+  getById(id: string): WorkspaceRecord | null;
+  getBySlug(slug: string): WorkspaceRecord | null;
+  getByOrganizationCode(organizationCode: string): WorkspaceRecord | null;
+  getByNormalizedOrganizationName(organizationNameNormalized: string): WorkspaceRecord | null;
+  getByOpsuiBusinessId(opsuiBusinessId: string): WorkspaceRecord | null;
+}
+
+export interface UsersRepositoryContract {
+  create(user: UserRecord): UserRecord;
+  list(): UserRecord[];
+  getById(id: string): UserRecord | null;
+  getByEmail(email: string): UserRecord | null;
+  getByUsername(username: string): UserRecord | null;
+  getByNormalizedUsername(usernameNormalized: string): UserRecord | null;
+}
+
+export interface WorkspaceMembershipsRepositoryContract {
+  create(membership: WorkspaceMembershipRecord): WorkspaceMembershipRecord;
+  listByWorkspace(workspaceId: string): WorkspaceMembershipRecord[];
+  listByUser(userId: string): WorkspaceMembershipRecord[];
+  getByWorkspaceAndUser(workspaceId: string, userId: string): WorkspaceMembershipRecord | null;
+}
+
+export interface PasswordCredentialsRepositoryContract {
+  upsert(credential: UserPasswordCredentialRecord): UserPasswordCredentialRecord;
+  getByUserId(userId: string): UserPasswordCredentialRecord | null;
+}
+
+export interface ExternalAuthIdentitiesRepositoryContract {
+  create(identity: ExternalAuthIdentityRecord): ExternalAuthIdentityRecord;
+  getByProviderAndSubject(provider: ExternalAuthIdentityRecord["provider"], subject: string): ExternalAuthIdentityRecord | null;
+}
+
+export interface DirectMessagesRepositoryContract {
+  createThread(thread: DirectMessageThreadRecord): DirectMessageThreadRecord;
+  addThreadMember(member: DirectMessageThreadMemberRecord): DirectMessageThreadMemberRecord;
+  getThreadById(threadId: string): DirectMessageThreadRecord | null;
+  getDirectThreadByParticipantKey(participantKey: string): DirectMessageThreadRecord | null;
+  listThreadsByUser(userId: string): DirectMessageThreadRecord[];
+  listThreadMembers(threadId: string): DirectMessageThreadMemberRecord[];
+  getThreadMember(threadId: string, userId: string): DirectMessageThreadMemberRecord | null;
+  updateThread(
+    threadId: string,
+    patch: Partial<Omit<DirectMessageThreadRecord, "id" | "participantKey" | "threadKind">>,
+  ): DirectMessageThreadRecord | null;
+  createMessage(message: DirectMessageMessageRecord): DirectMessageMessageRecord;
+  listMessagesByThread(threadId: string): DirectMessageMessageRecord[];
+  getMessageById(messageId: string): DirectMessageMessageRecord | null;
+  markThreadRead(
+    threadId: string,
+    userId: string,
+    input: Pick<DirectMessageThreadMemberRecord, "lastReadAt" | "lastReadMessageId">,
+  ): DirectMessageThreadMemberRecord | null;
+}
 
 export interface RoomsRepositoryContract {
   listByWorkspace(workspaceId: string): RoomRecord[];
@@ -121,6 +190,12 @@ export interface HookDeliveriesRepositoryContract {
 }
 
 export interface RepositoryContext {
+  workspaces: WorkspacesRepositoryContract;
+  users: UsersRepositoryContract;
+  workspaceMemberships: WorkspaceMembershipsRepositoryContract;
+  passwordCredentials: PasswordCredentialsRepositoryContract;
+  externalAuthIdentities: ExternalAuthIdentitiesRepositoryContract;
+  directMessages: DirectMessagesRepositoryContract;
   rooms: RoomsRepositoryContract;
   meetings: MeetingsRepositoryContract;
   participants: ParticipantsRepositoryContract;

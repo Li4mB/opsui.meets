@@ -3,6 +3,7 @@ import type { AuthCapabilities, SessionInfo } from "@opsui/shared-types";
 import {
   getSessionDisplayName,
   issueMockSession,
+  loginWithPassword,
   logout,
   shouldUseRedirectLogout,
   startLogin,
@@ -18,12 +19,15 @@ interface SignInPageProps {
 }
 
 export function SignInPage(props: SignInPageProps) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [mockEmail, setMockEmail] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (props.session?.actor.email) {
+      setEmail(props.session.actor.email);
       setMockEmail(props.session.actor.email);
     }
   }, [props.session?.actor.email]);
@@ -31,7 +35,30 @@ export function SignInPage(props: SignInPageProps) {
   const signedIn = Boolean(props.session?.authenticated);
   const canUseOidc = Boolean(props.authCapabilities?.oidcConfigured);
   const canUseMockAuth = Boolean(props.authCapabilities?.mockAuthEnabled);
+  const canUsePassword = Boolean(props.authCapabilities?.passwordAuthEnabled);
   const displayName = getSessionDisplayName(props.session);
+  const isSuper = props.session?.actor.planTier === "super";
+
+  async function handlePasswordSignIn() {
+    setIsBusy(true);
+    setMessage(null);
+
+    const result = await loginWithPassword({
+      email,
+      password,
+    });
+
+    if (!result.ok) {
+      setIsBusy(false);
+      setMessage(result.message ?? "Sign in failed.");
+      return;
+    }
+
+    await props.onRefreshSession(true);
+    setPassword("");
+    setIsBusy(false);
+    setMessage("You are signed in.");
+  }
 
   async function handleMockSignIn() {
     setIsBusy(true);
@@ -69,61 +96,160 @@ export function SignInPage(props: SignInPageProps) {
   }
 
   return (
-    <section className="page page--centered">
-      <div className="settings-card">
+    <section className="page page--centered page--auth">
+      <div className="settings-card auth-card">
         <div className="eyebrow">Account</div>
         <h1 className="settings-card__title">
-          {props.isAuthLoading ? "Checking session..." : signedIn ? displayName : "Sign in to join faster"}
+          {props.isAuthLoading ? "Checking session..." : signedIn ? displayName : "Sign in to OpsUI Meets"}
         </h1>
         <p className="settings-card__copy">
-          Signed-in users enter meetings immediately with their account identity. Guests can still join from a room URL and pick a display name on the spot.
+          Use your local OpsUI Meets account for email/password sign-in. OIDC stays available as an alternate path when it is configured.
         </p>
 
-        <div className="detail-grid">
-          <Detail label="Status" value={props.isAuthLoading ? "Loading" : signedIn ? "Signed in" : "Guest"} />
-          <Detail label="Provider" value={props.session?.provider ?? "anonymous"} />
-          <Detail label="Workspace" value={props.session?.actor.workspaceId ?? "workspace_local"} />
-          <Detail label="User" value={props.session?.actor.email ?? props.session?.actor.userId ?? "guest"} />
-        </div>
+        {signedIn ? (
+          <>
+            <div className="status-pills auth-pills">
+              <span className="status-pill">{props.session?.provider ?? "anonymous"}</span>
+              <span className="status-pill">{props.session?.actor.workspaceName ?? "My Workspace"}</span>
+              {props.session?.actor.username ? <span className="status-pill">@{props.session.actor.username}</span> : null}
+              {isSuper ? <span className="status-pill status-pill--accent">Super</span> : null}
+            </div>
 
-        <div className="stack-actions">
-          <button
-            className="button button--primary"
-            disabled={!canUseOidc || isBusy || signedIn}
-            onClick={() => {
-              if (!signedIn) {
-                startLogin(window.location.pathname);
-              }
-            }}
-            type="button"
-          >
-            {signedIn ? "Signed In" : canUseOidc ? "Sign In" : "OIDC Unavailable"}
-          </button>
-          <button
-            className="button button--ghost"
-            disabled={!signedIn || isBusy}
-            onClick={() => {
-              if (shouldUseRedirectLogout()) {
-                startLogout(window.location.pathname);
-                return;
-              }
+            <div className="detail-grid">
+              <Detail label="Status" value="Signed in" />
+              <Detail
+                label="Name"
+                value={
+                  [props.session?.actor.firstName, props.session?.actor.lastName].filter(Boolean).join(" ") ||
+                  displayName
+                }
+              />
+              <Detail label="Username" value={props.session?.actor.username ? `@${props.session.actor.username}` : "Not set"} />
+              <Detail label="Workspace" value={props.session?.actor.workspaceName ?? "My Workspace"} />
+              <Detail label="Workspace Type" value={props.session?.actor.workspaceKind ?? "personal"} />
+              <Detail label="Email" value={props.session?.actor.email ?? props.session?.actor.userId ?? "guest"} />
+              <Detail label="Role" value={props.session?.actor.workspaceRole ?? "participant"} />
+              <Detail label="Plan" value={props.session?.actor.planTier ?? "standard"} />
+            </div>
 
-              void handleLogout();
-            }}
-            type="button"
-          >
-            Sign Out
-          </button>
-          <button
-            className="button button--subtle"
-            onClick={() => {
-              props.onNavigate("/");
-            }}
-            type="button"
-          >
-            Back Home
-          </button>
-        </div>
+            <div className="stack-actions">
+              <button className="button button--primary" disabled type="button">
+                Signed In
+              </button>
+              {props.session?.actor.workspaceKind === "organisation" ? (
+                <button
+                  className="button button--secondary"
+                  onClick={() => {
+                    props.onNavigate("/my-organisation");
+                  }}
+                  type="button"
+                >
+                  My Organisation
+                </button>
+              ) : null}
+              <button
+                className="button button--ghost"
+                disabled={!signedIn || isBusy}
+                onClick={() => {
+                  if (shouldUseRedirectLogout()) {
+                    startLogout(window.location.pathname);
+                    return;
+                  }
+
+                  void handleLogout();
+                }}
+                type="button"
+              >
+                Sign Out
+              </button>
+              <button
+                className="button button--subtle"
+                onClick={() => {
+                  props.onNavigate("/");
+                }}
+                type="button"
+              >
+                Back Home
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <form
+              className="auth-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void handlePasswordSignIn();
+              }}
+            >
+              <label className="field">
+                <span className="field__label">Email</span>
+                <input
+                  autoComplete="email"
+                  className="field__input"
+                  name="email"
+                  onChange={(event) => {
+                    setEmail(event.target.value);
+                  }}
+                  placeholder="you@company.com"
+                  type="email"
+                  value={email}
+                />
+              </label>
+              <label className="field">
+                <span className="field__label">Password</span>
+                <input
+                  autoComplete="current-password"
+                  className="field__input"
+                  name="password"
+                  onChange={(event) => {
+                    setPassword(event.target.value);
+                  }}
+                  placeholder="Enter your password"
+                  type="password"
+                  value={password}
+                />
+              </label>
+              <div className="stack-actions stack-actions--inline">
+                <button
+                  className="button button--primary"
+                  disabled={!canUsePassword || isBusy}
+                  type="submit"
+                >
+                  {isBusy ? "Signing In..." : canUsePassword ? "Sign In" : "Password Sign-In Unavailable"}
+                </button>
+                <button
+                  className="button button--subtle"
+                  onClick={() => {
+                    props.onNavigate("/sign-up");
+                  }}
+                  type="button"
+                >
+                  Create Account
+                </button>
+              </div>
+            </form>
+
+            {canUseOidc ? (
+              <div className="auth-alt-panel">
+                <div className="eyebrow">Alternate Sign-In</div>
+                <p className="settings-card__copy">
+                  Your organisation can still use the existing identity provider flow.
+                </p>
+                <button
+                  className="button button--ghost"
+                  disabled={isBusy}
+                  onClick={() => {
+                    startLogin(window.location.pathname);
+                  }}
+                  type="button"
+                >
+                  Continue with Identity Provider
+                </button>
+              </div>
+            ) : null}
+          </>
+        )}
 
         {canUseMockAuth ? (
           <div className="dev-panel">
@@ -131,7 +257,9 @@ export function SignInPage(props: SignInPageProps) {
             <label className="field">
               <span className="field__label">Mock auth email</span>
               <input
+                autoComplete="email"
                 className="field__input"
+                name="mock-email"
                 onChange={(event) => {
                   setMockEmail(event.target.value);
                 }}

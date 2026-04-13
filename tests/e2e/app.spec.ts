@@ -316,8 +316,8 @@ test("sign out clears the signed-in session state", async ({ page }) => {
   await page.getByRole("button", { name: "Sign Out" }).click();
 
   await expect(page.getByText("You are signed out.")).toBeVisible();
-  await expect(page.getByText("Guest", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "OIDC Unavailable" })).toBeDisabled();
+  await expect(page.getByRole("textbox", { name: "Email", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign In", exact: true })).toBeEnabled();
 });
 
 test("the same signed-in identity can join from two browser sessions without collapsing into one participant", async ({ browser }) => {

@@ -1,4 +1,4 @@
-import type { AuthProvider, SessionActor } from "@opsui/shared-types";
+import type { AuthProvider, LiveRole, SessionActor } from "@opsui/shared-types";
 
 export const SESSION_COOKIE_NAME = "opsui_meets_session";
 const SESSION_SIGNATURE_VERSION = "v1";
@@ -13,6 +13,26 @@ export interface SessionClaims {
 }
 
 const OIDC_STATE_COOKIE_NAME = "opsui_meets_oidc_state";
+const OIDC_PENDING_COOKIE_NAME = "opsui_meets_oidc_pending";
+
+export interface PendingOidcAccountClaims {
+  provider: "oidc";
+  subject: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  workspaceId: string;
+  workspaceRole: LiveRole;
+  membershipSource:
+    | "oidc_claim"
+    | "oidc_domain"
+    | "oidc_default"
+    | "oidc_directory_email"
+    | "oidc_directory_user";
+  redirectTo: string | null;
+  iat: number;
+  exp: number;
+}
 
 export async function buildMockSessionToken(
   actor: SessionActor,
@@ -37,6 +57,20 @@ export async function buildOidcSessionToken(
       actor,
       sessionType: "user",
       provider: "oidc",
+    },
+    signingSecret,
+  );
+}
+
+export async function buildPasswordSessionToken(
+  actor: SessionActor,
+  signingSecret: string,
+): Promise<{ token: string; expiresAt: string }> {
+  return buildSessionToken(
+    {
+      actor,
+      sessionType: "user",
+      provider: "password",
     },
     signingSecret,
   );
@@ -81,6 +115,36 @@ export async function verifyOidcStateValue(
 
 export function getOidcStateCookieName(): string {
   return OIDC_STATE_COOKIE_NAME;
+}
+
+export async function buildPendingOidcAccountValue(
+  input: Omit<PendingOidcAccountClaims, "provider" | "iat" | "exp">,
+  signingSecret: string,
+): Promise<{ value: string; expiresAt: string }> {
+  const claims: PendingOidcAccountClaims = {
+    provider: "oidc",
+    ...input,
+    iat: Date.now(),
+    exp: Date.now() + 10 * 60 * 1000,
+  };
+  const payload = toBase64Url(JSON.stringify(claims));
+  const signature = await signValue(`${SESSION_SIGNATURE_VERSION}.${payload}`, signingSecret);
+
+  return {
+    value: `${SESSION_SIGNATURE_VERSION}.${payload}.${signature}`,
+    expiresAt: new Date(claims.exp).toISOString(),
+  };
+}
+
+export async function verifyPendingOidcAccountValue(
+  cookieValue: string | null,
+  signingSecret: string | undefined,
+): Promise<PendingOidcAccountClaims | null> {
+  return verifyClaims<PendingOidcAccountClaims>(cookieValue, signingSecret);
+}
+
+export function getOidcPendingCookieName(): string {
+  return OIDC_PENDING_COOKIE_NAME;
 }
 
 async function buildSessionToken(

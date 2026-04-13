@@ -4,6 +4,7 @@ import {
   isMembershipDirectoryConfigured,
   isMembershipDirectoryEnforced,
 } from "../lib/membership-directory";
+import { isOpsuiValidationConfigured } from "../lib/opsui-validation";
 import { isOidcConfigured } from "./oidc";
 import type { Env } from "../types";
 
@@ -26,8 +27,11 @@ export function getHealth(request: Request, env: Env): Response {
     service: "opsui-meets-auth",
     appEnv: env.APP_ENV ?? "production",
     mockAuthEnabled: env.ALLOW_MOCK_AUTH === "true",
-    sessionSigningConfigured: Boolean(env.MOCK_SESSION_SIGNING_SECRET),
+    passwordAuthEnabled: Boolean(env.AUTH_PASSWORD_PEPPER?.trim()),
+    signupEnabled: Boolean(env.AUTH_PASSWORD_PEPPER?.trim()),
+    sessionSigningConfigured: Boolean(env.SESSION_SIGNING_SECRET?.trim() || env.MOCK_SESSION_SIGNING_SECRET),
     oidcConfigured,
+    opsuiValidationConfigured: isOpsuiValidationConfigured(env),
     membershipDirectoryConfigured,
     membershipEnforced,
     workspaceMappingConfigured,

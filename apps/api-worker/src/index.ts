@@ -13,6 +13,15 @@ import { getAdminHookDeliveries } from "./routes/admin-hook-deliveries";
 import { retryAdminHookFailures } from "./routes/admin-hook-retry-failures";
 import { exportAttendance } from "./routes/attendance-export";
 import { getDashboard, getAdminOverview } from "./routes/dashboard";
+import {
+  createOrGetDirectMessageThread,
+  getDirectMessageThread,
+  listDirectMessageMessages,
+  listDirectMessageThreads,
+  markDirectMessageThreadRead,
+  searchDirectMessageUsers,
+  sendDirectMessage,
+} from "./routes/direct-messages";
 import { listRoomEvents } from "./routes/events";
 import { getMeetingDetail } from "./routes/meeting-detail";
 import { createMeetingMediaSession } from "./routes/media-session";
@@ -49,6 +58,9 @@ import {
   getMeetingActionItemsPath,
   getMeetingAttendanceExportPath,
   getMeetingChatMessagesPath,
+  getDirectMessageThreadMessagesPath,
+  getDirectMessageThreadPath,
+  getDirectMessageThreadReadPath,
   getMeetingFollowUpAttemptsPath,
   getMeetingFollowUpDispatchPath,
   getMeetingFollowUpExportPath,
@@ -92,6 +104,21 @@ export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
 
       if (request.method === "GET" && url.pathname === "/v1/dashboard") {
         routeResponse = await getDashboard(request, env);
+        return withCors(routeResponse, request);
+      }
+
+      if (request.method === "GET" && url.pathname === "/v1/direct-messages/threads") {
+        routeResponse = await listDirectMessageThreads(request, env);
+        return withCors(routeResponse, request);
+      }
+
+      if (request.method === "GET" && url.pathname === "/v1/direct-messages/search") {
+        routeResponse = await searchDirectMessageUsers(request, env);
+        return withCors(routeResponse, request);
+      }
+
+      if (request.method === "POST" && url.pathname === "/v1/direct-messages/threads") {
+        routeResponse = await createOrGetDirectMessageThread(request, env);
         return withCors(routeResponse, request);
       }
 
@@ -175,6 +202,18 @@ export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
       }
 
       if (request.method === "GET") {
+        const directMessageThreadPath = getDirectMessageThreadPath(url.pathname);
+        if (directMessageThreadPath) {
+          routeResponse = await getDirectMessageThread(request, directMessageThreadPath.threadId, env);
+          return withCors(routeResponse, request);
+        }
+
+        const directMessageMessagesPath = getDirectMessageThreadMessagesPath(url.pathname);
+        if (directMessageMessagesPath) {
+          routeResponse = await listDirectMessageMessages(request, directMessageMessagesPath.threadId, env);
+          return withCors(routeResponse, request);
+        }
+
         const detailPath = getMeetingDetailPath(url.pathname);
         if (detailPath) {
           routeResponse = await getMeetingDetail(detailPath.meetingInstanceId, env);
@@ -231,6 +270,18 @@ export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
       }
 
       if (request.method === "POST") {
+        const directMessageReadPath = getDirectMessageThreadReadPath(url.pathname);
+        if (directMessageReadPath) {
+          routeResponse = await markDirectMessageThreadRead(request, directMessageReadPath.threadId, env);
+          return withCors(routeResponse, request);
+        }
+
+        const directMessageMessagesPath = getDirectMessageThreadMessagesPath(url.pathname);
+        if (directMessageMessagesPath) {
+          routeResponse = await sendDirectMessage(request, directMessageMessagesPath.threadId, env);
+          return withCors(routeResponse, request);
+        }
+
         const heartbeatPath = getMeetingParticipantHeartbeatPath(url.pathname);
         if (heartbeatPath) {
           routeResponse = await touchParticipantSession(

@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "dependencies": {
+    "@opsui/db": "workspace:*",
     "@opsui/shared-types": "workspace:*",
     "@sentry/cloudflare": "10.47.0"
   },

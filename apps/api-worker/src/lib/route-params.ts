@@ -226,3 +226,30 @@ export function getRoomStatePath(pathname: string): { slug: string } | null {
 
   return { slug: match.groups.slug };
 }
+
+export function getDirectMessageThreadPath(pathname: string): { threadId: string } | null {
+  const match = pathname.match(/^\/v1\/direct-messages\/threads\/(?<threadId>[^/]+)$/);
+  if (!match?.groups?.threadId) {
+    return null;
+  }
+
+  return { threadId: match.groups.threadId };
+}
+
+export function getDirectMessageThreadMessagesPath(pathname: string): { threadId: string } | null {
+  const match = pathname.match(/^\/v1\/direct-messages\/threads\/(?<threadId>[^/]+)\/messages$/);
+  if (!match?.groups?.threadId) {
+    return null;
+  }
+
+  return { threadId: match.groups.threadId };
+}
+
+export function getDirectMessageThreadReadPath(pathname: string): { threadId: string } | null {
+  const match = pathname.match(/^\/v1\/direct-messages\/threads\/(?<threadId>[^/]+)\/read$/);
+  if (!match?.groups?.threadId) {
+    return null;
+  }
+
+  return { threadId: match.groups.threadId };
+}

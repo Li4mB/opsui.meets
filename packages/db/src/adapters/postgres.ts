@@ -2,16 +2,22 @@ import postgres from "postgres";
 import { ActionItemsRepository } from "../repositories/action-items";
 import { AuditRepository } from "../repositories/audit";
 import { DashboardRepository } from "../repositories/dashboard";
+import { DirectMessagesRepository } from "../repositories/direct-messages";
 import { EventsRepository } from "../repositories/events";
+import { ExternalAuthIdentitiesRepository } from "../repositories/external-auth-identities";
 import { HookDeliveriesRepository } from "../repositories/hook-deliveries";
 import { MeetingsRepository } from "../repositories/meetings";
+import { PasswordCredentialsRepository } from "../repositories/password-credentials";
 import { ParticipantsRepository } from "../repositories/participants";
 import { PoliciesRepository } from "../repositories/policies";
 import { RecordingsRepository } from "../repositories/recordings";
 import { RoomsRepository } from "../repositories/rooms";
 import { TemplatesRepository } from "../repositories/templates";
+import { UsersRepository } from "../repositories/users";
+import { WorkspaceMembershipsRepository } from "../repositories/workspace-memberships";
+import { WorkspacesRepository } from "../repositories/workspaces";
 import type { RequestRepositoryContext } from "../contracts";
-import { compactRuntimeStore, createSeedStore, type MemoryStore } from "../store";
+import { compactRuntimeStore, createSeedStore, hydrateMemoryStore, type MemoryStore } from "../store";
 
 const DEFAULT_SCOPE = "global";
 
@@ -56,6 +62,12 @@ export async function createPostgresRepositoryContext(
   const getStore = () => persisted.store;
   let dirty = compactRuntimeStore(persisted.store);
 
+  const workspaces = new WorkspacesRepository(getStore);
+  const users = new UsersRepository(getStore);
+  const workspaceMemberships = new WorkspaceMembershipsRepository(getStore);
+  const passwordCredentials = new PasswordCredentialsRepository(getStore);
+  const externalAuthIdentities = new ExternalAuthIdentitiesRepository(getStore);
+  const directMessages = new DirectMessagesRepository(getStore);
   const rooms = new RoomsRepository(getStore);
   const meetings = new MeetingsRepository(getStore);
   const participants = new ParticipantsRepository(getStore);
@@ -68,6 +80,36 @@ export async function createPostgresRepositoryContext(
   const audit = new AuditRepository(getStore);
   const events = new EventsRepository(getStore);
 
+  workspaces.create = trackMutation(workspaces.create.bind(workspaces), () => {
+    dirty = true;
+  });
+  users.create = trackMutation(users.create.bind(users), () => {
+    dirty = true;
+  });
+  workspaceMemberships.create = trackMutation(workspaceMemberships.create.bind(workspaceMemberships), () => {
+    dirty = true;
+  });
+  passwordCredentials.upsert = trackMutation(passwordCredentials.upsert.bind(passwordCredentials), () => {
+    dirty = true;
+  });
+  externalAuthIdentities.create = trackMutation(externalAuthIdentities.create.bind(externalAuthIdentities), () => {
+    dirty = true;
+  });
+  directMessages.createThread = trackMutation(directMessages.createThread.bind(directMessages), () => {
+    dirty = true;
+  });
+  directMessages.addThreadMember = trackMutation(directMessages.addThreadMember.bind(directMessages), () => {
+    dirty = true;
+  });
+  directMessages.updateThread = trackMutation(directMessages.updateThread.bind(directMessages), () => {
+    dirty = true;
+  });
+  directMessages.createMessage = trackMutation(directMessages.createMessage.bind(directMessages), () => {
+    dirty = true;
+  });
+  directMessages.markThreadRead = trackMutation(directMessages.markThreadRead.bind(directMessages), () => {
+    dirty = true;
+  });
   rooms.create = trackMutation(rooms.create.bind(rooms), () => {
     dirty = true;
   });
@@ -130,6 +172,12 @@ export async function createPostgresRepositoryContext(
   });
 
   return {
+    workspaces,
+    users,
+    workspaceMemberships,
+    passwordCredentials,
+    externalAuthIdentities,
+    directMessages,
     rooms,
     meetings,
     participants,
@@ -225,10 +273,10 @@ async function saveRuntimeState(
 
 function normalizeStore(raw: MemoryStore | string): MemoryStore {
   if (typeof raw === "string") {
-    return JSON.parse(raw) as MemoryStore;
+    return hydrateMemoryStore(JSON.parse(raw) as Partial<MemoryStore>);
   }
 
-  return raw;
+  return hydrateMemoryStore(raw);
 }
 
 function createSqlClient(connectionString: string): SqlClient {

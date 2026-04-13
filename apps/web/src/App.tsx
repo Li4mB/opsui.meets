@@ -2,17 +2,23 @@ import { useEffect, useState } from "react";
 import type { AuthCapabilities, SessionInfo } from "@opsui/shared-types";
 import { AppLayout } from "./components/AppLayout";
 import { getAuthCapabilities, getSessionState } from "./lib/auth";
+import { listDirectMessageThreads } from "./lib/direct-messages";
 import { useAppRoute } from "./lib/router";
+import { CompleteAccountPage } from "./pages/CompleteAccountPage";
+import { DirectMessagesPage } from "./pages/DirectMessagesPage";
 import { HomePage } from "./pages/HomePage";
 import { LegacyJoinPage } from "./pages/LegacyJoinPage";
 import { MeetingRoomPage } from "./pages/MeetingRoomPage";
 import { MeetingStageLabPage } from "./pages/MeetingStageLabPage";
+import { MyOrganisationPage } from "./pages/MyOrganisationPage";
 import { SignInPage } from "./pages/SignInPage";
+import { SignUpPage } from "./pages/SignUpPage";
 
 export function App() {
   const { route, navigate } = useAppRoute();
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [authCapabilities, setAuthCapabilities] = useState<AuthCapabilities | null>(null);
+  const [directMessagesUnreadCount, setDirectMessagesUnreadCount] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   async function refreshAuth(forceRefresh = false) {
@@ -30,6 +36,53 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!session?.authenticated || session.sessionType !== "user") {
+      setDirectMessagesUnreadCount(0);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function refreshUnreadCount() {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
+
+      const threads = await listDirectMessageThreads();
+      if (cancelled) {
+        return;
+      }
+
+      setDirectMessagesUnreadCount(
+        threads.reduce((total, thread) => total + thread.unreadCount, 0),
+      );
+    }
+
+    void refreshUnreadCount();
+    const interval = window.setInterval(() => {
+      void refreshUnreadCount();
+    }, 5_000);
+
+    function handleVisibilityOrFocus() {
+      if (document.visibilityState === "visible") {
+        void refreshUnreadCount();
+      }
+    }
+
+    window.addEventListener("focus", handleVisibilityOrFocus);
+    window.addEventListener("online", handleVisibilityOrFocus);
+    document.addEventListener("visibilitychange", handleVisibilityOrFocus);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", handleVisibilityOrFocus);
+      window.removeEventListener("online", handleVisibilityOrFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityOrFocus);
+    };
+  }, [session?.authenticated, session?.sessionType, session?.actor.userId]);
+
+  useEffect(() => {
     setSidebarOpen(false);
   }, [route.pathname]);
 
@@ -39,7 +92,9 @@ export function App() {
     <AppLayout
       currentMeetingCode={currentMeetingCode}
       currentPath={route.pathname}
+      directMessagesUnreadCount={directMessagesUnreadCount}
       isSidebarOpen={sidebarOpen}
+      session={session}
       onCloseSidebar={() => {
         setSidebarOpen(false);
       }}
@@ -61,6 +116,53 @@ export function App() {
         <SignInPage
           authCapabilities={authCapabilities}
           isAuthLoading={!session || !authCapabilities}
+          onNavigate={(pathname) => {
+            navigate(pathname);
+          }}
+          onRefreshSession={(forceRefresh) => {
+            return refreshAuth(forceRefresh);
+          }}
+          session={session}
+        />
+      ) : null}
+      {route.kind === "sign-up" ? (
+        <SignUpPage
+          authCapabilities={authCapabilities}
+          isAuthLoading={!session || !authCapabilities}
+          onNavigate={(pathname) => {
+            navigate(pathname);
+          }}
+          onRefreshSession={(forceRefresh) => {
+            return refreshAuth(forceRefresh);
+          }}
+          session={session}
+        />
+      ) : null}
+      {route.kind === "complete-account" ? (
+        <CompleteAccountPage
+          authCapabilities={authCapabilities}
+          onNavigate={(pathname) => {
+            navigate(pathname);
+          }}
+          onRefreshSession={(forceRefresh) => {
+            return refreshAuth(forceRefresh);
+          }}
+          session={session}
+        />
+      ) : null}
+      {route.kind === "direct-messages" || route.kind === "direct-message-thread" ? (
+        <DirectMessagesPage
+          onNavigate={(pathname) => {
+            navigate(pathname);
+          }}
+          onUnreadCountChange={setDirectMessagesUnreadCount}
+          selectedThreadId={route.kind === "direct-message-thread" ? route.threadId : null}
+          session={session}
+        />
+      ) : null}
+      {route.kind === "my-organisation" ? (
+        <MyOrganisationPage
+          authCapabilities={authCapabilities}
           onNavigate={(pathname) => {
             navigate(pathname);
           }}

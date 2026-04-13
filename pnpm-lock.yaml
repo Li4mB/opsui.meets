@@ -63,6 +63,9 @@ importers:
 
   apps/auth-worker:
     dependencies:
+      '@opsui/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@opsui/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types

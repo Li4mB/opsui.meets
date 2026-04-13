@@ -1,4 +1,13 @@
-import type { MeetingDetail, MeetingPostSummary, MeetingSummary, RoomSummary } from "@opsui/shared-types";
+import type {
+  LiveRole,
+  MeetingDetail,
+  MeetingPostSummary,
+  MeetingSummary,
+  RoomSummary,
+  SessionActor,
+  WorkspaceKind,
+  WorkspacePlanTier,
+} from "@opsui/shared-types";
 
 export interface RoomRecord extends RoomSummary {
   templateId: string | null;
@@ -13,4 +22,83 @@ export interface MeetingRecord extends MeetingDetail {
 
 export interface MeetingSummaryRecord extends MeetingPostSummary {
   meetingInstanceId: string;
+}
+
+export interface WorkspaceRecord {
+  id: string;
+  name: string;
+  slug: string;
+  workspaceKind: WorkspaceKind;
+  organizationCode: string | null;
+  organizationNameNormalized: string | null;
+  planTier: WorkspacePlanTier;
+  opsuiLinked: boolean;
+  opsuiBusinessId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserRecord {
+  id: string;
+  email: string;
+  username: string;
+  usernameNormalized: string;
+  displayName: string;
+  firstName: string;
+  lastName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ExternalAuthIdentityRecord {
+  id: string;
+  provider: "oidc";
+  subject: string;
+  userId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkspaceMembershipRecord {
+  id: string;
+  workspaceId: string;
+  userId: string;
+  workspaceRole: LiveRole;
+  membershipSource: NonNullable<SessionActor["membershipSource"]>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserPasswordCredentialRecord {
+  userId: string;
+  passwordHash: string;
+  hashVersion: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DirectMessageThreadRecord {
+  id: string;
+  threadKind: "direct";
+  participantKey: string;
+  createdAt: string;
+  updatedAt: string;
+  lastMessageAt: string | null;
+  lastMessagePreview: string | null;
+}
+
+export interface DirectMessageThreadMemberRecord {
+  threadId: string;
+  userId: string;
+  joinedAt: string;
+  lastReadMessageId: string | null;
+  lastReadAt: string | null;
+}
+
+export interface DirectMessageMessageRecord {
+  id: string;
+  threadId: string;
+  senderUserId: string;
+  body: string;
+  sentAt: string;
 }

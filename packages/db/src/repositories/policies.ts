@@ -5,54 +5,56 @@ export class PoliciesRepository {
   constructor(private readonly getStore: MemoryStoreAccessor = getMemoryStore) {}
 
   getWorkspacePolicy(workspaceId: string): WorkspacePolicy | null {
-    const policy = this.getStore().workspacePolicy;
-    return policy.workspaceId === workspaceId ? policy : null;
+    return this.getStore().workspacePolicies.find((policy) => policy.workspaceId === workspaceId) ?? null;
   }
 
   updateWorkspacePolicy(workspaceId: string, input: UpdateWorkspacePolicyInput): WorkspacePolicy | null {
     const store = this.getStore();
-    if (store.workspacePolicy.workspaceId !== workspaceId) {
+    const existingIndex = store.workspacePolicies.findIndex((policy) => policy.workspaceId === workspaceId);
+    if (existingIndex < 0) {
       return null;
     }
 
+    const existing = store.workspacePolicies[existingIndex];
     const nextHookSecret =
       input.postMeetingHookClearSecret
         ? ""
-        : input.postMeetingHookSecret ?? store.workspacePolicy.postMeetingHook.secret;
+        : input.postMeetingHookSecret ?? existing.postMeetingHook.secret;
 
-    store.workspacePolicy = {
-      ...store.workspacePolicy,
-      guestJoinMode: input.guestJoinMode ?? store.workspacePolicy.guestJoinMode,
-      recordingAccess: input.recordingAccess ?? store.workspacePolicy.recordingAccess,
+    const nextPolicy: WorkspacePolicy = {
+      ...existing,
+      guestJoinMode: input.guestJoinMode ?? existing.guestJoinMode,
+      recordingAccess: input.recordingAccess ?? existing.recordingAccess,
       postMeetingHook: {
-        ...store.workspacePolicy.postMeetingHook,
-        enabled: input.postMeetingHookEnabled ?? store.workspacePolicy.postMeetingHook.enabled,
+        ...existing.postMeetingHook,
+        enabled: input.postMeetingHookEnabled ?? existing.postMeetingHook.enabled,
         deliveryMode:
-          input.postMeetingHookDeliveryMode ?? store.workspacePolicy.postMeetingHook.deliveryMode,
+          input.postMeetingHookDeliveryMode ?? existing.postMeetingHook.deliveryMode,
         targetUrl:
-          input.postMeetingHookTargetUrl ?? store.workspacePolicy.postMeetingHook.targetUrl,
+          input.postMeetingHookTargetUrl ?? existing.postMeetingHook.targetUrl,
         secret: nextHookSecret,
         hasSecret: Boolean(nextHookSecret.trim()),
         includeAttendance:
           input.postMeetingHookIncludeAttendance ??
-          store.workspacePolicy.postMeetingHook.includeAttendance,
+          existing.postMeetingHook.includeAttendance,
         includeActionItems:
           input.postMeetingHookIncludeActionItems ??
-          store.workspacePolicy.postMeetingHook.includeActionItems,
+          existing.postMeetingHook.includeActionItems,
         includeRecording:
           input.postMeetingHookIncludeRecording ??
-          store.workspacePolicy.postMeetingHook.includeRecording,
+          existing.postMeetingHook.includeRecording,
       },
       defaultRoomPolicy: {
-        ...store.workspacePolicy.defaultRoomPolicy,
-        chatMode: input.chatMode ?? store.workspacePolicy.defaultRoomPolicy.chatMode,
+        ...existing.defaultRoomPolicy,
+        chatMode: input.chatMode ?? existing.defaultRoomPolicy.chatMode,
         screenShareMode:
-          input.screenShareMode ?? store.workspacePolicy.defaultRoomPolicy.screenShareMode,
-        mutedOnEntry: input.mutedOnEntry ?? store.workspacePolicy.defaultRoomPolicy.mutedOnEntry,
-        lobbyEnabled: input.lobbyEnabled ?? store.workspacePolicy.defaultRoomPolicy.lobbyEnabled,
+          input.screenShareMode ?? existing.defaultRoomPolicy.screenShareMode,
+        mutedOnEntry: input.mutedOnEntry ?? existing.defaultRoomPolicy.mutedOnEntry,
+        lobbyEnabled: input.lobbyEnabled ?? existing.defaultRoomPolicy.lobbyEnabled,
       },
     };
 
-    return store.workspacePolicy;
+    store.workspacePolicies[existingIndex] = nextPolicy;
+    return nextPolicy;
   }
 }

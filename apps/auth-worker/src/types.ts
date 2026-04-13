@@ -3,9 +3,15 @@ export interface Env {
   PUBLIC_APP_URL?: string;
   ALLOW_MOCK_AUTH?: string;
   APP_ENV?: string;
+  APP_DATA_MODE?: string;
+  DATABASE_URL?: string;
   DEFAULT_WORKSPACE_ID?: string;
+  SESSION_SIGNING_SECRET?: string;
   MOCK_SESSION_SIGNING_SECRET?: string;
   MOCK_AUTH_DEFAULT_EMAIL?: string;
+  AUTH_PASSWORD_PEPPER?: string;
+  OPSUI_VALIDATION_URL?: string;
+  OPSUI_VALIDATION_SHARED_SECRET?: string;
   AUTH_MEMBERSHIP_DIRECTORY_JSON?: string;
   AUTH_ENFORCE_MEMBERSHIP_DIRECTORY?: string;
   OIDC_ISSUER_URL?: string;

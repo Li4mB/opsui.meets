@@ -1,4 +1,4 @@
-import type { AuthCapabilities, SessionInfo } from "@opsui/shared-types";
+import type { AuthCapabilities, OrganisationProfile, SessionInfo } from "@opsui/shared-types";
 import { API_BASE_URL, AUTH_BASE_URL } from "./config";
 
 export interface JoinTokenResponse {
@@ -13,6 +13,9 @@ const FALLBACK_SESSION: SessionInfo = {
   sessionType: "guest",
   actor: {
     workspaceId: "workspace_local",
+    workspaceName: "My Workspace",
+    workspaceKind: "personal",
+    planTier: "standard",
     userId: "guest_anonymous",
   },
 };
@@ -91,8 +94,11 @@ export async function getAuthCapabilities(forceRefresh = false): Promise<AuthCap
     service: "opsui-meets-auth",
     appEnv: "unknown",
     mockAuthEnabled: shouldEnableLocalDevAuth(),
+    passwordAuthEnabled: false,
+    signupEnabled: false,
     sessionSigningConfigured: false,
     oidcConfigured: false,
+    opsuiValidationConfigured: false,
     membershipDirectoryConfigured: false,
     membershipEnforced: false,
     workspaceMappingConfigured: false,
@@ -127,6 +133,7 @@ export function buildActorHeadersFromSession(
     ...(options?.includeJsonContentType ? { "content-type": "application/json" } : {}),
     "x-workspace-id": actor.workspaceId,
     "x-user-id": actor.userId,
+    "x-session-type": session?.sessionType ?? "guest",
     ...(actor.email ? { "x-user-email": actor.email } : {}),
     ...(actor.workspaceRole ? { "x-workspace-role": actor.workspaceRole } : {}),
     ...(extra ?? {}),
@@ -167,6 +174,73 @@ export async function issueMockSession(input?: { email?: string; userId?: string
   }
 
   return false;
+}
+
+export interface PasswordLoginInput {
+  email: string;
+  password: string;
+}
+
+export interface IndividualSignUpInput extends PasswordLoginInput {
+  username: string;
+  firstName: string;
+  lastName: string;
+}
+
+export interface OrganisationSignUpInput extends IndividualSignUpInput {
+  organizationName: string;
+  linkToOpsui: boolean;
+}
+
+export interface BusinessSignUpInput extends IndividualSignUpInput {
+  organizationCode: string;
+}
+
+export interface AuthMutationResult {
+  ok: boolean;
+  error?: string;
+  message?: string;
+  redirectTo?: string;
+}
+
+export async function loginWithPassword(input: PasswordLoginInput): Promise<AuthMutationResult> {
+  return postAuthMutation("/v1/login/password", input);
+}
+
+export async function signUpIndividual(input: IndividualSignUpInput): Promise<AuthMutationResult> {
+  return postAuthMutation("/v1/signup/individual", input);
+}
+
+export async function signUpOrganisation(input: OrganisationSignUpInput): Promise<AuthMutationResult> {
+  return postAuthMutation("/v1/signup/organisation", input);
+}
+
+export async function signUpWithBusiness(input: BusinessSignUpInput): Promise<AuthMutationResult> {
+  return postAuthMutation("/v1/signup/business", input);
+}
+
+export async function completeOidcAccount(input: { username: string }): Promise<AuthMutationResult> {
+  return postAuthMutation("/v1/oidc/complete-account", input);
+}
+
+export async function getOrganisationProfile(forceRefresh = false): Promise<OrganisationProfile | null> {
+  if (forceRefresh) {
+    sessionCache = null;
+  }
+
+  try {
+    const response = await fetch(`${AUTH_BASE_URL}/v1/organisation/me`, {
+      cache: "no-store",
+      credentials: "include",
+    });
+    if (!response.ok) {
+      return null;
+    }
+
+    return (await response.json()) as OrganisationProfile;
+  } catch {
+    return null;
+  }
 }
 
 export function startLogin(redirectTo = "/"): void {
@@ -215,6 +289,11 @@ export async function logout(): Promise<boolean> {
 }
 
 export function getSessionDisplayName(session: SessionInfo | null): string {
+  const firstName = session?.actor.firstName?.trim();
+  if (firstName) {
+    return firstName;
+  }
+
   const raw = session?.actor.email ?? session?.actor.userId ?? "Guest User";
   const localPart = raw.includes("@") ? raw.split("@")[0] ?? raw : raw;
   const cleaned = localPart.replace(/[_.-]+/g, " ").trim();
@@ -239,6 +318,12 @@ function createLocalDevSession(input?: { email?: string; userId?: string }): Ses
   const userId =
     input?.userId?.trim() ||
     `mock_${(email.split("@")[0] ?? "member").replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`;
+  const localPart = email.split("@")[0] ?? "member";
+  const firstName = localPart
+    .replace(/[_.-]+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (value) => value.toUpperCase()) || "Member";
+  const username = localPart.replace(/[^a-z0-9._]+/gi, "").slice(0, 24) || "member";
 
   return {
     authenticated: true,
@@ -246,8 +331,14 @@ function createLocalDevSession(input?: { email?: string; userId?: string }): Ses
     provider: "mock",
     actor: {
       workspaceId: "workspace_local",
+      workspaceName: "My Workspace",
+      workspaceKind: "personal",
+      planTier: "standard",
       userId,
       email,
+      username,
+      firstName,
+      lastName: "User",
       workspaceRole: "owner",
       membershipSource: "mock",
     },
@@ -287,6 +378,53 @@ function clearLocalDevSession(): boolean {
   const hadSession = window.localStorage.getItem(LOCAL_DEV_SESSION_STORAGE_KEY) !== null;
   window.localStorage.removeItem(LOCAL_DEV_SESSION_STORAGE_KEY);
   return hadSession;
+}
+
+async function postAuthMutation(pathname: string, body: unknown): Promise<AuthMutationResult> {
+  try {
+    const response = await fetch(`${AUTH_BASE_URL}${pathname}`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    const payload = (await response.json().catch(() => null)) as
+      | {
+          ok?: boolean;
+          error?: string;
+          message?: string;
+          redirectTo?: string;
+        }
+      | null;
+
+    if (!response.ok || payload?.ok !== true) {
+      return {
+        ok: false,
+        error: payload?.error ?? "request_failed",
+        message: payload?.message ?? "That request could not be completed.",
+      };
+    }
+
+    sessionCache = null;
+    capabilitiesCache = null;
+    clearLocalDevSession();
+    return {
+      ok: true,
+      redirectTo:
+        payload && typeof payload.redirectTo === "string" && payload.redirectTo.startsWith("/")
+          ? payload.redirectTo
+          : undefined,
+    };
+  } catch {
+    return {
+      ok: false,
+      error: "request_failed",
+      message: "That request could not be completed.",
+    };
+  }
 }
 
 export { API_BASE_URL };

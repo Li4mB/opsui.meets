@@ -11,6 +11,9 @@ const FALLBACK_SESSION: SessionInfo = {
   sessionType: "guest",
   actor: {
     workspaceId: "workspace_local",
+    workspaceName: "My Workspace",
+    workspaceKind: "personal",
+    planTier: "standard",
     userId: "guest_anonymous",
   },
 };
@@ -66,8 +69,11 @@ export async function getAuthCapabilities(forceRefresh = false): Promise<AuthCap
     service: "opsui-meets-auth",
     appEnv: "unknown",
     mockAuthEnabled: false,
+    passwordAuthEnabled: false,
+    signupEnabled: false,
     sessionSigningConfigured: false,
     oidcConfigured: false,
+    opsuiValidationConfigured: false,
     membershipDirectoryConfigured: false,
     membershipEnforced: false,
     workspaceMappingConfigured: false,

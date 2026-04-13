@@ -2,7 +2,7 @@
   "name": "opsui-meets-auth",
   "main": "src/index.ts",
   "compatibility_date": "2026-03-26",
-  "compatibility_flags": ["nodejs_als"],
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
   "routes": [
     {
@@ -15,6 +15,7 @@
     "PUBLIC_APP_URL": "https://opsuimeets.com",
     "ALLOW_MOCK_AUTH": "false",
     "APP_ENV": "production",
+    "APP_DATA_MODE": "postgres",
     "DEFAULT_WORKSPACE_ID": "workspace_local",
     "MOCK_AUTH_DEFAULT_EMAIL": "",
     "AUTH_ENFORCE_MEMBERSHIP_DIRECTORY": "true",

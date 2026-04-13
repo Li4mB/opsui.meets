@@ -8,5 +8,13 @@ export function getActorContext(request: Request): SessionActor {
   const workspaceRole = rawWorkspaceRole && LIVE_ROLES.includes(rawWorkspaceRole as (typeof LIVE_ROLES)[number])
     ? rawWorkspaceRole as SessionActor["workspaceRole"]
     : undefined;
-  return { workspaceId, userId, email, workspaceRole };
+  return {
+    workspaceId,
+    workspaceName: "My Workspace",
+    workspaceKind: "personal",
+    planTier: "standard",
+    userId,
+    email,
+    workspaceRole,
+  };
 }

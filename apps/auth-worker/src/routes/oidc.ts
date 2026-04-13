@@ -1,18 +1,25 @@
 import { LIVE_ROLES, type LiveRole } from "@opsui/shared-types";
 import { recordAuthMetric } from "../lib/analytics";
+import { normalizeEmail, prettifyEmailLocalPart, validateUsername } from "../lib/account-identity";
+import { getRepositories } from "../lib/data";
 import { json } from "../lib/http";
 import {
   isMembershipDirectoryEnforced,
   resolveMembershipDirectoryEntry,
 } from "../lib/membership-directory";
+import { buildSessionActorFromRecords } from "../lib/session-actors";
 import {
+  buildPendingOidcAccountValue,
   buildOidcSessionToken,
   buildOidcStateValue,
   getCookieValue,
+  getOidcPendingCookieName,
   getOidcStateCookieName,
   SESSION_COOKIE_NAME,
+  verifyPendingOidcAccountValue,
   verifyOidcStateValue,
 } from "../lib/session-cookie";
+import { buildSessionCookie, getSessionSigningSecret } from "../lib/session-config";
 import type { Env } from "../types";
 
 export async function startOidcLogin(request: Request, env: Env): Promise<Response> {
@@ -38,7 +45,7 @@ export async function startOidcLogin(request: Request, env: Env): Promise<Respon
   const requestedRedirect = url.searchParams.get("redirectTo");
   const redirectTo =
     requestedRedirect && requestedRedirect.startsWith("/") ? requestedRedirect : "/";
-  const signingSecret = env.MOCK_SESSION_SIGNING_SECRET ?? "opsui-meets-dev-signing-secret";
+  const signingSecret = getSessionSigningSecret(env);
   const stateValue = await buildOidcStateValue(redirectTo, signingSecret);
   const stateClaims = await verifyOidcStateValue(stateValue.value, signingSecret);
   const state = stateClaims?.state ?? crypto.randomUUID();
@@ -100,7 +107,7 @@ export async function handleOidcCallback(request: Request, env: Env): Promise<Re
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
-  const signingSecret = env.MOCK_SESSION_SIGNING_SECRET ?? "opsui-meets-dev-signing-secret";
+  const signingSecret = getSessionSigningSecret(env);
   const stateCookie = getCookieValue(request.headers.get("Cookie") ?? "", getOidcStateCookieName());
   const verifiedState = await verifyOidcStateValue(stateCookie, signingSecret);
 
@@ -244,7 +251,7 @@ export async function handleOidcCallback(request: Request, env: Env): Promise<Re
         allowed: isWorkspaceAllowed(directoryMembership.workspaceId, env),
         workspaceId: directoryMembership.workspaceId,
         workspaceRole: directoryMembership.workspaceRole,
-        membershipSource: directoryMembership.membershipSource,
+        membershipSource: normalizeOidcMembershipSource(directoryMembership.membershipSource),
       }
     : resolveWorkspaceAccess(userInfo, env);
   if (!workspaceAccess.allowed) {
@@ -265,43 +272,101 @@ export async function handleOidcCallback(request: Request, env: Env): Promise<Re
     return response;
   }
 
-  const session = await buildOidcSessionToken(
+  const subject = String(userInfo.sub);
+  const repositories = await getRepositories(env);
+  const existingIdentity = repositories.externalAuthIdentities.getByProviderAndSubject("oidc", subject);
+
+  if (existingIdentity) {
+    const user = repositories.users.getById(existingIdentity.userId);
+    const membership = user ? repositories.workspaceMemberships.listByUser(user.id)[0] ?? null : null;
+    const workspace = membership ? repositories.workspaces.getById(membership.workspaceId) : null;
+    await repositories.commit();
+
+    if (!user || !membership || !workspace) {
+      const response = json(
+        {
+          error: "oidc_account_missing",
+          message: "The linked OpsUI Meets account could not be loaded.",
+        },
+        { status: 409 },
+      );
+      recordAuthMetric(env, {
+        route: "oidc-callback",
+        status: response.status,
+        request,
+        outcome: "account_missing",
+      });
+      return response;
+    }
+
+    const actor = buildSessionActorFromRecords({
+      workspace,
+      user,
+      membership,
+    });
+    const session = await buildOidcSessionToken(actor, signingSecret);
+    const headers = new Headers();
+    headers.set("Location", buildPostAuthRedirectUrl(verifiedState.redirectTo, env));
+    headers.append("Set-Cookie", buildSessionCookie(session.token, env));
+    appendExpiredCookie(headers, getOidcStateCookieName(), env.COOKIE_DOMAIN);
+    appendExpiredCookie(headers, getOidcPendingCookieName(), env.COOKIE_DOMAIN);
+
+    const response = new Response(null, {
+      status: 302,
+      headers,
+    });
+    recordAuthMetric(env, {
+      route: "oidc-callback",
+      status: response.status,
+      request,
+      outcome: "authenticated",
+      sessionType: "user",
+    });
+    return response;
+  }
+
+  const workspace = repositories.workspaces.getById(workspaceAccess.workspaceId);
+  await repositories.commit();
+  if (!workspace) {
+    const response = json(
+      {
+        error: "oidc_workspace_not_found",
+        message: "The workspace for this sign-in could not be found.",
+      },
+      { status: 409 },
+    );
+    recordAuthMetric(env, {
+      route: "oidc-callback",
+      status: response.status,
+      request,
+      outcome: "workspace_missing",
+    });
+    return response;
+  }
+
+  const email = normalizeEmail(typeof userInfo.email === "string" ? userInfo.email : "");
+  const names = resolvePendingAccountNames(userInfo, email);
+  const pending = await buildPendingOidcAccountValue(
     {
-      workspaceId: workspaceAccess.workspaceId,
-      userId: String(userInfo.sub),
-      email: typeof userInfo.email === "string" ? userInfo.email : undefined,
+      subject,
+      email,
+      firstName: names.firstName,
+      lastName: names.lastName,
+      workspaceId: workspace.id,
       workspaceRole: workspaceAccess.workspaceRole,
       membershipSource: workspaceAccess.membershipSource,
+      redirectTo: verifiedState.redirectTo,
     },
     signingSecret,
   );
 
   const headers = new Headers();
-  headers.set("Location", buildPostAuthRedirectUrl(verifiedState.redirectTo, env));
+  headers.set("Location", buildPostAuthRedirectUrl("/complete-account", env));
   headers.append(
     "Set-Cookie",
-    [
-      `${SESSION_COOKIE_NAME}=${session.token}`,
-      `Domain=${env.COOKIE_DOMAIN}`,
-      "Path=/",
-      "HttpOnly",
-      "Secure",
-      "SameSite=Lax",
-      "Max-Age=86400",
-    ].join("; "),
+    buildCookie(getOidcPendingCookieName(), pending.value, env.COOKIE_DOMAIN, 600),
   );
-  headers.append(
-    "Set-Cookie",
-    [
-      `${getOidcStateCookieName()}=`,
-      `Domain=${env.COOKIE_DOMAIN}`,
-      "Path=/",
-      "HttpOnly",
-      "Secure",
-      "SameSite=Lax",
-      "Max-Age=0",
-    ].join("; "),
-  );
+  appendExpiredCookie(headers, getOidcStateCookieName(), env.COOKIE_DOMAIN);
 
   const response = new Response(null, {
     status: 302,
@@ -311,10 +376,177 @@ export async function handleOidcCallback(request: Request, env: Env): Promise<Re
     route: "oidc-callback",
     status: response.status,
     request,
-    outcome: "authenticated",
-    sessionType: "user",
+    outcome: "pending_completion",
   });
   return response;
+}
+
+export async function completeOidcAccount(request: Request, env: Env): Promise<Response> {
+  const signingSecret = getSessionSigningSecret(env);
+  const pendingCookie = getCookieValue(request.headers.get("Cookie") ?? "", getOidcPendingCookieName());
+  const pending = await verifyPendingOidcAccountValue(pendingCookie, signingSecret);
+  if (!pending) {
+    const response = json(
+      {
+        error: "oidc_completion_not_available",
+        message: "Start sign-in with your identity provider before completing your account.",
+      },
+      { status: 401 },
+    );
+    recordAuthMetric(env, {
+      route: "oidc-complete-account",
+      status: response.status,
+      request,
+      outcome: "pending_missing",
+    });
+    return response;
+  }
+
+  const body = (await request.json().catch(() => null)) as { username?: string } | null;
+  const usernameResult = validateUsername(body?.username);
+  if (!usernameResult.ok) {
+    const response = json(
+      {
+        error: usernameResult.error,
+        message: usernameResult.message,
+      },
+      { status: 400 },
+    );
+    recordAuthMetric(env, {
+      route: "oidc-complete-account",
+      status: response.status,
+      request,
+      outcome: "invalid_input",
+    });
+    return response;
+  }
+
+  const repositories = await getRepositories(env);
+  if (repositories.users.getByNormalizedUsername(usernameResult.value.usernameNormalized)) {
+    await repositories.commit();
+    const response = json(
+      {
+        error: "username_already_exists",
+        message: "That username is already taken.",
+      },
+      { status: 409 },
+    );
+    recordAuthMetric(env, {
+      route: "oidc-complete-account",
+      status: response.status,
+      request,
+      outcome: "duplicate_username",
+    });
+    return response;
+  }
+
+  const existingIdentity = repositories.externalAuthIdentities.getByProviderAndSubject("oidc", pending.subject);
+  if (existingIdentity) {
+    const user = repositories.users.getById(existingIdentity.userId);
+    const membership = user ? repositories.workspaceMemberships.listByUser(user.id)[0] ?? null : null;
+    const workspace = membership ? repositories.workspaces.getById(membership.workspaceId) : null;
+    await repositories.commit();
+
+    if (!user || !membership || !workspace) {
+      const response = json(
+        {
+          error: "oidc_account_missing",
+          message: "The linked OpsUI Meets account could not be loaded.",
+        },
+        { status: 409 },
+      );
+      recordAuthMetric(env, {
+        route: "oidc-complete-account",
+        status: response.status,
+        request,
+        outcome: "account_missing",
+      });
+      return response;
+    }
+
+    return issueCompletedOidcSession(request, env, signingSecret, pending.redirectTo, {
+      workspace,
+      user,
+      membership,
+    });
+  }
+
+  if (pending.email && repositories.users.getByEmail(pending.email)) {
+    await repositories.commit();
+    const response = json(
+      {
+        error: "email_already_exists",
+        message: "An account with that email already exists.",
+      },
+      { status: 409 },
+    );
+    recordAuthMetric(env, {
+      route: "oidc-complete-account",
+      status: response.status,
+      request,
+      outcome: "duplicate_email",
+    });
+    return response;
+  }
+
+  const workspace = repositories.workspaces.getById(pending.workspaceId);
+  if (!workspace) {
+    await repositories.commit();
+    const response = json(
+      {
+        error: "oidc_workspace_not_found",
+        message: "The workspace for this sign-in could not be found.",
+      },
+      { status: 409 },
+    );
+    recordAuthMetric(env, {
+      route: "oidc-complete-account",
+      status: response.status,
+      request,
+      outcome: "workspace_missing",
+    });
+    return response;
+  }
+
+  const timestamp = new Date().toISOString();
+  const user = {
+    id: `user_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
+    email: pending.email || `oidc-${pending.subject}@opsuimeets.local`,
+    username: usernameResult.value.username,
+    usernameNormalized: usernameResult.value.usernameNormalized,
+    firstName: pending.firstName,
+    lastName: pending.lastName,
+    displayName: `${pending.firstName} ${pending.lastName}`.trim() || pending.firstName || usernameResult.value.username,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  const membership = {
+    id: `membership_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
+    workspaceId: workspace.id,
+    userId: user.id,
+    workspaceRole: pending.workspaceRole,
+    membershipSource: pending.membershipSource,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+
+  repositories.users.create(user);
+  repositories.workspaceMemberships.create(membership);
+  repositories.externalAuthIdentities.create({
+    id: `extauth_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`,
+    provider: "oidc",
+    subject: pending.subject,
+    userId: user.id,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  await repositories.commit();
+
+  return issueCompletedOidcSession(request, env, signingSecret, pending.redirectTo, {
+    workspace,
+    user,
+    membership,
+  });
 }
 
 export function clearSession(request: Request, env: Env): Response {
@@ -337,15 +569,11 @@ export function clearSession(request: Request, env: Env): Response {
     return response;
   }
 
-  const response = json(
-    {
-      ok: true,
-    },
-    {
-      status: 200,
-      headers,
-    },
-  );
+  headers.set("content-type", "application/json; charset=utf-8");
+  const response = new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers,
+  });
   recordAuthMetric(env, {
     route: "session-logout",
     status: response.status,
@@ -418,24 +646,93 @@ function buildClearedSessionHeaders(env: Env): Headers {
 
   appendExpiredCookie(headers, SESSION_COOKIE_NAME, env.COOKIE_DOMAIN);
   appendExpiredCookie(headers, getOidcStateCookieName(), env.COOKIE_DOMAIN);
+  appendExpiredCookie(headers, getOidcPendingCookieName(), env.COOKIE_DOMAIN);
 
   return headers;
 }
 
 function appendExpiredCookie(headers: Headers, name: string, cookieDomain: string): void {
-  headers.append(
-    "Set-Cookie",
-    [
-      `${name}=`,
-      `Domain=${cookieDomain}`,
-      "Path=/",
-      "HttpOnly",
-      "Secure",
-      "SameSite=Lax",
-      "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
-      "Max-Age=0",
-    ].join("; "),
+  headers.append("Set-Cookie", buildCookie(name, "", cookieDomain, 0));
+}
+
+function buildCookie(name: string, value: string, cookieDomain: string, maxAgeSeconds: number): string {
+  return [
+    `${name}=${value}`,
+    `Domain=${cookieDomain}`,
+    "Path=/",
+    "HttpOnly",
+    "Secure",
+    "SameSite=Lax",
+    `Max-Age=${maxAgeSeconds}`,
+    ...(maxAgeSeconds === 0 ? ["Expires=Thu, 01 Jan 1970 00:00:00 GMT"] : []),
+  ].join("; ");
+}
+
+async function issueCompletedOidcSession(
+  request: Request,
+  env: Env,
+  signingSecret: string,
+  redirectTo: string | null,
+  input: Parameters<typeof buildSessionActorFromRecords>[0],
+): Promise<Response> {
+  const actor = buildSessionActorFromRecords(input);
+  const session = await buildOidcSessionToken(actor, signingSecret);
+  const headers = new Headers();
+  headers.set("content-type", "application/json; charset=utf-8");
+  headers.append("Set-Cookie", buildSessionCookie(session.token, env));
+  appendExpiredCookie(headers, getOidcPendingCookieName(), env.COOKIE_DOMAIN);
+  appendExpiredCookie(headers, getOidcStateCookieName(), env.COOKIE_DOMAIN);
+
+  const response = new Response(
+    JSON.stringify({
+      ok: true,
+      actor,
+      expiresAt: session.expiresAt,
+      redirectTo: redirectTo && redirectTo.startsWith("/") ? redirectTo : "/",
+    }),
+    {
+      status: 200,
+      headers,
+    },
   );
+  recordAuthMetric(env, {
+    route: "oidc-complete-account",
+    status: response.status,
+    request,
+    outcome: "completed",
+    sessionType: "user",
+  });
+  return response;
+}
+
+function resolvePendingAccountNames(
+  userInfo: Record<string, unknown>,
+  email: string,
+): { firstName: string; lastName: string } {
+  const givenName = typeof userInfo.given_name === "string" ? userInfo.given_name.trim() : "";
+  const familyName = typeof userInfo.family_name === "string" ? userInfo.family_name.trim() : "";
+  if (givenName) {
+    return {
+      firstName: givenName,
+      lastName: familyName,
+    };
+  }
+
+  const fullName = typeof userInfo.name === "string" ? userInfo.name.trim() : "";
+  if (fullName) {
+    const parts = fullName.split(/\s+/).filter(Boolean);
+    if (parts.length) {
+      return {
+        firstName: parts[0] ?? prettifyEmailLocalPart(email || String(userInfo.sub ?? "member")),
+        lastName: parts.slice(1).join(" "),
+      };
+    }
+  }
+
+  return {
+    firstName: prettifyEmailLocalPart(email || String(userInfo.sub ?? "member")),
+    lastName: "",
+  };
 }
 
 interface WorkspaceAccess {
@@ -458,6 +755,22 @@ function resolveWorkspaceAccess(userInfo: Record<string, unknown>, env: Env): Wo
     workspaceRole: resolveWorkspaceRole(userInfo, env),
     membershipSource: target.membershipSource,
   };
+}
+
+function normalizeOidcMembershipSource(
+  membershipSource: WorkspaceAccess["membershipSource"] | "mock_directory_email" | "mock_directory_user",
+): WorkspaceAccess["membershipSource"] {
+  if (
+    membershipSource === "oidc_claim" ||
+    membershipSource === "oidc_domain" ||
+    membershipSource === "oidc_default" ||
+    membershipSource === "oidc_directory_email" ||
+    membershipSource === "oidc_directory_user"
+  ) {
+    return membershipSource;
+  }
+
+  return membershipSource === "mock_directory_user" ? "oidc_directory_user" : "oidc_directory_email";
 }
 
 function resolveWorkspaceTarget(

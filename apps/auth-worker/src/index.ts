@@ -3,7 +3,14 @@ import { recordAuthMetric } from "./lib/analytics";
 import { getHealth } from "./routes/health";
 import { issueJoinToken } from "./routes/join-token";
 import { getRateLimitResponse } from "./lib/rate-limit";
-import { clearSession, handleOidcCallback, startOidcLogin } from "./routes/oidc";
+import { clearSession, completeOidcAccount, handleOidcCallback, startOidcLogin } from "./routes/oidc";
+import {
+  getOrganisationProfile,
+  loginWithPassword,
+  signUpBusiness,
+  signUpIndividual,
+  signUpOrganisation,
+} from "./routes/password-auth";
 import { issueMockSession } from "./routes/session";
 import { getSessionInfo } from "./routes/session-info";
 import { getSentryOptions } from "./lib/sentry";
@@ -54,6 +61,58 @@ export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
       return withCors(response, request);
     }
 
+    if (request.method === "POST" && url.pathname === "/v1/login/password") {
+      const limited = getRateLimitResponse(request, {
+        bucket: "password-login",
+        limit: 20,
+        windowMs: 60_000,
+      });
+      if (limited) {
+        return withCors(limited, request);
+      }
+      response = await loginWithPassword(request, env);
+      return withCors(response, request);
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/signup/individual") {
+      const limited = getRateLimitResponse(request, {
+        bucket: "signup-individual",
+        limit: 10,
+        windowMs: 60_000,
+      });
+      if (limited) {
+        return withCors(limited, request);
+      }
+      response = await signUpIndividual(request, env);
+      return withCors(response, request);
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/signup/organisation") {
+      const limited = getRateLimitResponse(request, {
+        bucket: "signup-organisation",
+        limit: 10,
+        windowMs: 60_000,
+      });
+      if (limited) {
+        return withCors(limited, request);
+      }
+      response = await signUpOrganisation(request, env);
+      return withCors(response, request);
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/signup/business") {
+      const limited = getRateLimitResponse(request, {
+        bucket: "signup-business",
+        limit: 10,
+        windowMs: 60_000,
+      });
+      if (limited) {
+        return withCors(limited, request);
+      }
+      response = await signUpBusiness(request, env);
+      return withCors(response, request);
+    }
+
     if (request.method === "GET" && url.pathname === "/v1/login") {
       const limited = getRateLimitResponse(request, {
         bucket: "oidc-login",
@@ -80,8 +139,26 @@ export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
       return withCors(response, request);
     }
 
+    if (request.method === "POST" && url.pathname === "/v1/oidc/complete-account") {
+      const limited = getRateLimitResponse(request, {
+        bucket: "oidc-complete-account",
+        limit: 20,
+        windowMs: 60_000,
+      });
+      if (limited) {
+        return withCors(limited, request);
+      }
+      response = await completeOidcAccount(request, env);
+      return withCors(response, request);
+    }
+
     if (request.method === "GET" && url.pathname === "/v1/session") {
       response = await getSessionInfo(request, env);
+      return withCors(response, request);
+    }
+
+    if (request.method === "GET" && url.pathname === "/v1/organisation/me") {
+      response = await getOrganisationProfile(request, env);
       return withCors(response, request);
     }
 
