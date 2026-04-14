@@ -1,6 +1,7 @@
 import { LIVE_ROLES, type LiveRole } from "@opsui/shared-types";
 import { recordAuthMetric } from "../lib/analytics";
 import { normalizeEmail, prettifyEmailLocalPart, validateUsername } from "../lib/account-identity";
+import { getAuthDataStatus } from "../lib/data-status";
 import { getRepositories } from "../lib/data";
 import { json } from "../lib/http";
 import {
@@ -273,6 +274,23 @@ export async function handleOidcCallback(request: Request, env: Env): Promise<Re
   }
 
   const subject = String(userInfo.sub);
+  const dataStatus = getAuthDataStatus(env);
+  if (!dataStatus.authStorageReady) {
+    const response = json(
+      {
+        error: "auth_storage_unavailable",
+        message: "Account sign-in is temporarily unavailable while auth storage is being configured.",
+      },
+      { status: 503 },
+    );
+    recordAuthMetric(env, {
+      route: "oidc-callback",
+      status: response.status,
+      request,
+      outcome: "storage_unavailable",
+    });
+    return response;
+  }
   const repositories = await getRepositories(env);
   const existingIdentity = repositories.externalAuthIdentities.getByProviderAndSubject("oidc", subject);
 
@@ -417,6 +435,24 @@ export async function completeOidcAccount(request: Request, env: Env): Promise<R
       status: response.status,
       request,
       outcome: "invalid_input",
+    });
+    return response;
+  }
+
+  const dataStatus = getAuthDataStatus(env);
+  if (!dataStatus.authStorageReady) {
+    const response = json(
+      {
+        error: "auth_storage_unavailable",
+        message: "Account completion is temporarily unavailable while auth storage is being configured.",
+      },
+      { status: 503 },
+    );
+    recordAuthMetric(env, {
+      route: "oidc-complete-account",
+      status: response.status,
+      request,
+      outcome: "storage_unavailable",
     });
     return response;
   }

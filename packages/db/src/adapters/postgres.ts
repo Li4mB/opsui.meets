@@ -30,12 +30,53 @@ interface PersistedRuntimeStateRow {
 
 interface PostgresRepositoryContextOptions {
   connectionString?: string;
+  scope?: string;
 }
+
+type MutationName =
+  | "workspaces.create"
+  | "users.create"
+  | "workspaceMemberships.create"
+  | "passwordCredentials.upsert"
+  | "externalAuthIdentities.create"
+  | "directMessages.createThread"
+  | "directMessages.addThreadMember"
+  | "directMessages.updateThread"
+  | "directMessages.createMessage"
+  | "directMessages.markThreadRead"
+  | "rooms.create"
+  | "meetings.create"
+  | "meetings.initializeSummary"
+  | "meetings.updateSummary"
+  | "meetings.setStatus"
+  | "meetings.setLockState"
+  | "participants.registerJoin"
+  | "participants.admitToMeeting"
+  | "participants.leaveMeeting"
+  | "participants.removeFromMeeting"
+  | "participants.muteAll"
+  | "participants.endMeeting"
+  | "recordings.upsert"
+  | "templates.create"
+  | "actionItems.create"
+  | "actionItems.complete"
+  | "policies.updateWorkspacePolicy"
+  | "hookDeliveries.append"
+  | "audit.append"
+  | "events.append";
+
+interface MutationRecord {
+  name: MutationName;
+  args: any[];
+}
+
+type MutationFn = (...args: any[]) => any;
 
 export async function createPostgresRepositoryContext(
   options: PostgresRepositoryContextOptions = {},
 ): Promise<RequestRepositoryContext> {
   const connectionString = options.connectionString?.trim();
+  const scope = options.scope?.trim() || DEFAULT_SCOPE;
   if (!connectionString) {
     throw new Error("Postgres adapter requires DATABASE_URL when APP_DATA_MODE=postgres.");
   }
@@ -53,7 +94,7 @@ export async function createPostgresRepositoryContext(
 
   let persisted: { version: number; store: MemoryStore };
   try {
-    persisted = await loadRuntimeState(sql, DEFAULT_SCOPE);
+    persisted = await loadRuntimeState(sql, scope);
   } catch (error) {
     await dispose();
     throw error;
@@ -61,6 +102,7 @@ export async function createPostgresRepositoryContext(
 
   const getStore = () => persisted.store;
   let dirty = compactRuntimeStore(persisted.store);
+  const mutationLog: MutationRecord[] = [];
 
   const workspaces = new WorkspacesRepository(getStore);
   const users = new UsersRepository(getStore);
@@ -80,94 +122,222 @@ export async function createPostgresRepositoryContext(
   const audit = new AuditRepository(getStore);
   const events = new EventsRepository(getStore);
 
-  workspaces.create = trackMutation(workspaces.create.bind(workspaces), () => {
+  const rawMutations: Record<MutationName, MutationFn> = {
+    "workspaces.create": workspaces.create.bind(workspaces),
+    "users.create": users.create.bind(users),
+    "workspaceMemberships.create": workspaceMemberships.create.bind(workspaceMemberships),
+    "passwordCredentials.upsert": passwordCredentials.upsert.bind(passwordCredentials),
+    "externalAuthIdentities.create": externalAuthIdentities.create.bind(externalAuthIdentities),
+    "directMessages.createThread": directMessages.createThread.bind(directMessages),
+    "directMessages.addThreadMember": directMessages.addThreadMember.bind(directMessages),
+    "directMessages.updateThread": directMessages.updateThread.bind(directMessages),
+    "directMessages.createMessage": directMessages.createMessage.bind(directMessages),
+    "directMessages.markThreadRead": directMessages.markThreadRead.bind(directMessages),
+    "rooms.create": rooms.create.bind(rooms),
+    "meetings.create": meetings.create.bind(meetings),
+    "meetings.initializeSummary": meetings.initializeSummary.bind(meetings),
+    "meetings.updateSummary": meetings.updateSummary.bind(meetings),
+    "meetings.setStatus": meetings.setStatus.bind(meetings),
+    "meetings.setLockState": meetings.setLockState.bind(meetings),
+    "participants.registerJoin": participants.registerJoin.bind(participants),
+    "participants.admitToMeeting": participants.admitToMeeting.bind(participants),
+    "participants.leaveMeeting": participants.leaveMeeting.bind(participants),
+    "participants.removeFromMeeting": participants.removeFromMeeting.bind(participants),
+    "participants.muteAll": participants.muteAll.bind(participants),
+    "participants.endMeeting": participants.endMeeting.bind(participants),
+    "recordings.upsert": recordings.upsert.bind(recordings),
+    "templates.create": templates.create.bind(templates),
+    "actionItems.create": actionItems.create.bind(actionItems),
+    "actionItems.complete": actionItems.complete.bind(actionItems),
+    "policies.updateWorkspacePolicy": policies.updateWorkspacePolicy.bind(policies),
+    "hookDeliveries.append": hookDeliveries.append.bind(hookDeliveries),
+    "audit.append": audit.append.bind(audit),
+    "events.append": events.append.bind(events),
+  };
+
+  workspaces.create = trackMutation("workspaces.create", rawMutations["workspaces.create"], mutationLog, () => {
     dirty = true;
   });
-  users.create = trackMutation(users.create.bind(users), () => {
+  users.create = trackMutation("users.create", rawMutations["users.create"], mutationLog, () => {
     dirty = true;
   });
-  workspaceMemberships.create = trackMutation(workspaceMemberships.create.bind(workspaceMemberships), () => {
+  workspaceMemberships.create = trackMutation(
+    "workspaceMemberships.create",
+    rawMutations["workspaceMemberships.create"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  passwordCredentials.upsert = trackMutation(
+    "passwordCredentials.upsert",
+    rawMutations["passwordCredentials.upsert"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  externalAuthIdentities.create = trackMutation(
+    "externalAuthIdentities.create",
+    rawMutations["externalAuthIdentities.create"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  directMessages.createThread = trackMutation(
+    "directMessages.createThread",
+    rawMutations["directMessages.createThread"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  directMessages.addThreadMember = trackMutation(
+    "directMessages.addThreadMember",
+    rawMutations["directMessages.addThreadMember"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  directMessages.updateThread = trackMutation(
+    "directMessages.updateThread",
+    rawMutations["directMessages.updateThread"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  directMessages.createMessage = trackMutation(
+    "directMessages.createMessage",
+    rawMutations["directMessages.createMessage"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  directMessages.markThreadRead = trackMutation(
+    "directMessages.markThreadRead",
+    rawMutations["directMessages.markThreadRead"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  rooms.create = trackMutation("rooms.create", rawMutations["rooms.create"], mutationLog, () => {
     dirty = true;
   });
-  passwordCredentials.upsert = trackMutation(passwordCredentials.upsert.bind(passwordCredentials), () => {
+  meetings.create = trackMutation("meetings.create", rawMutations["meetings.create"], mutationLog, () => {
     dirty = true;
   });
-  externalAuthIdentities.create = trackMutation(externalAuthIdentities.create.bind(externalAuthIdentities), () => {
+  meetings.initializeSummary = trackMutation(
+    "meetings.initializeSummary",
+    rawMutations["meetings.initializeSummary"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  meetings.updateSummary = trackMutation(
+    "meetings.updateSummary",
+    rawMutations["meetings.updateSummary"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  meetings.setStatus = trackMutation("meetings.setStatus", rawMutations["meetings.setStatus"], mutationLog, () => {
     dirty = true;
   });
-  directMessages.createThread = trackMutation(directMessages.createThread.bind(directMessages), () => {
+  meetings.setLockState = trackMutation(
+    "meetings.setLockState",
+    rawMutations["meetings.setLockState"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  participants.registerJoin = trackMutation(
+    "participants.registerJoin",
+    rawMutations["participants.registerJoin"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  participants.admitToMeeting = trackMutation(
+    "participants.admitToMeeting",
+    rawMutations["participants.admitToMeeting"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  participants.leaveMeeting = trackMutation(
+    "participants.leaveMeeting",
+    rawMutations["participants.leaveMeeting"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  participants.removeFromMeeting = trackMutation(
+    "participants.removeFromMeeting",
+    rawMutations["participants.removeFromMeeting"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  participants.muteAll = trackMutation("participants.muteAll", rawMutations["participants.muteAll"], mutationLog, () => {
     dirty = true;
   });
-  directMessages.addThreadMember = trackMutation(directMessages.addThreadMember.bind(directMessages), () => {
+  participants.endMeeting = trackMutation(
+    "participants.endMeeting",
+    rawMutations["participants.endMeeting"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  recordings.upsert = trackMutation("recordings.upsert", rawMutations["recordings.upsert"], mutationLog, () => {
     dirty = true;
   });
-  directMessages.updateThread = trackMutation(directMessages.updateThread.bind(directMessages), () => {
+  templates.create = trackMutation("templates.create", rawMutations["templates.create"], mutationLog, () => {
     dirty = true;
   });
-  directMessages.createMessage = trackMutation(directMessages.createMessage.bind(directMessages), () => {
+  actionItems.create = trackMutation("actionItems.create", rawMutations["actionItems.create"], mutationLog, () => {
     dirty = true;
   });
-  directMessages.markThreadRead = trackMutation(directMessages.markThreadRead.bind(directMessages), () => {
+  actionItems.complete = trackMutation(
+    "actionItems.complete",
+    rawMutations["actionItems.complete"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  policies.updateWorkspacePolicy = trackMutation(
+    "policies.updateWorkspacePolicy",
+    rawMutations["policies.updateWorkspacePolicy"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  hookDeliveries.append = trackMutation(
+    "hookDeliveries.append",
+    rawMutations["hookDeliveries.append"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  audit.append = trackMutation("audit.append", rawMutations["audit.append"], mutationLog, () => {
     dirty = true;
   });
-  rooms.create = trackMutation(rooms.create.bind(rooms), () => {
-    dirty = true;
-  });
-  meetings.create = trackMutation(meetings.create.bind(meetings), () => {
-    dirty = true;
-  });
-  meetings.initializeSummary = trackMutation(meetings.initializeSummary.bind(meetings), () => {
-    dirty = true;
-  });
-  meetings.updateSummary = trackMutation(meetings.updateSummary.bind(meetings), () => {
-    dirty = true;
-  });
-  meetings.setStatus = trackMutation(meetings.setStatus.bind(meetings), () => {
-    dirty = true;
-  });
-  meetings.setLockState = trackMutation(meetings.setLockState.bind(meetings), () => {
-    dirty = true;
-  });
-  participants.registerJoin = trackMutation(participants.registerJoin.bind(participants), () => {
-    dirty = true;
-  });
-  participants.admitToMeeting = trackMutation(participants.admitToMeeting.bind(participants), () => {
-    dirty = true;
-  });
-  participants.leaveMeeting = trackMutation(participants.leaveMeeting.bind(participants), () => {
-    dirty = true;
-  });
-  participants.removeFromMeeting = trackMutation(participants.removeFromMeeting.bind(participants), () => {
-    dirty = true;
-  });
-  participants.muteAll = trackMutation(participants.muteAll.bind(participants), () => {
-    dirty = true;
-  });
-  participants.endMeeting = trackMutation(participants.endMeeting.bind(participants), () => {
-    dirty = true;
-  });
-  recordings.upsert = trackMutation(recordings.upsert.bind(recordings), () => {
-    dirty = true;
-  });
-  templates.create = trackMutation(templates.create.bind(templates), () => {
-    dirty = true;
-  });
-  actionItems.create = trackMutation(actionItems.create.bind(actionItems), () => {
-    dirty = true;
-  });
-  actionItems.complete = trackMutation(actionItems.complete.bind(actionItems), () => {
-    dirty = true;
-  });
-  policies.updateWorkspacePolicy = trackMutation(policies.updateWorkspacePolicy.bind(policies), () => {
-    dirty = true;
-  });
-  hookDeliveries.append = trackMutation(hookDeliveries.append.bind(hookDeliveries), () => {
-    dirty = true;
-  });
-  audit.append = trackMutation(audit.append.bind(audit), () => {
-    dirty = true;
-  });
-  events.append = trackMutation(events.append.bind(events), () => {
+  events.append = trackMutation("events.append", rawMutations["events.append"], mutationLog, () => {
     dirty = true;
   });
 
@@ -197,8 +367,9 @@ export async function createPostgresRepositoryContext(
           return;
         }
 
-        persisted.version = await saveRuntimeState(sql, DEFAULT_SCOPE, persisted.store, persisted.version);
+        persisted.version = await saveRuntimeState(sql, scope, persisted, mutationLog, rawMutations);
         dirty = false;
+        mutationLog.length = 0;
       } finally {
         await dispose();
       }
@@ -244,13 +415,14 @@ async function loadRuntimeState(
 async function saveRuntimeState(
   sql: SqlClient,
   scope: string,
-  store: MemoryStore,
-  version: number,
+  persisted: { version: number; store: MemoryStore },
+  mutationLog: MutationRecord[],
+  rawMutations: Record<MutationName, MutationFn>,
 ): Promise<number> {
-  const serializedStore = JSON.stringify(store);
-  let currentVersion = version;
+  let currentVersion = persisted.version;
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
+    const serializedStore = JSON.stringify(persisted.store);
     const updated = await sql<PersistedRuntimeStateRow[]>`
       update opsui_runtime_state
       set state = ${serializedStore}::jsonb,
@@ -265,7 +437,11 @@ async function saveRuntimeState(
     }
 
     const reloaded = await loadRuntimeState(sql, scope);
-    currentVersion = reloaded.version;
+    persisted.version = reloaded.version;
+    persisted.store = reloaded.store;
+    replayMutations(mutationLog, rawMutations);
+    compactRuntimeStore(persisted.store);
+    currentVersion = persisted.version;
   }
 
   throw new Error("Postgres runtime state commit conflict.");
@@ -289,11 +465,34 @@ function createSqlClient(connectionString: string): SqlClient {
 }
 
 function trackMutation<TArgs extends unknown[], TResult>(
+  name: MutationName,
   fn: (...args: TArgs) => TResult,
+  mutationLog: MutationRecord[],
   markDirty: () => void,
 ): (...args: TArgs) => TResult {
   return (...args: TArgs) => {
     markDirty();
+    mutationLog.push({
+      name,
+      args: cloneMutationArgs(args),
+    });
     return fn(...args);
   };
+}
+
+function replayMutations(
+  mutationLog: MutationRecord[],
+  rawMutations: Record<MutationName, MutationFn>,
+): void {
+  for (const mutation of mutationLog) {
+    rawMutations[mutation.name](...mutation.args);
+  }
+}
+
+function cloneMutationArgs<TArgs extends unknown[]>(args: TArgs): TArgs {
+  if (typeof globalThis.structuredClone === "function") {
+    return globalThis.structuredClone(args);
+  }
+
+  return JSON.parse(JSON.stringify(args)) as TArgs;
 }

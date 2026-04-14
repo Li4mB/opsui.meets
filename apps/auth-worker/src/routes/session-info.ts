@@ -1,5 +1,6 @@
 import type { SessionInfo } from "@opsui/shared-types";
 import { recordAuthMetric } from "../lib/analytics";
+import { getAuthDataStatus } from "../lib/data-status";
 import { getRepositories } from "../lib/data";
 import { json } from "../lib/http";
 import { createFallbackActor, hydrateSessionActor } from "../lib/session-actors";
@@ -10,9 +11,16 @@ import type { Env } from "../types";
 export async function getSessionInfo(request: Request, env: Env): Promise<Response> {
   const cookieValue = getCookieValue(request.headers.get("Cookie") ?? "", SESSION_COOKIE_NAME);
   const session = (await verifySessionClaims(cookieValue, getSessionSigningSecret(env))) ?? null;
-  const repositories = await getRepositories(env);
-  const actor = hydrateSessionActor(session?.actor ?? null, repositories, env);
-  await repositories.commit();
+  const dataStatus = getAuthDataStatus(env);
+  const actor =
+    dataStatus.authStorageReady
+      ? await (async () => {
+          const repositories = await getRepositories(env);
+          const hydrated = hydrateSessionActor(session?.actor ?? null, repositories, env);
+          await repositories.commit();
+          return hydrated;
+        })()
+      : (session?.actor ?? createFallbackActor(env.DEFAULT_WORKSPACE_ID ?? "workspace_local"));
   const authenticated = actor.userId !== "guest_anonymous";
   const provider = authenticated ? (session?.provider ?? "mock") : "anonymous";
 

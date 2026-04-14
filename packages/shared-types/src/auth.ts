@@ -45,6 +45,10 @@ export interface AuthCapabilities {
   ok: boolean;
   service: string;
   appEnv: string;
+  dataMode?: "memory" | "postgres";
+  databaseConfigured?: boolean;
+  authStorageReady?: boolean;
+  persistenceReason?: "memory_mode" | "postgres_ready" | "postgres_unconfigured";
   mockAuthEnabled: boolean;
   passwordAuthEnabled: boolean;
   signupEnabled: boolean;

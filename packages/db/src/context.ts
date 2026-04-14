@@ -22,6 +22,7 @@ export type DataMode = "memory" | "postgres";
 
 export interface RepositoryContextOptions {
   connectionString?: string;
+  scope?: string;
 }
 
 export async function getRepositoryContext(

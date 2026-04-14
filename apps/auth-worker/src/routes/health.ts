@@ -1,4 +1,5 @@
 import { recordAuthMetric } from "../lib/analytics";
+import { getAuthDataStatus } from "../lib/data-status";
 import { json } from "../lib/http";
 import {
   isMembershipDirectoryConfigured,
@@ -22,13 +23,19 @@ export function getHealth(request: Request, env: Env): Response {
   );
   const membershipDirectoryConfigured = isMembershipDirectoryConfigured(env);
   const membershipEnforced = isMembershipDirectoryEnforced(env);
+  const dataStatus = getAuthDataStatus(env);
+  const passwordAuthEnabled = Boolean(env.AUTH_PASSWORD_PEPPER?.trim()) && dataStatus.authStorageReady;
   const response = json({
     ok: true,
     service: "opsui-meets-auth",
     appEnv: env.APP_ENV ?? "production",
+    dataMode: dataStatus.dataMode,
+    databaseConfigured: dataStatus.databaseConfigured,
+    authStorageReady: dataStatus.authStorageReady,
+    persistenceReason: dataStatus.reason,
     mockAuthEnabled: env.ALLOW_MOCK_AUTH === "true",
-    passwordAuthEnabled: Boolean(env.AUTH_PASSWORD_PEPPER?.trim()),
-    signupEnabled: Boolean(env.AUTH_PASSWORD_PEPPER?.trim()),
+    passwordAuthEnabled,
+    signupEnabled: passwordAuthEnabled,
     sessionSigningConfigured: Boolean(env.SESSION_SIGNING_SECRET?.trim() || env.MOCK_SESSION_SIGNING_SECRET),
     oidcConfigured,
     opsuiValidationConfigured: isOpsuiValidationConfigured(env),

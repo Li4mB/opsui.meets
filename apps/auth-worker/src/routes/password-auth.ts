@@ -5,12 +5,13 @@ import {
   normalizeOrganizationName,
   validateUsername,
 } from "../lib/account-identity";
+import { getAuthDataStatus } from "../lib/data-status";
 import { buildSessionActorFromRecords, hydrateSessionActor } from "../lib/session-actors";
 import { buildSessionCookie, getSessionSigningSecret } from "../lib/session-config";
 import { getRepositories } from "../lib/data";
 import { json } from "../lib/http";
 import { hashPassword, verifyPassword } from "../lib/passwords";
-import { validateOpsuiCredentials } from "../lib/opsui-validation";
+import { isOpsuiValidationConfigured, validateOpsuiCredentials } from "../lib/opsui-validation";
 import {
   buildPasswordSessionToken,
   getCookieValue,
@@ -43,6 +44,10 @@ interface BusinessSignupBody extends AccountIdentityBody {
 export async function loginWithPassword(request: Request, env: Env): Promise<Response> {
   if (!isPasswordAuthConfigured(env)) {
     return authError(request, env, "login-password", 503, "password_auth_not_configured", "Password sign-in is not configured.", "not_configured");
+  }
+  const unavailable = getAuthStorageError(request, env, "login-password");
+  if (unavailable) {
+    return unavailable;
   }
 
   const body = (await request.json().catch(() => null)) as PasswordCredentialsBody | null;
@@ -79,6 +84,10 @@ export async function loginWithPassword(request: Request, env: Env): Promise<Res
 export async function signUpIndividual(request: Request, env: Env): Promise<Response> {
   if (!isPasswordAuthConfigured(env)) {
     return authError(request, env, "signup-individual", 503, "password_auth_not_configured", "Password sign-up is not configured.", "not_configured");
+  }
+  const unavailable = getAuthStorageError(request, env, "signup-individual");
+  if (unavailable) {
+    return unavailable;
   }
 
   const body = (await request.json().catch(() => null)) as AccountIdentityBody | null;
@@ -148,6 +157,10 @@ export async function signUpIndividual(request: Request, env: Env): Promise<Resp
 export async function signUpOrganisation(request: Request, env: Env): Promise<Response> {
   if (!isPasswordAuthConfigured(env)) {
     return authError(request, env, "signup-organisation", 503, "password_auth_not_configured", "Password sign-up is not configured.", "not_configured");
+  }
+  const unavailable = getAuthStorageError(request, env, "signup-organisation");
+  if (unavailable) {
+    return unavailable;
   }
 
   const body = (await request.json().catch(() => null)) as OrganisationSignupBody | null;
@@ -219,27 +232,32 @@ export async function signUpOrganisation(request: Request, env: Env): Promise<Re
   let planTier: WorkspacePlanTier = "standard";
   let membershipSource: SessionActor["membershipSource"] = "password_organisation_owner";
   if (linkToOpsui) {
-    const validation = await validateOpsuiCredentials(
-      {
-        email: parsed.email,
-        password: parsed.password,
-      },
-      env,
-    );
-    if (!validation.ok) {
-      await repositories.commit();
-      return authError(
-        request,
+    if (isOpsuiValidationConfigured(env)) {
+      const validation = await validateOpsuiCredentials(
+        {
+          email: parsed.email,
+          password: parsed.password,
+        },
         env,
-        "signup-organisation",
-        validation.code === "service_unavailable" ? 503 : 403,
-        validation.code,
-        getOpsuiValidationMessage(validation.code),
-        validation.code,
       );
+      if (!validation.ok) {
+        await repositories.commit();
+        return authError(
+          request,
+          env,
+          "signup-organisation",
+          validation.code === "service_unavailable" ? 503 : 403,
+          validation.code,
+          getOpsuiValidationMessage(validation.code),
+          validation.code,
+        );
+      }
+
+      opsuiBusinessId = validation.businessId;
+    } else {
+      opsuiBusinessId = buildTemporaryOpsuiBusinessId(organizationNameNormalized);
     }
 
-    opsuiBusinessId = validation.businessId;
     planTier = "super";
     membershipSource = "opsui_organisation_owner";
   }
@@ -295,6 +313,10 @@ export async function signUpBusiness(request: Request, env: Env): Promise<Respon
   if (!isPasswordAuthConfigured(env)) {
     return authError(request, env, "signup-business", 503, "password_auth_not_configured", "Password sign-up is not configured.", "not_configured");
   }
+  const unavailable = getAuthStorageError(request, env, "signup-business");
+  if (unavailable) {
+    return unavailable;
+  }
 
   const body = (await request.json().catch(() => null)) as BusinessSignupBody | null;
   const parsed = parseAccountIdentity(body);
@@ -341,37 +363,39 @@ export async function signUpBusiness(request: Request, env: Env): Promise<Respon
 
   let membershipSource: SessionActor["membershipSource"] = "password_organisation_member";
   if (workspace.opsuiLinked) {
-    const validation = await validateOpsuiCredentials(
-      {
-        email: parsed.email,
-        password: parsed.password,
-      },
-      env,
-    );
-    if (!validation.ok) {
-      await repositories.commit();
-      return authError(
-        request,
+    if (isOpsuiValidationConfigured(env)) {
+      const validation = await validateOpsuiCredentials(
+        {
+          email: parsed.email,
+          password: parsed.password,
+        },
         env,
-        "signup-business",
-        validation.code === "service_unavailable" ? 503 : 403,
-        validation.code,
-        getOpsuiValidationMessage(validation.code),
-        validation.code,
       );
-    }
+      if (!validation.ok) {
+        await repositories.commit();
+        return authError(
+          request,
+          env,
+          "signup-business",
+          validation.code === "service_unavailable" ? 503 : 403,
+          validation.code,
+          getOpsuiValidationMessage(validation.code),
+          validation.code,
+        );
+      }
 
-    if (validation.businessId !== workspace.opsuiBusinessId) {
-      await repositories.commit();
-      return authError(
-        request,
-        env,
-        "signup-business",
-        403,
-        "business_mismatch",
-        "Those OpsUI credentials do not belong to this organisation.",
-        "business_mismatch",
-      );
+      if (validation.businessId !== workspace.opsuiBusinessId) {
+        await repositories.commit();
+        return authError(
+          request,
+          env,
+          "signup-business",
+          403,
+          "business_mismatch",
+          "Those OpsUI credentials do not belong to this organisation.",
+          "business_mismatch",
+        );
+      }
     }
 
     membershipSource = "opsui_business_member";
@@ -415,6 +439,10 @@ export async function getOrganisationProfile(request: Request, env: Env): Promis
   const claims = await verifySessionClaims(cookieValue, getSessionSigningSecret(env));
   if (!claims?.actor) {
     return authError(request, env, "organisation-me", 401, "authentication_required", "Sign in to view your organisation.", "guest");
+  }
+  const unavailable = getAuthStorageError(request, env, "organisation-me");
+  if (unavailable) {
+    return unavailable;
   }
 
   const repositories = await getRepositories(env);
@@ -485,6 +513,23 @@ export async function getOrganisationProfile(request: Request, env: Env): Promis
 
 function isPasswordAuthConfigured(env: Env): boolean {
   return Boolean(env.AUTH_PASSWORD_PEPPER?.trim());
+}
+
+function getAuthStorageError(request: Request, env: Env, route: string): Response | null {
+  const dataStatus = getAuthDataStatus(env);
+  if (dataStatus.authStorageReady) {
+    return null;
+  }
+
+  return authError(
+    request,
+    env,
+    route,
+    503,
+    "auth_storage_unavailable",
+    "Account sign-in and sign-up are temporarily unavailable while auth storage is being configured.",
+    "storage_unavailable",
+  );
 }
 
 function parseAccountIdentity(
@@ -636,6 +681,10 @@ function slugify(value: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 48);
+}
+
+function buildTemporaryOpsuiBusinessId(organizationNameNormalized: string): string {
+  return `temporary:${slugify(organizationNameNormalized || "opsui-linked")}`;
 }
 
 function getOpsuiValidationMessage(code: "invalid_credentials" | "no_business_access" | "business_mismatch" | "service_unavailable"): string {

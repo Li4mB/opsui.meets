@@ -36,6 +36,7 @@ export function SignInPage(props: SignInPageProps) {
   const canUseOidc = Boolean(props.authCapabilities?.oidcConfigured);
   const canUseMockAuth = Boolean(props.authCapabilities?.mockAuthEnabled);
   const canUsePassword = Boolean(props.authCapabilities?.passwordAuthEnabled);
+  const authStorageReady = props.authCapabilities?.authStorageReady !== false;
   const displayName = getSessionDisplayName(props.session);
   const isSuper = props.session?.actor.planTier === "super";
 
@@ -247,6 +248,12 @@ export function SignInPage(props: SignInPageProps) {
                   Continue with Identity Provider
                 </button>
               </div>
+            ) : null}
+
+            {!canUsePassword && !authStorageReady ? (
+              <p className="inline-feedback inline-feedback--warning">
+                Account sign-in is temporarily unavailable while auth storage is being configured.
+              </p>
             ) : null}
           </>
         )}

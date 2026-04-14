@@ -1,5 +1,6 @@
 const HASH_VERSION = "pbkdf2_sha256_v1";
-const PBKDF2_ITERATIONS = 210_000;
+// Cloudflare Workers currently caps PBKDF2 iterations at 100000.
+const PBKDF2_ITERATIONS = 100_000;
 const DERIVED_BITS = 256;
 
 export async function hashPassword(password: string, pepper: string): Promise<{

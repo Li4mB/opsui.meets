@@ -85,6 +85,7 @@ export function SignUpPage(props: SignUpPageProps) {
 
   const signUpEnabled = Boolean(props.authCapabilities?.signupEnabled);
   const opsuiValidationConfigured = Boolean(props.authCapabilities?.opsuiValidationConfigured);
+  const authStorageReady = props.authCapabilities?.authStorageReady !== false;
 
   async function handleSubmit() {
     setIsBusy(true);
@@ -161,7 +162,9 @@ export function SignUpPage(props: SignUpPageProps) {
 
         {!signUpEnabled ? (
           <p className="inline-feedback inline-feedback--warning">
-            Password sign-up is not enabled in this environment yet.
+            {authStorageReady
+              ? "Password sign-up is not enabled in this environment yet."
+              : "Account sign-up is temporarily unavailable while auth storage is being configured."}
           </p>
         ) : null}
 
@@ -273,6 +276,7 @@ export function SignUpPage(props: SignUpPageProps) {
                 <label className="field field--checkbox">
                   <input
                     checked={organisation.linkToOpsui}
+                    disabled={!opsuiValidationConfigured}
                     onChange={(event) => {
                       setOrganisation((current) => ({ ...current, linkToOpsui: event.target.checked }));
                     }}
@@ -283,7 +287,7 @@ export function SignUpPage(props: SignUpPageProps) {
                     <small>
                       {opsuiValidationConfigured
                         ? "Members with valid OpsUI business credentials will receive Meets Super."
-                        : "OpsUI validation is not configured in this environment yet."}
+                        : "OpsUI validation is temporarily bypassed in this environment. Linked organisations will still receive Meets Super for now."}
                     </small>
                   </span>
                 </label>

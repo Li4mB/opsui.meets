@@ -26,17 +26,26 @@ delete from user_password_credentials;
 delete from workspace_memberships;
 delete from users;
 
-delete from workspace_policies
-where workspace_id in (
-  select id
-  from workspaces
-  where workspace_kind in ('personal', 'organisation')
-    and id <> 'workspace_local'
-);
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.tables
+    where table_schema = 'public'
+      and table_name = 'workspace_policies'
+  ) then
+    delete from workspace_policies
+    where workspace_id in (
+      select id
+      from workspaces
+      where workspace_kind in ('personal', 'organisation')
+    );
+  end if;
+end $$;
 
 delete from workspaces
 where workspace_kind in ('personal', 'organisation')
-  and id <> 'workspace_local';
+;
 
 alter table users
   alter column username set not null,
