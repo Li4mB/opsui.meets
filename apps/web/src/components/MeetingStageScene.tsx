@@ -1,21 +1,10 @@
 import type { CSSProperties } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-export type MeetingStageShareSurface = "application" | "screen" | "browser" | "unknown";
-
-export interface MeetingStageShareSourceMeta {
-  audioIncluded: boolean;
-  displaySurface: MeetingStageShareSurface;
-  label: string;
-  sourceId: string;
-}
-
 export interface MeetingStageShareTile {
   audioTrack?: MediaStreamTrack | null;
   displayName: string;
-  extraShareCount: number;
   isSelf?: boolean;
-  source: MeetingStageShareSourceMeta;
   videoTrack?: MediaStreamTrack | null;
 }
 
@@ -24,8 +13,6 @@ export interface MeetingStageParticipantTile {
   audioTrack?: MediaStreamTrack | null;
   displayName: string;
   isSelf?: boolean;
-  shareBadgeLabel?: string | null;
-  subtitle: string;
   videoEnabled: boolean;
   videoTrack?: MediaStreamTrack | null;
 }
@@ -106,9 +93,7 @@ export function MeetingStageScene(props: MeetingStageSceneProps) {
         <ScreenShareTile
           audioTrack={props.primaryScreenShare.audioTrack}
           displayName={props.primaryScreenShare.displayName}
-          extraShareCount={props.primaryScreenShare.extraShareCount}
           isSelf={props.primaryScreenShare.isSelf}
-          source={props.primaryScreenShare.source}
           videoTrack={props.primaryScreenShare.videoTrack}
         />
       ) : null}
@@ -139,8 +124,6 @@ export function MeetingStageScene(props: MeetingStageSceneProps) {
                   immersive={showImmersiveSoloStage}
                   isSelf={tile.isSelf}
                   key={`${tile.displayName}-${rowIndex}-${index}`}
-                  shareBadgeLabel={tile.shareBadgeLabel ?? null}
-                  subtitle={tile.subtitle}
                   supporting={supportingStage}
                   videoEnabled={tile.videoEnabled}
                   videoTrack={tile.videoTrack}
@@ -160,8 +143,6 @@ function MediaTile(props: {
   displayName: string;
   immersive?: boolean;
   isSelf?: boolean;
-  shareBadgeLabel?: string | null;
-  subtitle: string;
   supporting?: boolean;
   videoEnabled: boolean;
   videoTrack?: MediaStreamTrack | null;
@@ -220,21 +201,6 @@ function MediaTile(props: {
         >
           <div className="participant-tile__nameplate">
             <strong>{props.displayName}</strong>
-            <span>{props.subtitle}</span>
-          </div>
-          <div
-            className={`participant-tile__badges${props.immersive ? " participant-tile__badges--immersive" : ""}`}
-          >
-            {props.shareBadgeLabel ? (
-              <span className="status-pill status-pill--accent">{props.shareBadgeLabel}</span>
-            ) : null}
-            {!props.immersive && props.isSelf ? <span className="status-pill">You</span> : null}
-            {!props.immersive ? (
-              <span className="status-pill">{props.audioEnabled ? "Mic On" : "Mic Off"}</span>
-            ) : null}
-            {!props.immersive ? (
-              <span className="status-pill">{props.videoEnabled ? "Camera On" : "Camera Off"}</span>
-            ) : null}
           </div>
         </div>
       </div>
@@ -259,9 +225,7 @@ function OverflowTile(props: { count: number; supporting?: boolean }) {
 function ScreenShareTile(props: {
   audioTrack?: MediaStreamTrack | null;
   displayName: string;
-  extraShareCount: number;
   isSelf?: boolean;
-  source: MeetingStageShareSourceMeta;
   videoTrack?: MediaStreamTrack | null;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -308,24 +272,13 @@ function ScreenShareTile(props: {
         {!props.videoTrack ? (
           <div className="screen-share-stage__placeholder">
             <div className="screen-share-stage__placeholder-copy">
-              <strong>Shared content</strong>
-              <span>{props.source.label}</span>
+              <strong>{props.displayName}</strong>
             </div>
           </div>
         ) : null}
         <div className="screen-share-stage__overlay">
-          <div className="screen-share-stage__badges">
-            <span className="status-pill status-pill--accent">{getShareBadgeLabel(props.source)}</span>
-            {props.source.audioIncluded ? <span className="status-pill">Audio Included</span> : null}
-            {props.extraShareCount ? (
-              <span className="status-pill">
-                +{props.extraShareCount} more share{props.extraShareCount > 1 ? "s" : ""}
-              </span>
-            ) : null}
-          </div>
           <div className="screen-share-stage__nameplate participant-tile__nameplate">
-            <strong>{props.isSelf ? "You are sharing" : `${props.displayName} is sharing`}</strong>
-            <span>{props.source.label}</span>
+            <strong>{props.displayName}</strong>
           </div>
         </div>
       </div>
@@ -811,22 +764,6 @@ function isOverflowTile(
 
 function clampValue(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
-}
-
-function getShareBadgeLabel(source: MeetingStageShareSourceMeta): string {
-  if (source.displaySurface === "application") {
-    return "Sharing Application";
-  }
-
-  if (source.displaySurface === "screen") {
-    return "Sharing Screen";
-  }
-
-  if (source.displaySurface === "browser") {
-    return "Sharing Tab";
-  }
-
-  return "Sharing";
 }
 
 function getInitials(value: string): string {

@@ -1,5 +1,7 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import type {
+  DirectMessageAttachment,
+  DirectMessageAttachmentKind,
   DirectMessageMessage,
   DirectMessageSearchResult,
   DirectMessageThreadDetail,
@@ -8,6 +10,7 @@ import type {
 } from "@opsui/shared-types";
 import { getSessionDisplayName } from "../lib/auth";
 import {
+  fetchDirectMessageAttachmentBlob,
   getDirectMessageThread,
   listDirectMessageMessages,
   listDirectMessageThreads,
@@ -15,7 +18,11 @@ import {
   openDirectMessageThread,
   searchDirectMessageUsers,
   sendDirectMessage,
+  signDirectMessageAttachments,
+  uploadDirectMessageAttachment,
 } from "../lib/direct-messages";
+
+const MAX_ATTACHMENTS_PER_MESSAGE = 10;
 
 interface DirectMessagesPageProps {
   onNavigate(pathname: string): void;
@@ -24,17 +31,24 @@ interface DirectMessagesPageProps {
   session: SessionInfo | null;
 }
 
+interface ComposerAttachmentDraft {
+  id: string;
+  file: File;
+  kind: DirectMessageAttachmentKind;
+  previewUrl: string | null;
+}
+
 export function DirectMessagesPage(props: DirectMessagesPageProps) {
   const authenticated = Boolean(props.session?.authenticated && props.session.sessionType === "user");
   const currentUserId = props.session?.actor.userId ?? "";
-  const currentUsername = props.session?.actor.username ?? "you";
-  const currentDisplayName = getSessionDisplayName(props.session);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const draftAttachmentsRef = useRef<ComposerAttachmentDraft[]>([]);
 
   const [threads, setThreads] = useState<DirectMessageThreadSummary[]>([]);
   const [selectedThread, setSelectedThread] = useState<DirectMessageThreadDetail | null>(null);
   const [messages, setMessages] = useState<DirectMessageMessage[]>([]);
-  const [pendingMessages, setPendingMessages] = useState<DirectMessageMessage[]>([]);
   const [draft, setDraft] = useState("");
+  const [draftAttachments, setDraftAttachments] = useState<ComposerAttachmentDraft[]>([]);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<DirectMessageSearchResult[]>([]);
@@ -43,15 +57,29 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
   const [hasLoadedThread, setHasLoadedThread] = useState(false);
 
   useEffect(() => {
+    draftAttachmentsRef.current = draftAttachments;
+  }, [draftAttachments]);
+
+  useEffect(() => () => {
+    revokeComposerAttachmentUrls(draftAttachmentsRef.current);
+  }, []);
+
+  useEffect(() => {
     setHasLoadedThread(false);
+    setDraft("");
+    setFeedback(null);
+    revokeComposerAttachmentUrls(draftAttachmentsRef.current);
+    setDraftAttachments([]);
   }, [props.selectedThreadId]);
 
   useEffect(() => {
     if (!authenticated) {
+      revokeComposerAttachmentUrls(draftAttachmentsRef.current);
       setThreads([]);
       setSelectedThread(null);
       setMessages([]);
-      setPendingMessages([]);
+      setDraft("");
+      setDraftAttachments([]);
       setHasLoadedThread(false);
       props.onUnreadCountChange(0);
       return;
@@ -76,7 +104,6 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
       if (!props.selectedThreadId) {
         setSelectedThread(null);
         setMessages([]);
-        setPendingMessages([]);
         setHasLoadedThread(false);
         isInitialLoad = true;
         return;
@@ -98,7 +125,6 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
       setSelectedThread(nextThread);
       setMessages(nextMessages);
       if (isFirstLoad) {
-        setPendingMessages([]);
         setIsLoadingThread(false);
         setHasLoadedThread(true);
         isInitialLoad = false;
@@ -131,7 +157,7 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
       window.removeEventListener("online", handleVisibilityOrFocus);
       document.removeEventListener("visibilitychange", handleVisibilityOrFocus);
     };
-  }, [authenticated, props.selectedThreadId, props.onUnreadCountChange]);
+  }, [authenticated, hasLoadedThread, props.onUnreadCountChange, props.selectedThreadId]);
 
   useEffect(() => {
     if (!authenticated) {
@@ -192,10 +218,6 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
     };
   }, [authenticated, messages.length, props.onUnreadCountChange, props.selectedThreadId]);
 
-  const combinedMessages = [...messages, ...pendingMessages].sort(
-    (left, right) => Date.parse(left.sentAt) - Date.parse(right.sentAt),
-  );
-
   async function handleSearchSelect(result: DirectMessageSearchResult) {
     setFeedback(null);
     const nextThread = await openDirectMessageThread(result.username);
@@ -209,45 +231,98 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
     props.onNavigate(`/direct-messages/${encodeURIComponent(nextThread.thread.id)}`);
   }
 
-  async function handleSendMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!selectedThread || !draft.trim() || isSending) {
+  function handleComposerFilesChange(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    if (!files.length) {
       return;
     }
 
-    const optimisticBody = draft.trim();
-    const optimisticMessage: DirectMessageMessage = {
-      id: `pending-${Date.now()}`,
-      threadId: selectedThread.id,
-      senderUserId: currentUserId,
-      senderUsername: currentUsername,
-      senderDisplayName: currentDisplayName,
-      body: optimisticBody,
-      sentAt: new Date().toISOString(),
-    };
+    if (draftAttachments.length + files.length > MAX_ATTACHMENTS_PER_MESSAGE) {
+      setFeedback(`You can attach up to ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.`);
+      return;
+    }
 
-    setDraft("");
+    setFeedback(null);
+    setDraftAttachments((current) => [
+      ...current,
+      ...files.map((file) => createComposerAttachmentDraft(file)),
+    ]);
+  }
+
+  function handleRemoveDraftAttachment(attachmentId: string) {
+    setDraftAttachments((current) => {
+      const next = current.filter((attachment) => attachment.id !== attachmentId);
+      const removed = current.find((attachment) => attachment.id === attachmentId) ?? null;
+      if (removed?.previewUrl) {
+        URL.revokeObjectURL(removed.previewUrl);
+      }
+      return next;
+    });
+  }
+
+  async function handleSendMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedThread || isSending) {
+      return;
+    }
+
+    const text = draft.trim();
+    if (!text && !draftAttachments.length) {
+      setFeedback("Enter a message or attach a file before sending.");
+      return;
+    }
+
     setFeedback(null);
     setIsSending(true);
-    setPendingMessages((current) => [...current, optimisticMessage]);
 
-    const result = await sendDirectMessage(selectedThread.id, optimisticBody);
+    let attachmentIds: string[] = [];
+    if (draftAttachments.length) {
+      const signResult = await signDirectMessageAttachments(
+        selectedThread.id,
+        draftAttachments.map((attachment) => attachment.file),
+      );
+      if (!signResult.ok) {
+        setFeedback(signResult.error);
+        setIsSending(false);
+        return;
+      }
+
+      if (signResult.items.length !== draftAttachments.length) {
+        setFeedback("Some files could not be prepared for upload.");
+        setIsSending(false);
+        return;
+      }
+
+      for (const [index, slot] of signResult.items.entries()) {
+        const uploadResult = await uploadDirectMessageAttachment(slot, draftAttachments[index]!.file);
+        if (!uploadResult.ok) {
+          setFeedback(uploadResult.error);
+          setIsSending(false);
+          return;
+        }
+      }
+
+      attachmentIds = signResult.items.map((item) => item.attachmentId);
+    }
+
+    const result = await sendDirectMessage(selectedThread.id, text, attachmentIds);
     if (!result.ok) {
-      setPendingMessages((current) => current.filter((message) => message.id !== optimisticMessage.id));
-      setDraft(optimisticBody);
       setFeedback(result.error);
       setIsSending(false);
       return;
     }
 
-    setPendingMessages((current) => current.filter((message) => message.id !== optimisticMessage.id));
+    revokeComposerAttachmentUrls(draftAttachments);
+    setDraft("");
+    setDraftAttachments([]);
     setMessages((current) => [...current, result.message]);
     setSelectedThread((current) =>
       current
         ? {
             ...current,
             lastMessageAt: result.message.sentAt,
-            lastMessagePreview: result.message.body,
+            lastMessagePreview: buildThreadPreviewFromMessage(result.message),
             unreadCount: 0,
             updatedAt: result.message.sentAt,
           }
@@ -399,12 +474,12 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
 
               <div className="conversation-log dm-thread-panel__messages">
                 {isLoadingThread ? <p className="empty-list">Loading conversation…</p> : null}
-                {!isLoadingThread && !combinedMessages.length ? (
+                {!isLoadingThread && !messages.length ? (
                   <p className="empty-list">
                     This conversation is ready. Send the first message whenever you are.
                   </p>
                 ) : null}
-                {combinedMessages.map((message) => {
+                {messages.map((message) => {
                   const isSelf = message.senderUserId === currentUserId;
                   return (
                     <article className={`chat-message${isSelf ? " chat-message--self" : ""}`} key={message.id}>
@@ -412,7 +487,14 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
                         <strong>{isSelf ? "You" : message.senderDisplayName}</strong>
                         <span>{formatRelativeTime(message.sentAt)}</span>
                       </div>
-                      <div className="chat-message__bubble">{message.body}</div>
+                      {message.body.trim() ? <div className="chat-message__bubble">{message.body}</div> : null}
+                      {message.attachments.length ? (
+                        <div className="dm-message-attachments">
+                          {message.attachments.map((attachment) => (
+                            <DirectMessageAttachmentCard attachment={attachment} key={attachment.id} />
+                          ))}
+                        </div>
+                      ) : null}
                     </article>
                   );
                 })}
@@ -421,7 +503,67 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
               <form className="conversation-composer" onSubmit={(event) => {
                 void handleSendMessage(event);
               }}>
+                <input
+                  accept="*/*"
+                  aria-label="Attach files"
+                  className="dm-composer__file-input"
+                  multiple
+                  onChange={handleComposerFilesChange}
+                  ref={fileInputRef}
+                  type="file"
+                />
+                {draftAttachments.length ? (
+                  <div className="dm-composer__attachments">
+                    {draftAttachments.map((attachment) => (
+                      <article className="dm-composer-attachment" key={attachment.id}>
+                        <div className="dm-composer-attachment__preview">
+                          {attachment.previewUrl && attachment.kind === "image" ? (
+                            <img
+                              alt={attachment.file.name}
+                              className="dm-composer-attachment__image"
+                              src={attachment.previewUrl}
+                            />
+                          ) : attachment.previewUrl && attachment.kind === "video" ? (
+                            <video
+                              className="dm-composer-attachment__video"
+                              muted
+                              playsInline
+                              preload="metadata"
+                              src={attachment.previewUrl}
+                            />
+                          ) : (
+                            <span className="dm-composer-attachment__icon">{getAttachmentKindLabel(attachment.kind)}</span>
+                          )}
+                        </div>
+                        <div className="dm-composer-attachment__meta">
+                          <strong title={attachment.file.name}>{attachment.file.name}</strong>
+                          <span>{formatAttachmentMeta(attachment)}</span>
+                        </div>
+                        <button
+                          aria-label={`Remove ${attachment.file.name}`}
+                          className="icon-button icon-button--small"
+                          onClick={() => {
+                            handleRemoveDraftAttachment(attachment.id);
+                          }}
+                          type="button"
+                        >
+                          ×
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="conversation-composer__row">
+                  <button
+                    aria-label="Open file picker"
+                    className="conversation-send-button conversation-send-button--attach"
+                    onClick={() => {
+                      fileInputRef.current?.click();
+                    }}
+                    type="button"
+                  >
+                    <PaperclipIcon />
+                  </button>
                   <input
                     className="field__input conversation-composer__input"
                     onChange={(event) => {
@@ -432,13 +574,16 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
                   />
                   <button
                     className="conversation-send-button"
-                    disabled={!draft.trim() || isSending}
+                    disabled={(!draft.trim() && !draftAttachments.length) || isSending}
                     type="submit"
                   >
-                    ↗
+                    {isSending ? "…" : "↗"}
                   </button>
                 </div>
-                {feedback ? <p className="inline-feedback inline-feedback--error">{feedback}</p> : null}
+                <div className="dm-composer__footer">
+                  <span>{draftAttachments.length}/{MAX_ATTACHMENTS_PER_MESSAGE} files</span>
+                  {feedback ? <p className="inline-feedback inline-feedback--error">{feedback}</p> : null}
+                </div>
               </form>
             </>
           ) : (
@@ -457,8 +602,212 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
   );
 }
 
+function DirectMessageAttachmentCard(props: { attachment: DirectMessageAttachment }) {
+  const isInlineMedia = props.attachment.kind === "image" || props.attachment.kind === "video";
+  const isBlobUrl = props.attachment.contentUrl.startsWith("blob:");
+  const [previewUrl, setPreviewUrl] = useState<string | null>(isBlobUrl ? props.attachment.contentUrl : null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(Boolean(isInlineMedia && !isBlobUrl));
+  const [isBusy, setIsBusy] = useState(false);
+
+  useEffect(() => {
+    if (!isInlineMedia || isBlobUrl) {
+      setPreviewUrl(props.attachment.contentUrl);
+      setIsLoadingPreview(false);
+      setLoadError(null);
+      return;
+    }
+
+    let cancelled = false;
+    let nextPreviewUrl: string | null = null;
+
+    async function loadPreview() {
+      setIsLoadingPreview(true);
+      setLoadError(null);
+      try {
+        const blob = await fetchDirectMessageAttachmentBlob(props.attachment.id);
+        if (cancelled) {
+          return;
+        }
+
+        nextPreviewUrl = URL.createObjectURL(blob);
+        setPreviewUrl(nextPreviewUrl);
+      } catch {
+        if (!cancelled) {
+          setLoadError("Preview unavailable.");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingPreview(false);
+        }
+      }
+    }
+
+    void loadPreview();
+
+    return () => {
+      cancelled = true;
+      if (nextPreviewUrl) {
+        URL.revokeObjectURL(nextPreviewUrl);
+      }
+    };
+  }, [isBlobUrl, isInlineMedia, props.attachment.contentUrl, props.attachment.id]);
+
+  async function handleOpen() {
+    setIsBusy(true);
+    try {
+      if (props.attachment.contentUrl.startsWith("blob:")) {
+        openObjectUrl(props.attachment.contentUrl);
+        return;
+      }
+
+      const blob = await fetchDirectMessageAttachmentBlob(props.attachment.id);
+      const objectUrl = URL.createObjectURL(blob);
+      openObjectUrl(objectUrl, true);
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  async function handleDownload() {
+    setIsBusy(true);
+    try {
+      if (props.attachment.downloadUrl.startsWith("blob:")) {
+        downloadObjectUrl(props.attachment.downloadUrl, props.attachment.filename);
+        return;
+      }
+
+      const blob = await fetchDirectMessageAttachmentBlob(props.attachment.id, { download: true });
+      const objectUrl = URL.createObjectURL(blob);
+      downloadObjectUrl(objectUrl, props.attachment.filename, true);
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
+  return (
+    <article className={`dm-attachment-card dm-attachment-card--${props.attachment.kind}`}>
+      {isInlineMedia && previewUrl && !loadError ? (
+        <div className="dm-attachment-card__preview-shell">
+          {props.attachment.kind === "image" ? (
+            <img
+              alt={props.attachment.filename}
+              className="dm-attachment-card__image"
+              src={previewUrl}
+            />
+          ) : (
+            <video
+              className="dm-attachment-card__video"
+              controls
+              playsInline
+              preload="metadata"
+              src={previewUrl}
+            />
+          )}
+        </div>
+      ) : isInlineMedia && isLoadingPreview ? (
+        <div className="dm-attachment-card__placeholder">Loading preview…</div>
+      ) : null}
+      <div className="dm-attachment-card__body">
+        <div className="dm-attachment-card__meta">
+          <strong title={props.attachment.filename}>{props.attachment.filename}</strong>
+          <span>{formatExistingAttachmentMeta(props.attachment)}</span>
+          {loadError ? <span>{loadError}</span> : null}
+        </div>
+        <div className="dm-attachment-card__actions">
+          <button
+            className="button button--ghost"
+            disabled={isBusy}
+            onClick={() => {
+              void handleOpen();
+            }}
+            type="button"
+          >
+            Open
+          </button>
+          <button
+            className="button button--ghost"
+            disabled={isBusy}
+            onClick={() => {
+              void handleDownload();
+            }}
+            type="button"
+          >
+            Download
+          </button>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 function sumUnreadCount(threads: DirectMessageThreadSummary[]) {
   return threads.reduce((total, thread) => total + thread.unreadCount, 0);
+}
+
+function createComposerAttachmentDraft(file: File): ComposerAttachmentDraft {
+  const kind = classifyDraftAttachmentKind(file);
+  return {
+    id: typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `draft-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    file,
+    kind,
+    previewUrl: kind === "image" || kind === "video" ? URL.createObjectURL(file) : null,
+  };
+}
+
+function revokeComposerAttachmentUrls(attachments: ComposerAttachmentDraft[]) {
+  for (const attachment of attachments) {
+    if (attachment.previewUrl) {
+      URL.revokeObjectURL(attachment.previewUrl);
+    }
+  }
+}
+
+function classifyDraftAttachmentKind(file: File): DirectMessageAttachmentKind {
+  const type = file.type.trim().toLowerCase();
+  if (type.startsWith("image/")) {
+    return "image";
+  }
+  if (type.startsWith("video/")) {
+    return "video";
+  }
+
+  const extension = getFileExtension(file.name);
+  if ([".apng", ".avif", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"].includes(extension)) {
+    return "image";
+  }
+  if ([".m4v", ".mov", ".mp4", ".mpeg", ".mpg", ".ogv", ".webm"].includes(extension)) {
+    return "video";
+  }
+
+  return "file";
+}
+
+function getFileExtension(filename: string): string {
+  const index = filename.lastIndexOf(".");
+  if (index <= 0 || index === filename.length - 1) {
+    return "";
+  }
+
+  return filename.slice(index).toLowerCase();
+}
+
+function buildThreadPreviewFromMessage(message: DirectMessageMessage): string {
+  if (message.body.trim()) {
+    return truncatePreview(message.body.trim());
+  }
+
+  if (message.attachments.length === 1) {
+    return truncatePreview(message.attachments[0]?.filename ?? "Sent a file");
+  }
+
+  return `Sent ${message.attachments.length} files`;
+}
+
+function truncatePreview(value: string) {
+  return value.length <= 120 ? value : `${value.slice(0, 119)}…`;
 }
 
 function formatRelativeTime(value: string) {
@@ -486,4 +835,75 @@ function formatRelativeTime(value: string) {
   }
 
   return new Date(timestamp).toLocaleDateString();
+}
+
+function formatBytes(value: number) {
+  if (value >= 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(value >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+  }
+  if (value >= 1024) {
+    return `${Math.round(value / 1024)} KB`;
+  }
+  return `${value} B`;
+}
+
+function getAttachmentKindLabel(kind: DirectMessageAttachmentKind) {
+  if (kind === "image") {
+    return "IMG";
+  }
+  if (kind === "video") {
+    return "VID";
+  }
+  return "FILE";
+}
+
+function formatAttachmentMeta(attachment: ComposerAttachmentDraft) {
+  return `${getAttachmentKindLabel(attachment.kind)} · ${formatBytes(attachment.file.size)}`;
+}
+
+function formatExistingAttachmentMeta(attachment: DirectMessageAttachment) {
+  return `${getAttachmentKindLabel(attachment.kind)} · ${formatBytes(attachment.sizeBytes)}`;
+}
+
+function openObjectUrl(url: string, revokeLater = false) {
+  window.open(url, "_blank", "noopener,noreferrer");
+  if (revokeLater) {
+    window.setTimeout(() => {
+      URL.revokeObjectURL(url);
+    }, 60_000);
+  }
+}
+
+function downloadObjectUrl(url: string, filename: string, revokeLater = false) {
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.rel = "noopener";
+  document.body.append(link);
+  link.click();
+  link.remove();
+
+  if (revokeLater) {
+    window.setTimeout(() => {
+      URL.revokeObjectURL(url);
+    }, 60_000);
+  }
+}
+
+function PaperclipIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      fill="none"
+      height="18"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.9"
+      viewBox="0 0 24 24"
+      width="18"
+    >
+      <path d="M21.4 11.1 12 20.5a6 6 0 0 1-8.5-8.5l9.6-9.6a4 4 0 1 1 5.6 5.7l-9.8 9.8a2 2 0 1 1-2.8-2.8l8.7-8.7" />
+    </svg>
+  );
 }

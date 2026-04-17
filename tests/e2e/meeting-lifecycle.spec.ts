@@ -16,7 +16,7 @@ test("guest leave returns home and clears meeting state for a clean rejoin", asy
 
   await expect(page).toHaveURL("/");
   await expect(page.getByRole("heading", { name: "Join as a guest" })).toHaveCount(0);
-  await expect(page.getByText("Meetings without the clutter.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Meetings without/i })).toBeVisible();
 
   await expect.poll(async () => {
     const roomState = await getRoomState(request, "ops-signin");
@@ -29,20 +29,27 @@ test("guest leave returns home and clears meeting state for a clean rejoin", asy
   await expect(page.getByRole("button", { name: "Leave" })).toBeVisible();
 });
 
-test("sidebar home leaves the meeting and returns guests to the landing page", async ({ page, request }) => {
+test("sidebar home returns guests to the landing page without forcing an immediate leave", async ({ page, request }) => {
   await page.goto("/ops-signin");
   await joinAsGuest(page, "Guest Runner");
+
+  const leaveRequests: string[] = [];
+  await page.route("**/v1/meetings/*/participants/*/leave", async (route) => {
+    leaveRequests.push(route.request().url());
+    await route.continue();
+  });
 
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("button", { name: "Home" }).click();
 
   await expect(page).toHaveURL("/");
-  await expect(page.getByText("Meetings without the clutter.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Meetings without/i })).toBeVisible();
+  await expect.poll(() => leaveRequests.length).toBe(0);
 
   await expect.poll(async () => {
     const roomState = await getRoomState(request, "ops-signin");
     return roomState.participants.filter((participant) => participant.presence !== "left").length;
-  }).toBe(0);
+  }).toBe(1);
 });
 
 test("leaving and quickly rejoining the same meeting keeps the new session active", async ({ page }) => {
@@ -151,7 +158,7 @@ test("persisted pagehide does not force the participant to leave the meeting in 
   }
 });
 
-test("non-persisted pagehide leaves the active meeting session", async ({ page }) => {
+test("non-persisted pagehide keeps the active meeting session connected", async ({ page }) => {
   await signInThroughUi(page, "liam@example.com");
   await page.goto("/ops-signin");
   await expectDirectJoin(page, "Auto Join Room");
@@ -170,7 +177,13 @@ test("non-persisted pagehide leaves the active meeting session", async ({ page }
     window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: false }));
   });
 
-  await expect.poll(() => leaveRequests.length).toBe(1);
+  await page.waitForTimeout(500);
+  await expect.poll(() => leaveRequests.length).toBe(0);
+  await openInfoDrawer(page);
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByText(/1 active \/ 0 lobby/i)).toBeVisible();
+  await expect(page.getByText("You are no longer in this meeting.")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Leave" })).toBeVisible();
 });
 
 async function signInThroughUi(page: Page, email: string) {

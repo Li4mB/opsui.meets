@@ -105,27 +105,6 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     };
   }, []);
 
-  useEffect(() => {
-    const handlePageHide = (event: PageTransitionEvent) => {
-      if (event.persisted) {
-        return;
-      }
-
-      leaveActiveMeetingSession();
-    };
-
-    window.addEventListener("pagehide", handlePageHide);
-    return () => {
-      window.removeEventListener("pagehide", handlePageHide);
-    };
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      leaveActiveMeetingSession();
-    };
-  }, []);
-
   function isActiveMeetingScope(scopeId: number): boolean {
     return meetingScopeRef.current === scopeId;
   }

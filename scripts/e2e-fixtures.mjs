@@ -25,6 +25,26 @@ const apiServer = http.createServer(async (request, response) => {
     return;
   }
 
+  const directMessageUploadMatch = url.pathname.match(/^\/__uploads\/([^/]+)$/);
+  if (request.method === "PUT" && directMessageUploadMatch) {
+    const attachment = getFixtureDirectMessageAttachment(directMessageUploadMatch[1]);
+    if (!attachment) {
+      sendJson(request, response, 404, { error: "attachment_not_found" });
+      return;
+    }
+
+    const body = await readBinaryBody(request);
+    state.directMessageAttachmentUploads.set(attachment.id, {
+      buffer: body,
+      contentType: request.headers["content-type"] || attachment.contentType || "application/octet-stream",
+      uploadedAt: new Date().toISOString(),
+    });
+    writeCorsHeaders(request, response);
+    response.writeHead(200);
+    response.end();
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/__participants/stale") {
     const body = await readJsonBody(request);
     const meetingId = String(body?.meetingInstanceId ?? "");
@@ -179,8 +199,97 @@ const apiServer = http.createServer(async (request, response) => {
     }
 
     sendJson(request, response, 200, {
-      items: listDirectMessageMessagesByThread(thread.id).map(toDirectMessageMessage),
+      items: listDirectMessageMessagesByThread(thread.id).map((message) => toDirectMessageMessage(request, message)),
     });
+    return;
+  }
+
+  const directMessageAttachmentSignMatch = url.pathname.match(/^\/v1\/direct-messages\/threads\/([^/]+)\/attachments\/sign$/);
+  if (request.method === "POST" && directMessageAttachmentSignMatch) {
+    const session = getCurrentSession(request);
+    if (!session.authenticated) {
+      sendJson(request, response, 401, {
+        error: "authentication_required",
+        message: "Sign in to use direct messages.",
+      });
+      return;
+    }
+
+    const thread = state.directMessageThreads.get(directMessageAttachmentSignMatch[1]) ?? null;
+    if (!thread || !getDirectMessageMembership(thread.id, session.actor.userId)) {
+      sendJson(request, response, 404, {
+        error: "thread_not_found",
+        message: "That direct message thread was not found.",
+      });
+      return;
+    }
+
+    const body = await readJsonBody(request);
+    const files = Array.isArray(body?.files) ? body.files : [];
+    if (!files.length) {
+      sendJson(request, response, 400, {
+        error: "attachments_required",
+        message: "Choose at least one file before uploading.",
+      });
+      return;
+    }
+    if (files.length > 10) {
+      sendJson(request, response, 400, {
+        error: "too_many_attachments",
+        message: "You can attach up to 10 files per message.",
+      });
+      return;
+    }
+
+    const items = [];
+    for (const entry of files) {
+      const filename = typeof entry?.filename === "string" && entry.filename.trim()
+        ? entry.filename.trim()
+        : `file-${state.nextDirectMessageAttachmentNumber}`;
+      const sizeBytes = Number(entry?.sizeBytes ?? 0);
+      if (!Number.isFinite(sizeBytes) || sizeBytes < 0) {
+        sendJson(request, response, 400, {
+          error: "attachment_size_invalid",
+          message: "Each attachment must include a valid size.",
+        });
+        return;
+      }
+      if (sizeBytes > 100 * 1024 * 1024) {
+        sendJson(request, response, 400, {
+          error: "attachment_too_large",
+          message: "Files must be 100 MB or smaller.",
+        });
+        return;
+      }
+
+      const attachmentId = `dm_attachment_${state.nextDirectMessageAttachmentNumber++}`;
+      const contentType = typeof entry?.contentType === "string" && entry.contentType.trim()
+        ? entry.contentType.trim().toLowerCase()
+        : "application/octet-stream";
+      const attachment = {
+        id: attachmentId,
+        threadId: thread.id,
+        messageId: null,
+        uploaderUserId: session.actor.userId,
+        objectKey: `direct-messages/${thread.id}/${attachmentId}`,
+        filename,
+        contentType,
+        sizeBytes: Math.floor(sizeBytes),
+        kind: classifyFixtureAttachmentKind(contentType, filename),
+        createdAt: new Date().toISOString(),
+      };
+      state.directMessageAttachments.push(attachment);
+      items.push({
+        attachmentId,
+        uploadUrl: `http://${HOST}:${API_PORT}/__uploads/${attachmentId}`,
+        uploadMethod: "PUT",
+        uploadHeaders: {
+          "content-type": contentType,
+        },
+      });
+    }
+
+    sendJson(request, response, 201, { items });
     return;
   }
 
@@ -205,12 +314,50 @@ const apiServer = http.createServer(async (request, response) => {
 
     const body = await readJsonBody(request);
     const text = typeof body?.text === "string" ? body.text.trim() : "";
-    if (!text) {
+    const attachmentIds = Array.isArray(body?.attachmentIds)
+      ? body.attachmentIds.filter((entry) => typeof entry === "string" && entry.trim()).map((entry) => entry.trim())
+      : [];
+    if (!text && !attachmentIds.length) {
       sendJson(request, response, 400, {
-        error: "message_text_required",
-        message: "Enter a message before sending.",
+        error: "message_content_required",
+        message: "Enter a message or attach a file before sending.",
       });
       return;
+    }
+
+    const attachments = [];
+    for (const attachmentId of attachmentIds) {
+      const attachment = getFixtureDirectMessageAttachment(attachmentId);
+      if (!attachment || attachment.threadId !== thread.id) {
+        sendJson(request, response, 404, {
+          error: "attachment_not_found",
+          message: "That attachment could not be found.",
+        });
+        return;
+      }
+      if (attachment.uploaderUserId !== session.actor.userId) {
+        sendJson(request, response, 403, {
+          error: "attachment_not_owned",
+          message: "Only your own pending attachments can be sent.",
+        });
+        return;
+      }
+      if (attachment.messageId) {
+        sendJson(request, response, 400, {
+          error: "attachment_already_sent",
+          message: "One or more files have already been attached to a message.",
+        });
+        return;
+      }
+      if (!state.directMessageAttachmentUploads.get(attachment.id)) {
+        sendJson(request, response, 400, {
+          error: "attachment_not_uploaded",
+          message: "Finish uploading your files before sending.",
+        });
+        return;
+      }
+
+      attachments.push(attachment);
     }
 
     const message = {
@@ -221,8 +368,11 @@ const apiServer = http.createServer(async (request, response) => {
       sentAt: new Date().toISOString(),
     };
     state.directMessageMessages.push(message);
+    for (const attachment of attachments) {
+      attachment.messageId = message.id;
+    }
     thread.lastMessageAt = message.sentAt;
-    thread.lastMessagePreview = createDirectMessagePreview(text);
+    thread.lastMessagePreview = createDirectMessagePreviewFromContent(text, attachments);
     thread.updatedAt = message.sentAt;
 
     const senderMembership = getDirectMessageMembership(thread.id, session.actor.userId);
@@ -231,7 +381,47 @@ const apiServer = http.createServer(async (request, response) => {
       senderMembership.lastReadMessageId = message.id;
     }
 
-    sendJson(request, response, 201, toDirectMessageMessage(message));
+    sendJson(request, response, 201, toDirectMessageMessage(request, message));
+    return;
+  }
+
+  const directMessageAttachmentContentMatch = url.pathname.match(/^\/v1\/direct-messages\/attachments\/([^/]+)\/content$/);
+  if (request.method === "GET" && directMessageAttachmentContentMatch) {
+    const session = getCurrentSession(request);
+    if (!session.authenticated) {
+      sendJson(request, response, 401, {
+        error: "authentication_required",
+        message: "Sign in to use direct messages.",
+      });
+      return;
+    }
+
+    const attachment = getFixtureDirectMessageAttachment(directMessageAttachmentContentMatch[1]);
+    if (!attachment || !getDirectMessageMembership(attachment.threadId, session.actor.userId)) {
+      sendJson(request, response, 404, {
+        error: "attachment_not_found",
+        message: "That attachment could not be found.",
+      });
+      return;
+    }
+
+    const uploaded = state.directMessageAttachmentUploads.get(attachment.id);
+    if (!uploaded) {
+      sendJson(request, response, 404, {
+        error: "attachment_not_uploaded",
+        message: "That attachment is unavailable.",
+      });
+      return;
+    }
+
+    writeCorsHeaders(request, response);
+    response.writeHead(200, {
+      "cache-control": "private, no-store",
+      "content-disposition": `${url.searchParams.get("download") === "1" ? "attachment" : "inline"}; filename="${sanitizeFixtureFilename(attachment.filename)}"`,
+      "content-length": String(uploaded.buffer.length),
+      "content-type": uploaded.contentType || attachment.contentType || "application/octet-stream",
+    });
+    response.end(uploaded.buffer);
     return;
   }
 
@@ -1217,6 +1407,8 @@ function createInitialState() {
   const nextState = {
     authSessions: new Map(),
     credentials: new Map(),
+    directMessageAttachmentUploads: new Map(),
+    directMessageAttachments: [],
     directMessageMessages: [],
     directMessageThreadMembers: [],
     directMessageThreads: new Map(),
@@ -1225,6 +1417,7 @@ function createInitialState() {
     meetings: new Map(),
     memberships: [],
     nextEventNumber: 1,
+    nextDirectMessageAttachmentNumber: 1,
     nextDirectMessageMessageNumber: 1,
     nextDirectMessageThreadNumber: 1,
     nextMembershipNumber: 1,
@@ -1809,6 +2002,16 @@ function getDirectMessageMembership(threadId, userId) {
   return state.directMessageThreadMembers.find((member) => member.threadId === threadId && member.userId === userId) ?? null;
 }
 
+function getFixtureDirectMessageAttachment(attachmentId) {
+  return state.directMessageAttachments.find((attachment) => attachment.id === attachmentId) ?? null;
+}
+
+function listDirectMessageAttachmentsByMessage(messageId) {
+  return state.directMessageAttachments
+    .filter((attachment) => attachment.messageId === messageId)
+    .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
+}
+
 function listDirectMessageMessagesByThread(threadId) {
   return state.directMessageMessages
     .filter((message) => message.threadId === threadId)
@@ -1855,7 +2058,7 @@ function toDirectMessageThreadDetail(thread, currentUserId) {
   };
 }
 
-function toDirectMessageMessage(message) {
+function toDirectMessageMessage(request, message) {
   const sender = state.users.get(message.senderUserId);
   return {
     id: message.id,
@@ -1864,7 +2067,22 @@ function toDirectMessageMessage(message) {
     senderUsername: sender?.username ?? "",
     senderDisplayName: sender?.displayName ?? "Member",
     body: message.body,
+    attachments: listDirectMessageAttachmentsByMessage(message.id).map((attachment) => toDirectMessageAttachment(request, attachment)),
     sentAt: message.sentAt,
+  };
+}
+
+function toDirectMessageAttachment(request, attachment) {
+  const baseUrl = new URL(request.url ?? "/", `http://${HOST}:${API_PORT}`);
+  return {
+    id: attachment.id,
+    messageId: attachment.messageId,
+    filename: attachment.filename,
+    contentType: attachment.contentType,
+    sizeBytes: attachment.sizeBytes,
+    kind: attachment.kind,
+    contentUrl: new URL(`/v1/direct-messages/attachments/${attachment.id}/content`, baseUrl).toString(),
+    downloadUrl: new URL(`/v1/direct-messages/attachments/${attachment.id}/content?download=1`, baseUrl).toString(),
   };
 }
 
@@ -1915,6 +2133,49 @@ function createDirectMessagePreview(text) {
   }
 
   return `${text.slice(0, 119)}…`;
+}
+
+function createDirectMessagePreviewFromContent(text, attachments) {
+  if (text) {
+    return createDirectMessagePreview(text);
+  }
+  if (attachments.length === 1) {
+    return createDirectMessagePreview(attachments[0]?.filename ?? "Sent a file");
+  }
+
+  return `Sent ${attachments.length} files`;
+}
+
+function classifyFixtureAttachmentKind(contentType, filename) {
+  if (contentType.startsWith("image/")) {
+    return "image";
+  }
+  if (contentType.startsWith("video/")) {
+    return "video";
+  }
+
+  const extension = getFixtureFilenameExtension(filename);
+  if ([".apng", ".avif", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"].includes(extension)) {
+    return "image";
+  }
+  if ([".m4v", ".mov", ".mp4", ".mpeg", ".mpg", ".ogv", ".webm"].includes(extension)) {
+    return "video";
+  }
+
+  return "file";
+}
+
+function getFixtureFilenameExtension(filename) {
+  const lastDot = filename.lastIndexOf(".");
+  if (lastDot <= 0 || lastDot === filename.length - 1) {
+    return "";
+  }
+
+  return filename.slice(lastDot).toLowerCase();
+}
+
+function sanitizeFixtureFilename(filename) {
+  return String(filename || "download").replace(/[\r\n"]/g, "_").trim() || "download";
 }
 
 function getFixtureUsernameMatchScore(usernameNormalized, query) {
@@ -2104,7 +2365,7 @@ function writeCorsHeaders(request, response) {
     "Access-Control-Allow-Headers",
     "content-type, idempotency-key, x-idempotency-key, x-user-id, x-user-email, x-workspace-id, x-workspace-role, x-session-type",
   );
-  response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
   response.setHeader("Access-Control-Max-Age", "86400");
 }
 
@@ -2133,6 +2394,18 @@ function readJsonBody(request) {
       } catch {
         resolve(null);
       }
+    });
+  });
+}
+
+function readBinaryBody(request) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    request.on("data", (chunk) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    });
+    request.on("end", () => {
+      resolve(Buffer.concat(chunks));
     });
   });
 }

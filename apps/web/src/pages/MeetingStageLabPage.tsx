@@ -29,14 +29,7 @@ export function MeetingStageLabPage(props: MeetingStageLabPageProps) {
 
     return {
       displayName: ownerName,
-      extraShareCount: 0,
       isSelf: shareOwner === "self",
-      source: {
-        audioIncluded: true,
-        displaySurface: "browser",
-        label: "Quarterly planning deck",
-        sourceId: "stage-lab-share",
-      },
     };
   }, [participantTiles, shareActive, shareOwner]);
 
@@ -126,8 +119,6 @@ function buildLabParticipants(participantCount: number): MeetingStageParticipant
       audioEnabled,
       displayName,
       isSelf: index === 0,
-      shareBadgeLabel: null,
-      subtitle: `${index === 0 ? "Live preview" : "Live"} / ${audioEnabled ? "mic on" : "mic off"} / ${videoEnabled ? "camera on" : "camera off"}`,
       videoEnabled,
     };
   });

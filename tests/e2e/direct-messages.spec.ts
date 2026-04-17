@@ -1,6 +1,19 @@
 import { expect, test, type Page } from "@playwright/test";
+import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-const FIXTURE_RESET_URL = "http://127.0.0.1:9877/__reset";
+const FIXTURE_API_URL = "http://127.0.0.1:9877";
+const FIXTURE_AUTH_URL = "http://127.0.0.1:9878";
+const FIXTURE_RESET_URL = `${FIXTURE_API_URL}/__reset`;
+
+const PNG_1X1 = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a40cAAAAASUVORK5CYII=",
+  "base64",
+);
+const TINY_MP4 = Buffer.from("00000020667479706d703432000000006d7034326d703431", "hex");
+const TINY_PDF = Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF", "utf8");
+const TINY_ZIP = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00]);
 
 test.beforeEach(async ({ request }) => {
   const response = await request.post(FIXTURE_RESET_URL);
@@ -11,7 +24,7 @@ test("unauthenticated users are prompted to sign in before accessing direct mess
   await page.goto("/direct-messages");
 
   await expect(page.getByRole("heading", { name: "Sign in to send direct messages" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Sign In" })).toBeVisible();
+  await expect(page.getByRole("main").getByRole("button", { name: "Sign In" })).toBeVisible();
 });
 
 test("searching by username opens a persistent thread with full saved history", async ({ browser }) => {
@@ -36,13 +49,8 @@ test("searching by username opens a persistent thread with full saved history", 
       password: "password123",
     });
 
-    await firstPage.goto("/direct-messages");
-    await firstPage.getByRole("searchbox").fill("blair.chat");
-    await firstPage.getByRole("button", { name: /Blair Chat/i }).click();
-
-    await expect(firstPage).toHaveURL(/\/direct-messages\/.+$/);
-    await firstPage.getByPlaceholder("Message @blair.chat").fill("Hey Blair, this should stay saved.");
-    await firstPage.getByRole("button", { name: "↗" }).click();
+    await openDirectMessageThread(firstPage, "blair.chat", /Blair Chat/i);
+    await sendComposerMessage(firstPage, "Hey Blair, this should stay saved.");
 
     await expect(firstPage.locator(".chat-message__bubble").getByText("Hey Blair, this should stay saved.")).toBeVisible();
     await expect(firstPage.getByRole("button", { name: /Blair Chat/i }).first()).toBeVisible();
@@ -79,11 +87,8 @@ test("direct messages work across organisation and personal accounts with unread
       password: "password123",
     });
 
-    await organisationPage.goto("/direct-messages");
-    await organisationPage.getByRole("searchbox").fill("solo.member");
-    await organisationPage.getByRole("button", { name: /Solo Member/i }).click();
-    await organisationPage.getByPlaceholder("Message @solo.member").fill("Hello from the organisation side.");
-    await organisationPage.getByRole("button", { name: "↗" }).click();
+    await openDirectMessageThread(organisationPage, "solo.member", /Solo Member/i);
+    await sendComposerMessage(organisationPage, "Hello from the organisation side.");
     await expect(organisationPage.locator(".chat-message__bubble").getByText("Hello from the organisation side.")).toBeVisible();
 
     await personalPage.goto("/");
@@ -100,6 +105,252 @@ test("direct messages work across organisation and personal accounts with unread
     await expect(personalPage.getByRole("button", { name: /Direct Messages/i })).not.toContainText("1");
   } finally {
     await Promise.allSettled([organisationContext.close(), personalContext.close()]);
+  }
+});
+
+test("image attachments render inline in chat and remain visible after reload", async ({ browser }) => {
+  const firstContext = await browser.newContext();
+  const secondContext = await browser.newContext();
+  const firstPage = await firstContext.newPage();
+  const secondPage = await secondContext.newPage();
+
+  try {
+    await signUpIndividual(firstPage, {
+      email: "ivy@example.com",
+      username: "ivy.dm",
+      firstName: "Ivy",
+      lastName: "Preview",
+      password: "password123",
+    });
+    await signUpIndividual(secondPage, {
+      email: "nina@example.com",
+      username: "nina.dm",
+      firstName: "Nina",
+      lastName: "Preview",
+      password: "password123",
+    });
+
+    await openDirectMessageThread(firstPage, "nina.dm", /Nina Preview/i);
+    await attachFiles(firstPage, [
+      {
+        name: "preview.png",
+        mimeType: "image/png",
+        buffer: PNG_1X1,
+      },
+    ]);
+    await sendComposerMessage(firstPage, "Photo proof.");
+
+    await expect(firstPage.locator(".chat-message__bubble").getByText("Photo proof.")).toBeVisible();
+    await expect(firstPage.locator(".dm-attachment-card__image")).toBeVisible();
+
+    await firstPage.goto("/");
+    await firstPage.goto("/direct-messages");
+    await firstPage.getByRole("button", { name: /Nina Preview/i }).click();
+    await expect(firstPage.locator(".dm-attachment-card__image")).toBeVisible();
+  } finally {
+    await Promise.allSettled([firstContext.close(), secondContext.close()]);
+  }
+});
+
+test("video attachments render inline without leaving the conversation", async ({ browser }) => {
+  const firstContext = await browser.newContext();
+  const secondContext = await browser.newContext();
+  const firstPage = await firstContext.newPage();
+  const secondPage = await secondContext.newPage();
+
+  try {
+    await signUpIndividual(firstPage, {
+      email: "vera@example.com",
+      username: "vera.dm",
+      firstName: "Vera",
+      lastName: "Video",
+      password: "password123",
+    });
+    await signUpIndividual(secondPage, {
+      email: "omar@example.com",
+      username: "omar.dm",
+      firstName: "Omar",
+      lastName: "Video",
+      password: "password123",
+    });
+
+    await openDirectMessageThread(firstPage, "omar.dm", /Omar Video/i);
+    await attachFiles(firstPage, [
+      {
+        name: "clip.mp4",
+        mimeType: "video/mp4",
+        buffer: TINY_MP4,
+      },
+    ]);
+    await sendComposerMessage(firstPage);
+
+    await expect(firstPage).toHaveURL(/\/direct-messages\/.+$/);
+    await expect(firstPage.locator(".dm-attachment-card__video")).toBeVisible();
+    await expect(firstPage.getByRole("button", { name: "Open" }).first()).toBeVisible();
+    await expect(firstPage.getByRole("button", { name: "Download" }).first()).toBeVisible();
+  } finally {
+    await Promise.allSettled([firstContext.close(), secondContext.close()]);
+  }
+});
+
+test("attachment-only file messages render cards and thread previews", async ({ browser }) => {
+  const firstContext = await browser.newContext();
+  const secondContext = await browser.newContext();
+  const firstPage = await firstContext.newPage();
+  const secondPage = await secondContext.newPage();
+
+  try {
+    await signUpIndividual(firstPage, {
+      email: "paul@example.com",
+      username: "paul.dm",
+      firstName: "Paul",
+      lastName: "Files",
+      password: "password123",
+    });
+    await signUpIndividual(secondPage, {
+      email: "rhea@example.com",
+      username: "rhea.dm",
+      firstName: "Rhea",
+      lastName: "Files",
+      password: "password123",
+    });
+
+    await openDirectMessageThread(firstPage, "rhea.dm", /Rhea Files/i);
+    await attachFiles(firstPage, [
+      {
+        name: "brief.pdf",
+        mimeType: "application/pdf",
+        buffer: TINY_PDF,
+      },
+      {
+        name: "bundle.zip",
+        mimeType: "application/zip",
+        buffer: TINY_ZIP,
+      },
+    ]);
+    await sendComposerMessage(firstPage);
+
+    await expect(firstPage.locator(".dm-attachment-card")).toHaveCount(2);
+    await expect(firstPage.locator(".dm-attachment-card__meta").getByText("brief.pdf")).toBeVisible();
+    await expect(firstPage.locator(".dm-attachment-card__meta").getByText("bundle.zip")).toBeVisible();
+    await expect(firstPage.locator(".dm-thread-list__item.is-active p")).toContainText("Sent 2 files");
+  } finally {
+    await Promise.allSettled([firstContext.close(), secondContext.close()]);
+  }
+});
+
+test("composer rejects too many files and files over 100 MB", async ({ browser }) => {
+  const firstContext = await browser.newContext();
+  const secondContext = await browser.newContext();
+  const firstPage = await firstContext.newPage();
+  const secondPage = await secondContext.newPage();
+  const largeFilePath = await createLargeFixtureFile("huge.bin", 101 * 1024 * 1024);
+
+  try {
+    await signUpIndividual(firstPage, {
+      email: "maya@example.com",
+      username: "maya.dm",
+      firstName: "Maya",
+      lastName: "Limits",
+      password: "password123",
+    });
+    await signUpIndividual(secondPage, {
+      email: "leo@example.com",
+      username: "leo.dm",
+      firstName: "Leo",
+      lastName: "Limits",
+      password: "password123",
+    });
+
+    await openDirectMessageThread(firstPage, "leo.dm", /Leo Limits/i);
+    await attachFiles(
+      firstPage,
+      Array.from({ length: 11 }, (_, index) => ({
+        name: `tiny-${index + 1}.txt`,
+        mimeType: "text/plain",
+        buffer: Buffer.from(`tiny-${index + 1}`, "utf8"),
+      })),
+    );
+    await expect(firstPage.getByText("You can attach up to 10 files per message.")).toBeVisible();
+    await expect(firstPage.locator(".dm-composer-attachment")).toHaveCount(0);
+
+    await attachFiles(firstPage, [
+      largeFilePath,
+    ]);
+    await sendComposerMessage(firstPage);
+    await expect(firstPage.getByText("Files must be 100 MB or smaller.")).toBeVisible();
+  } finally {
+    await fs.unlink(largeFilePath).catch(() => undefined);
+    await Promise.allSettled([firstContext.close(), secondContext.close()]);
+  }
+});
+
+test("attachment APIs reject cross-thread reuse and non-member access", async ({ browser }) => {
+  const firstContext = await browser.newContext();
+  const secondContext = await browser.newContext();
+  const thirdContext = await browser.newContext();
+  const firstPage = await firstContext.newPage();
+  const secondPage = await secondContext.newPage();
+  const thirdPage = await thirdContext.newPage();
+
+  try {
+    await signUpIndividual(firstPage, {
+      email: "alexx@example.com",
+      username: "alexx.dm",
+      firstName: "Alexx",
+      lastName: "Scope",
+      password: "password123",
+    });
+    await signUpIndividual(secondPage, {
+      email: "blake@example.com",
+      username: "blake.dm",
+      firstName: "Blake",
+      lastName: "Scope",
+      password: "password123",
+    });
+    await signUpIndividual(thirdPage, {
+      email: "casey@example.com",
+      username: "casey.dm",
+      firstName: "Casey",
+      lastName: "Scope",
+      password: "password123",
+    });
+
+    await openDirectMessageThread(firstPage, "blake.dm", /Blake Scope/i);
+    await attachFiles(firstPage, [
+      {
+        name: "scope.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("scope", "utf8"),
+      },
+    ]);
+    await sendComposerMessage(firstPage, "Scoped file");
+    await expect(firstPage.locator(".dm-attachment-card")).toHaveCount(1);
+
+    const threadWithBlake = currentThreadId(firstPage.url());
+    const attachmentId = await getLatestAttachmentId(firstPage, threadWithBlake);
+
+    await openDirectMessageThread(firstPage, "casey.dm", /Casey Scope/i);
+    const threadWithCasey = currentThreadId(firstPage.url());
+    const crossThreadSend = await dmApiRequest(firstPage, {
+      method: "POST",
+      pathname: `/v1/direct-messages/threads/${threadWithCasey}/messages`,
+      body: {
+        text: "",
+        attachmentIds: [attachmentId],
+      },
+    });
+    expect(crossThreadSend.status).toBe(404);
+    expect(crossThreadSend.body?.error).toBe("attachment_not_found");
+
+    const crossMemberFetch = await dmApiRequest(thirdPage, {
+      method: "GET",
+      pathname: `/v1/direct-messages/attachments/${attachmentId}/content`,
+    });
+    expect(crossMemberFetch.status).toBe(404);
+    expect(crossMemberFetch.body?.error).toBe("attachment_not_found");
+  } finally {
+    await Promise.allSettled([firstContext.close(), secondContext.close(), thirdContext.close()]);
   }
 });
 
@@ -139,4 +390,93 @@ async function fillIdentityFields(page: Page, input: { email: string; username: 
   await page.getByRole("textbox", { name: "First name", exact: true }).fill(input.firstName);
   await page.getByRole("textbox", { name: "Last name", exact: true }).fill(input.lastName);
   await page.getByLabel("Password").fill(input.password);
+}
+
+async function openDirectMessageThread(page: Page, username: string, resultName: RegExp) {
+  await page.goto("/direct-messages");
+  await page.getByRole("searchbox").fill(username);
+  await page.getByRole("button", { name: resultName }).click();
+  await expect(page).toHaveURL(/\/direct-messages\/.+$/);
+}
+
+async function attachFiles(
+  page: Page,
+  files: Array<
+    { name: string; mimeType: string; buffer: Buffer } |
+    string
+  >,
+) {
+  await page.getByLabel("Attach files").setInputFiles(files);
+}
+
+async function sendComposerMessage(page: Page, text?: string) {
+  if (text !== undefined) {
+    await page.locator(".conversation-composer__input").fill(text);
+  }
+
+  await page.getByRole("button", { name: /↗|…/ }).click();
+}
+
+function currentThreadId(url: string) {
+  const parsed = new URL(url);
+  return parsed.pathname.split("/").at(-1) ?? "";
+}
+
+async function getLatestAttachmentId(page: Page, threadId: string) {
+  const response = await dmApiRequest(page, {
+    method: "GET",
+    pathname: `/v1/direct-messages/threads/${threadId}/messages`,
+  });
+  expect(response.status).toBe(200);
+  const items = Array.isArray(response.body?.items) ? response.body.items : [];
+  const latest = items.at(-1);
+  const attachments = Array.isArray(latest?.attachments) ? latest.attachments : [];
+  expect(attachments.length).toBeGreaterThan(0);
+  return String(attachments[0]?.id ?? "");
+}
+
+async function dmApiRequest(
+  page: Page,
+  input: { method: "GET" | "POST"; pathname: string; body?: unknown },
+) {
+  return page.evaluate(async ({ apiBaseUrl, authBaseUrl, body, method, pathname }) => {
+    const sessionResponse = await fetch(`${authBaseUrl}/v1/session`, {
+      credentials: "include",
+    });
+    const session = await sessionResponse.json();
+    const actor = session.actor ?? {};
+    const headers = {
+      ...(method === "POST" ? { "content-type": "application/json" } : {}),
+      "x-session-type": session.sessionType ?? "guest",
+      "x-user-email": actor.email ?? "",
+      "x-user-id": actor.userId ?? "",
+      "x-workspace-id": actor.workspaceId ?? "",
+      "x-workspace-role": actor.workspaceRole ?? "",
+    };
+
+    const response = await fetch(`${apiBaseUrl}${pathname}`, {
+      method,
+      credentials: "include",
+      headers,
+      body: method === "POST" ? JSON.stringify(body ?? {}) : undefined,
+    });
+    const responseBody = await response.json().catch(() => null);
+    return {
+      body: responseBody,
+      status: response.status,
+    };
+  }, {
+    apiBaseUrl: FIXTURE_API_URL,
+    authBaseUrl: FIXTURE_AUTH_URL,
+    body: input.body,
+    method: input.method,
+    pathname: input.pathname,
+  });
+}
+
+async function createLargeFixtureFile(filename: string, sizeBytes: number) {
+  const filePath = join(tmpdir(), `opsui-meets-${Date.now()}-${filename}`);
+  await fs.writeFile(filePath, Buffer.alloc(1));
+  await fs.truncate(filePath, sizeBytes);
+  return filePath;
 }

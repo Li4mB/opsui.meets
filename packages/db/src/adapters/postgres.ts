@@ -43,6 +43,8 @@ type MutationName =
   | "directMessages.addThreadMember"
   | "directMessages.updateThread"
   | "directMessages.createMessage"
+  | "directMessages.createAttachment"
+  | "directMessages.updateAttachment"
   | "directMessages.markThreadRead"
   | "rooms.create"
   | "meetings.create"
@@ -132,6 +134,8 @@ export async function createPostgresRepositoryContext(
     "directMessages.addThreadMember": directMessages.addThreadMember.bind(directMessages),
     "directMessages.updateThread": directMessages.updateThread.bind(directMessages),
     "directMessages.createMessage": directMessages.createMessage.bind(directMessages),
+    "directMessages.createAttachment": directMessages.createAttachment.bind(directMessages),
+    "directMessages.updateAttachment": directMessages.updateAttachment.bind(directMessages),
     "directMessages.markThreadRead": directMessages.markThreadRead.bind(directMessages),
     "rooms.create": rooms.create.bind(rooms),
     "meetings.create": meetings.create.bind(meetings),
@@ -212,6 +216,22 @@ export async function createPostgresRepositoryContext(
   directMessages.createMessage = trackMutation(
     "directMessages.createMessage",
     rawMutations["directMessages.createMessage"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  directMessages.createAttachment = trackMutation(
+    "directMessages.createAttachment",
+    rawMutations["directMessages.createAttachment"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  directMessages.updateAttachment = trackMutation(
+    "directMessages.updateAttachment",
+    rawMutations["directMessages.updateAttachment"],
     mutationLog,
     () => {
       dirty = true;

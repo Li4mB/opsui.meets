@@ -15,12 +15,14 @@ import { exportAttendance } from "./routes/attendance-export";
 import { getDashboard, getAdminOverview } from "./routes/dashboard";
 import {
   createOrGetDirectMessageThread,
+  getDirectMessageAttachmentContent,
   getDirectMessageThread,
   listDirectMessageMessages,
   listDirectMessageThreads,
   markDirectMessageThreadRead,
   searchDirectMessageUsers,
   sendDirectMessage,
+  signDirectMessageAttachments,
 } from "./routes/direct-messages";
 import { listRoomEvents } from "./routes/events";
 import { getMeetingDetail } from "./routes/meeting-detail";
@@ -54,10 +56,12 @@ import { ApiError, fromApiError, internalError, notFound } from "./lib/http";
 import { getMeetingRecordingAction } from "./lib/paths";
 import { handleCorsPreflight, withCors } from "./lib/cors";
 import {
+  getDirectMessageAttachmentContentPath,
   getMeetingActionItemCompletePath,
   getMeetingActionItemsPath,
   getMeetingAttendanceExportPath,
   getMeetingChatMessagesPath,
+  getDirectMessageThreadAttachmentsSignPath,
   getDirectMessageThreadMessagesPath,
   getDirectMessageThreadPath,
   getDirectMessageThreadReadPath,
@@ -214,6 +218,12 @@ export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
           return withCors(routeResponse, request);
         }
 
+        const directMessageAttachmentContentPath = getDirectMessageAttachmentContentPath(url.pathname);
+        if (directMessageAttachmentContentPath) {
+          routeResponse = await getDirectMessageAttachmentContent(request, directMessageAttachmentContentPath.attachmentId, env);
+          return withCors(routeResponse, request);
+        }
+
         const detailPath = getMeetingDetailPath(url.pathname);
         if (detailPath) {
           routeResponse = await getMeetingDetail(detailPath.meetingInstanceId, env);
@@ -270,6 +280,12 @@ export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
       }
 
       if (request.method === "POST") {
+        const directMessageAttachmentsSignPath = getDirectMessageThreadAttachmentsSignPath(url.pathname);
+        if (directMessageAttachmentsSignPath) {
+          routeResponse = await signDirectMessageAttachments(request, directMessageAttachmentsSignPath.threadId, env);
+          return withCors(routeResponse, request);
+        }
+
         const directMessageReadPath = getDirectMessageThreadReadPath(url.pathname);
         if (directMessageReadPath) {
           routeResponse = await markDirectMessageThreadRead(request, directMessageReadPath.threadId, env);

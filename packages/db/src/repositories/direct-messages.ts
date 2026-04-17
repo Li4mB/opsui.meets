@@ -3,6 +3,7 @@ import {
   type MemoryStoreAccessor,
 } from "../store";
 import type {
+  DirectMessageAttachmentRecord,
   DirectMessageMessageRecord,
   DirectMessageThreadMemberRecord,
   DirectMessageThreadRecord,
@@ -87,6 +88,40 @@ export class DirectMessagesRepository {
 
   getMessageById(messageId: string): DirectMessageMessageRecord | null {
     return this.getStore().directMessageMessages.find((message) => message.id === messageId) ?? null;
+  }
+
+  createAttachment(attachment: DirectMessageAttachmentRecord): DirectMessageAttachmentRecord {
+    this.getStore().directMessageAttachments.unshift(attachment);
+    return attachment;
+  }
+
+  listAttachmentsByThread(threadId: string): DirectMessageAttachmentRecord[] {
+    return this.getStore().directMessageAttachments
+      .filter((attachment) => attachment.threadId === threadId)
+      .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
+  }
+
+  listAttachmentsByMessage(messageId: string): DirectMessageAttachmentRecord[] {
+    return this.getStore().directMessageAttachments
+      .filter((attachment) => attachment.messageId === messageId)
+      .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
+  }
+
+  getAttachmentById(attachmentId: string): DirectMessageAttachmentRecord | null {
+    return this.getStore().directMessageAttachments.find((attachment) => attachment.id === attachmentId) ?? null;
+  }
+
+  updateAttachment(
+    attachmentId: string,
+    patch: Partial<Pick<DirectMessageAttachmentRecord, "messageId">>,
+  ): DirectMessageAttachmentRecord | null {
+    const attachment = this.getStore().directMessageAttachments.find((entry) => entry.id === attachmentId) ?? null;
+    if (!attachment) {
+      return null;
+    }
+
+    Object.assign(attachment, patch);
+    return attachment;
   }
 
   markThreadRead(

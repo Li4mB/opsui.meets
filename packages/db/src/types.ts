@@ -102,3 +102,16 @@ export interface DirectMessageMessageRecord {
   body: string;
   sentAt: string;
 }
+
+export interface DirectMessageAttachmentRecord {
+  id: string;
+  threadId: string;
+  messageId: string | null;
+  uploaderUserId: string;
+  objectKey: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+  kind: "image" | "video" | "file";
+  createdAt: string;
+}

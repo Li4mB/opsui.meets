@@ -129,6 +129,21 @@ test("screen share control sits beside the camera control in the bottom dock", a
   await expect(page.locator(".meeting-share-picker")).toHaveCount(0);
 });
 
+test("stage surfaces keep names but drop overlay status copy", async ({ page }) => {
+  await page.goto("/__stage-lab?participants=2&share=1&shareOwner=self");
+
+  const surface = page.locator(".stage-lab__surface");
+  await expect(surface.getByText("Liam").first()).toBeVisible();
+  await expect(surface.getByText("Participant 2")).toBeVisible();
+  await expect(surface.getByText("Live preview")).toHaveCount(0);
+  await expect(surface.getByText("Mic On")).toHaveCount(0);
+  await expect(surface.getByText("Camera On")).toHaveCount(0);
+  await expect(surface.getByText("You are sharing")).toHaveCount(0);
+  await expect(surface.getByText("Quarterly planning deck")).toHaveCount(0);
+  await expect(surface.getByText("Sharing Tab")).toHaveCount(0);
+  await expect(surface.getByText("Audio Included")).toHaveCount(0);
+});
+
 test("participants drawer switches from chat and separates lobby users", async ({ browser }) => {
   const hostContext = await browser.newContext();
   const guestContext = await browser.newContext();

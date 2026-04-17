@@ -10,6 +10,7 @@ import type {
   WorkspacePolicy,
 } from "@opsui/shared-types";
 import type {
+  DirectMessageAttachmentRecord,
   ExternalAuthIdentityRecord,
   DirectMessageMessageRecord,
   DirectMessageThreadMemberRecord,
@@ -36,6 +37,7 @@ export interface MemoryStore {
   directMessageThreads: DirectMessageThreadRecord[];
   directMessageThreadMembers: DirectMessageThreadMemberRecord[];
   directMessageMessages: DirectMessageMessageRecord[];
+  directMessageAttachments: DirectMessageAttachmentRecord[];
   rooms: RoomRecord[];
   meetings: MeetingRecord[];
   templates: TemplateSummary[];
@@ -152,6 +154,7 @@ export function createSeedStore(): MemoryStore {
     directMessageThreads: [],
     directMessageThreadMembers: [],
     directMessageMessages: [],
+    directMessageAttachments: [],
     rooms: [room],
     meetings: [meeting],
     templates: [
@@ -363,6 +366,9 @@ export function hydrateMemoryStore(
   const directMessageMessages = Array.isArray(raw.directMessageMessages)
     ? raw.directMessageMessages
     : seed.directMessageMessages;
+  const directMessageAttachments = Array.isArray(raw.directMessageAttachments)
+    ? raw.directMessageAttachments
+    : seed.directMessageAttachments;
 
   const ensuredPolicies = [...workspacePolicies];
   for (const workspace of workspaces) {
@@ -380,6 +386,7 @@ export function hydrateMemoryStore(
     directMessageThreads,
     directMessageThreadMembers,
     directMessageMessages,
+    directMessageAttachments,
     rooms: Array.isArray(raw.rooms) ? raw.rooms : seed.rooms,
     meetings: Array.isArray(raw.meetings) ? raw.meetings : seed.meetings,
     templates: Array.isArray(raw.templates) ? raw.templates : seed.templates,
@@ -402,6 +409,7 @@ export function hydrateMemoryStore(
     directMessageThreads: resetApplied.directMessageThreads,
     directMessageThreadMembers: resetApplied.directMessageThreadMembers,
     directMessageMessages: resetApplied.directMessageMessages,
+    directMessageAttachments: resetApplied.directMessageAttachments,
     rooms: resetApplied.rooms,
     meetings: resetApplied.meetings,
     templates: resetApplied.templates,
@@ -446,6 +454,7 @@ function resetLegacyAccountState(input: {
   directMessageThreads: DirectMessageThreadRecord[];
   directMessageThreadMembers: DirectMessageThreadMemberRecord[];
   directMessageMessages: DirectMessageMessageRecord[];
+  directMessageAttachments: DirectMessageAttachmentRecord[];
   rooms: RoomRecord[];
   meetings: MeetingRecord[];
   templates: TemplateSummary[];
@@ -495,6 +504,7 @@ function resetLegacyAccountState(input: {
     directMessageThreads: [],
     directMessageThreadMembers: [],
     directMessageMessages: [],
+    directMessageAttachments: [],
     rooms,
     meetings,
     templates,

@@ -62,7 +62,7 @@ export default {
       });
     }
 
-    if (url.pathname === "/v1/uploads/sign") {
+    if ((request.method === "GET" || request.method === "POST") && url.pathname === "/v1/uploads/sign") {
       if (!env.MEDIA_UPLOAD_BASE_URL) {
         return Response.json(
           {
@@ -74,12 +74,24 @@ export default {
         );
       }
 
-      const uploadId = crypto.randomUUID();
-      const uploadUrl = new URL(uploadId, ensureTrailingSlash(env.MEDIA_UPLOAD_BASE_URL)).toString();
+      const payload = request.method === "POST"
+        ? await request.json().catch(() => ({})) as { objectKey?: unknown; contentType?: unknown }
+        : {};
+      const uploadId = typeof payload.objectKey === "string" && payload.objectKey.trim()
+        ? payload.objectKey.trim()
+        : crypto.randomUUID();
+      const contentType = typeof payload.contentType === "string" && payload.contentType.trim()
+        ? payload.contentType.trim().toLowerCase()
+        : "application/octet-stream";
+      const uploadUrl = new URL(encodeObjectPath(uploadId), ensureTrailingSlash(env.MEDIA_UPLOAD_BASE_URL)).toString();
       return Response.json({
         ok: true,
         uploadId,
         uploadUrl,
+        uploadMethod: "PUT",
+        uploadHeaders: {
+          "content-type": contentType,
+        },
         expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
       });
     }
@@ -90,6 +102,13 @@ export default {
 
 function ensureTrailingSlash(value: string): string {
   return value.endsWith("/") ? value : `${value}/`;
+}
+
+function encodeObjectPath(value: string): string {
+  return value
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
 }
 
 async function handleControlRequest(request: Request, env: Env, backendPath: string): Promise<Response> {

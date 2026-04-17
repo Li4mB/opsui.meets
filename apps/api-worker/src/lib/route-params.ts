@@ -245,6 +245,15 @@ export function getDirectMessageThreadMessagesPath(pathname: string): { threadId
   return { threadId: match.groups.threadId };
 }
 
+export function getDirectMessageThreadAttachmentsSignPath(pathname: string): { threadId: string } | null {
+  const match = pathname.match(/^\/v1\/direct-messages\/threads\/(?<threadId>[^/]+)\/attachments\/sign$/);
+  if (!match?.groups?.threadId) {
+    return null;
+  }
+
+  return { threadId: match.groups.threadId };
+}
+
 export function getDirectMessageThreadReadPath(pathname: string): { threadId: string } | null {
   const match = pathname.match(/^\/v1\/direct-messages\/threads\/(?<threadId>[^/]+)\/read$/);
   if (!match?.groups?.threadId) {
@@ -252,4 +261,13 @@ export function getDirectMessageThreadReadPath(pathname: string): { threadId: st
   }
 
   return { threadId: match.groups.threadId };
+}
+
+export function getDirectMessageAttachmentContentPath(pathname: string): { attachmentId: string } | null {
+  const match = pathname.match(/^\/v1\/direct-messages\/attachments\/(?<attachmentId>[^/]+)\/content$/);
+  if (!match?.groups?.attachmentId) {
+    return null;
+  }
+
+  return { attachmentId: match.groups.attachmentId };
 }

@@ -14,6 +14,7 @@ import type {
 import type { RoomEvent } from "@opsui/shared-types";
 import type { WorkspacePolicy } from "@opsui/shared-types";
 import type {
+  DirectMessageAttachmentRecord,
   DirectMessageMessageRecord,
   DirectMessageThreadMemberRecord,
   DirectMessageThreadRecord,
@@ -77,6 +78,14 @@ export interface DirectMessagesRepositoryContract {
   createMessage(message: DirectMessageMessageRecord): DirectMessageMessageRecord;
   listMessagesByThread(threadId: string): DirectMessageMessageRecord[];
   getMessageById(messageId: string): DirectMessageMessageRecord | null;
+  createAttachment(attachment: DirectMessageAttachmentRecord): DirectMessageAttachmentRecord;
+  listAttachmentsByThread(threadId: string): DirectMessageAttachmentRecord[];
+  listAttachmentsByMessage(messageId: string): DirectMessageAttachmentRecord[];
+  getAttachmentById(messageId: string): DirectMessageAttachmentRecord | null;
+  updateAttachment(
+    attachmentId: string,
+    patch: Partial<Pick<DirectMessageAttachmentRecord, "messageId">>,
+  ): DirectMessageAttachmentRecord | null;
   markThreadRead(
     threadId: string,
     userId: string,

@@ -12,7 +12,6 @@ import { createMediaSession } from "../lib/commands";
 import {
   MeetingStageScene,
   type MeetingStageParticipantTile,
-  type MeetingStageShareSourceMeta,
 } from "./MeetingStageScene";
 import { MeetingControlButton } from "./MeetingControlButton";
 import {
@@ -48,7 +47,6 @@ interface StageScreenShare {
   audioTrack?: MediaStreamTrack | null;
   displayName: string;
   isSelf?: boolean;
-  source: MeetingStageShareSourceMeta;
   videoTrack?: MediaStreamTrack | null;
 }
 
@@ -420,7 +418,6 @@ function ConnectedMediaStage(props: {
     currentMeeting.participants.active.toArray(),
   );
   const [isShareActionPending, setIsShareActionPending] = useState(false);
-  const [selfShareSource, setSelfShareSource] = useState<MeetingStageShareSourceMeta | null>(null);
   const participantDirectory = useMemo(
     () => new Map(props.activeParticipants.map((participant) => [participant.participantId, participant])),
     [props.activeParticipants],
@@ -433,7 +430,6 @@ function ConnectedMediaStage(props: {
     [],
   );
   const selfScreenShareVideoTrack = getScreenShareVideoTrack(self);
-  const selfScreenShareAudioTrack = getScreenShareAudioTrack(self);
   const shareDisabledReason = !shareSupported
     ? "This browser does not support screen sharing."
     : props.screenShareDisabledReason;
@@ -444,12 +440,10 @@ function ConnectedMediaStage(props: {
         participantDisplayName: props.participantDisplayName,
         remoteParticipants: otherRemoteParticipants,
         self,
-        selfShareSource,
       }),
-    [otherRemoteParticipants, participantDirectory, props.participantDisplayName, self, selfShareSource],
+    [otherRemoteParticipants, participantDirectory, props.participantDisplayName, self],
   );
   const primaryScreenShare = stageScreenShares[0] ?? null;
-  const additionalShareCount = Math.max(stageScreenShares.length - 1, 0);
   const liveParticipantCount = roomJoined ? 1 + otherRemoteParticipants.length : null;
   const showImmersiveSoloStage = Boolean(
     props.immersiveSoloMode &&
@@ -463,24 +457,14 @@ function ConnectedMediaStage(props: {
         audioEnabled: self.audioEnabled,
         displayName: props.participantDisplayName,
         isSelf: true,
-        shareBadgeLabel:
-          self.screenShareEnabled && selfShareSource ? getShareBadgeLabel(selfShareSource) : null,
-        subtitle: buildTileSubtitle(self.audioEnabled, self.videoEnabled, true),
         videoEnabled: self.videoEnabled,
         videoTrack: self.videoTrack,
       },
       ...otherRemoteParticipants.map((participant) => {
-        const remoteShareTrack = participant.screenShareEnabled ? getScreenShareVideoTrack(participant) : null;
-        const remoteShareSource = remoteShareTrack
-          ? describeScreenShareSource(remoteShareTrack, getScreenShareAudioTrack(participant))
-          : null;
-
         return {
           audioEnabled: participant.audioEnabled,
           audioTrack: participant.audioTrack,
           displayName: resolveParticipantName(participant, participantDirectory),
-          shareBadgeLabel: remoteShareSource ? getShareBadgeLabel(remoteShareSource) : null,
-          subtitle: buildTileSubtitle(participant.audioEnabled, participant.videoEnabled, false),
           videoEnabled: participant.videoEnabled,
           videoTrack: participant.videoTrack,
         } satisfies MeetingStageParticipantTile;
@@ -491,10 +475,8 @@ function ConnectedMediaStage(props: {
       participantDirectory,
       props.participantDisplayName,
       self.audioEnabled,
-      self.screenShareEnabled,
       self.videoEnabled,
       self.videoTrack,
-      selfShareSource,
     ],
   );
   const liveMediaStateByParticipantId = useMemo(() => {
@@ -539,25 +521,12 @@ function ConnectedMediaStage(props: {
 
   useEffect(() => {
     if (!self.screenShareEnabled || !selfScreenShareVideoTrack) {
-      setSelfShareSource(null);
-      return;
-    }
-
-    setSelfShareSource(describeScreenShareSource(
-      selfScreenShareVideoTrack,
-      selfScreenShareAudioTrack,
-    ));
-  }, [self.screenShareEnabled, selfScreenShareAudioTrack, selfScreenShareVideoTrack]);
-
-  useEffect(() => {
-    if (!self.screenShareEnabled || !selfScreenShareVideoTrack) {
       setIsShareActionPending(false);
       return;
     }
 
     const handleEnded = () => {
       setIsShareActionPending(false);
-      setSelfShareSource(null);
     };
 
     selfScreenShareVideoTrack.addEventListener("ended", handleEnded);
@@ -588,7 +557,6 @@ function ConnectedMediaStage(props: {
     } catch (error) {
       if (isScreenShareSelectionCancelled(error)) {
         setIsShareActionPending(false);
-        setSelfShareSource(null);
         return;
       }
 
@@ -606,7 +574,6 @@ function ConnectedMediaStage(props: {
 
     try {
       await self.disableScreenShare();
-      setSelfShareSource(null);
       props.onMediaActionSuccess();
     } catch (error) {
       props.onMediaActionError("screenshare", error);
@@ -650,14 +617,7 @@ function ConnectedMediaStage(props: {
         <MeetingStageScene
           immersiveSoloMode={showImmersiveSoloStage}
           participantTiles={stageParticipantTiles}
-          primaryScreenShare={
-            primaryScreenShare
-              ? {
-                  ...primaryScreenShare,
-                  extraShareCount: additionalShareCount,
-                }
-              : null
-          }
+          primaryScreenShare={primaryScreenShare}
         />
       )}
 
@@ -822,7 +782,6 @@ function StageFallback(props: {
       props.activeParticipants.map((participant) => ({
         audioEnabled: participant.audio === "unmuted",
         displayName: participant.displayName,
-        subtitle: `${participant.audio} audio / ${participant.video} video`,
         videoEnabled: participant.video === "on",
       })),
     [props.activeParticipants],
@@ -901,7 +860,6 @@ function buildStageScreenShares(input: {
   participantDisplayName: string;
   remoteParticipants: RTKParticipant[];
   self: RTKSelf;
-  selfShareSource: MeetingStageShareSourceMeta | null;
 }): StageScreenShare[] {
   const stageShares: StageScreenShare[] = [];
 
@@ -911,7 +869,6 @@ function buildStageScreenShares(input: {
       audioTrack: getScreenShareAudioTrack(input.self),
       displayName: input.participantDisplayName,
       isSelf: true,
-      source: input.selfShareSource ?? describeScreenShareSource(selfShareTrack, getScreenShareAudioTrack(input.self)),
       videoTrack: selfShareTrack,
     });
   }
@@ -925,7 +882,6 @@ function buildStageScreenShares(input: {
     stageShares.push({
       audioTrack: getScreenShareAudioTrack(participant),
       displayName: resolveParticipantName(participant, input.participantDirectory),
-      source: describeScreenShareSource(remoteShareTrack, getScreenShareAudioTrack(participant)),
       videoTrack: remoteShareTrack,
     });
   }
@@ -942,11 +898,6 @@ function resolveParticipantName(
   }
 
   return participant.name;
-}
-
-function buildTileSubtitle(audioEnabled: boolean, videoEnabled: boolean, isSelf: boolean): string {
-  const prefix = isSelf ? "Live preview" : "Live";
-  return `${prefix} / ${audioEnabled ? "mic on" : "mic off"} / ${videoEnabled ? "camera on" : "camera off"}`;
 }
 
 async function leaveMediaClient(client: MediaClient): Promise<void> {
@@ -1222,71 +1173,4 @@ function getScreenShareAudioTrack(
   participant: Pick<RTKSelf, "screenShareTracks"> | Pick<RTKParticipant, "screenShareTracks">,
 ): MediaStreamTrack | null {
   return participant.screenShareTracks?.audio ?? null;
-}
-
-function describeScreenShareSource(
-  videoTrack: MediaStreamTrack,
-  audioTrack?: MediaStreamTrack | null,
-): MeetingStageShareSourceMeta {
-  const settings = typeof videoTrack.getSettings === "function" ? videoTrack.getSettings() : {};
-  const surface = normaliseDisplaySurface(settings.displaySurface);
-  const defaultLabel = getDefaultShareLabel(surface);
-  const nextLabel = videoTrack.label?.trim() || defaultLabel;
-
-  return {
-    audioIncluded: Boolean(audioTrack),
-    displaySurface: surface,
-    label: nextLabel,
-    sourceId: videoTrack.id,
-  };
-}
-
-function normaliseDisplaySurface(
-  displaySurface: string | undefined,
-): MeetingStageShareSourceMeta["displaySurface"] {
-  if (displaySurface === "window") {
-    return "application";
-  }
-
-  if (displaySurface === "monitor") {
-    return "screen";
-  }
-
-  if (displaySurface === "browser") {
-    return "browser";
-  }
-
-  return "unknown";
-}
-
-function getDefaultShareLabel(surface: MeetingStageShareSourceMeta["displaySurface"]): string {
-  if (surface === "application") {
-    return "Application window";
-  }
-
-  if (surface === "screen") {
-    return "Entire screen";
-  }
-
-  if (surface === "browser") {
-    return "Browser tab";
-  }
-
-  return "Shared surface";
-}
-
-function getShareBadgeLabel(source: MeetingStageShareSourceMeta): string {
-  if (source.displaySurface === "application") {
-    return "Sharing Application";
-  }
-
-  if (source.displaySurface === "screen") {
-    return "Sharing Screen";
-  }
-
-  if (source.displaySurface === "browser") {
-    return "Sharing Tab";
-  }
-
-  return "Sharing";
 }
