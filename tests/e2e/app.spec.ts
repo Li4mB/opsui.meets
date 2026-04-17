@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { devices, expect, test, type Page } from "@playwright/test";
 
 const FIXTURE_RESET_URL = "http://127.0.0.1:9877/__reset";
 
@@ -407,6 +407,46 @@ test("mobile sidebar opens and closes without scrolling the page", async ({ page
   await expectNoPageScroll(page);
 });
 
+test("mobile meeting room stays contained and keeps the control dock on a single row after the real join wait", async ({ browser }) => {
+  const context = await browser.newContext({
+    ...devices["iPhone 13"],
+  });
+  const page = await context.newPage();
+
+  try {
+    await signInThroughUi(page, "liam@example.com");
+    await page.goto("/");
+    await page.getByRole("button", { name: "Start Meeting" }).click();
+
+    await waitForMeetingReady(page);
+
+    const stageSurface = page.locator(".meeting-room-stage-surface");
+    const stageRuntime = page.locator(".meeting-stage-runtime");
+    const buttons = page.locator(".meeting-control-dock .meeting-control-button");
+
+    const [surfaceBox, runtimeBox, buttonTopOffsets] = await Promise.all([
+      stageSurface.boundingBox(),
+      stageRuntime.boundingBox(),
+      buttons.evaluateAll((elements) =>
+        elements.map((element) => Math.round((element as HTMLElement).getBoundingClientRect().top)),
+      ),
+    ]);
+
+    if (!surfaceBox || !runtimeBox || buttonTopOffsets.length === 0) {
+      throw new Error("Expected mobile meeting room geometry to be measurable");
+    }
+
+    expect(runtimeBox.x).toBeGreaterThanOrEqual(surfaceBox.x - 2);
+    expect(runtimeBox.y).toBeGreaterThanOrEqual(surfaceBox.y - 2);
+    expect(runtimeBox.x + runtimeBox.width).toBeLessThanOrEqual(surfaceBox.x + surfaceBox.width + 2);
+    expect(runtimeBox.y + runtimeBox.height).toBeLessThanOrEqual(surfaceBox.y + surfaceBox.height + 2);
+    expect(Math.max(...buttonTopOffsets) - Math.min(...buttonTopOffsets)).toBeLessThanOrEqual(8);
+    await expect(page.locator(".meeting-control-dock")).toBeVisible();
+  } finally {
+    await context.close();
+  }
+});
+
 async function signInThroughUi(page: Page, email: string) {
   await page.goto("/sign-in");
   await page.getByRole("textbox", { name: "Mock auth email" }).fill(email);
@@ -435,6 +475,8 @@ async function expectRoomNotice(page: Page, text: string) {
 }
 
 async function expectSoloImmersiveStage(page: Page) {
+  await waitForMeetingReady(page);
+
   const canvas = page.locator(".meeting-stage-canvas");
   const stageSurface = page.locator(".meeting-room-stage-surface");
   const firstControlSurfaceChild = page.locator(".meeting-control-surface > *").first();
@@ -468,6 +510,13 @@ async function expectSoloImmersiveStage(page: Page) {
   expect(bottomGap).toBeLessThanOrEqual(8);
   await expect(page.getByRole("heading", { name: /Meeting OPS-/i })).toHaveCount(0);
   await expect(page.getByText("Waiting for more people")).toHaveCount(0);
+}
+
+async function waitForMeetingReady(page: Page) {
+  await expect(page.locator('[role="dialog"]')).toHaveCount(0, { timeout: 25_000 });
+  await expect(page.locator(".meeting-stage-runtime")).toBeVisible({ timeout: 25_000 });
+  await expect(page.locator(".meeting-control-dock")).toBeVisible({ timeout: 25_000 });
+  await expect(page.getByRole("button", { name: "Leave" })).toBeVisible({ timeout: 25_000 });
 }
 
 async function expectNoPageScroll(page: Page) {

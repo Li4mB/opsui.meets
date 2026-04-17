@@ -33,7 +33,11 @@ export async function createInstantMeeting(input: CreateMeetingInput): Promise<M
     if (response.ok) {
       return (await response.json()) as MeetingDetail;
     }
-  } catch {}
+
+    console.error("[opsui-meets] createInstantMeeting failed:", response.status, response.statusText);
+  } catch (error) {
+    console.error("[opsui-meets] createInstantMeeting error:", error);
+  }
 
   return null;
 }
@@ -65,7 +69,11 @@ export async function createRoom(input: {
     if (response.ok) {
       return (await response.json()) as RoomSummary;
     }
-  } catch {}
+
+    console.error("[opsui-meets] createRoom failed:", response.status, response.statusText);
+  } catch (error) {
+    console.error("[opsui-meets] createRoom error:", error);
+  }
 
   return null;
 }
@@ -97,7 +105,11 @@ export async function joinMeeting(
     if (response.ok) {
       return (await response.json()) as JoinMeetingResult;
     }
-  } catch {}
+
+    console.error("[opsui-meets] joinMeeting failed:", response.status, response.statusText);
+  } catch (error) {
+    console.error("[opsui-meets] joinMeeting error:", error);
+  }
 
   return null;
 }

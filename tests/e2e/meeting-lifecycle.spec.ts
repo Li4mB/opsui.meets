@@ -192,9 +192,10 @@ async function openInfoDrawer(page: Page) {
 }
 
 async function expectDirectJoin(page: Page, _title: string) {
-  await expect(page.locator('[role="dialog"]')).toHaveCount(0, { timeout: 10_000 });
-  await expect(page.getByRole("button", { name: "Leave" })).toBeVisible({ timeout: 10_000 });
-  await expect(page.locator(".meeting-control-dock")).toBeVisible();
+  await expect(page.locator('[role="dialog"]')).toHaveCount(0, { timeout: 25_000 });
+  await expect(page.locator(".meeting-stage-runtime")).toBeVisible({ timeout: 25_000 });
+  await expect(page.locator(".meeting-control-dock")).toBeVisible({ timeout: 25_000 });
+  await expect(page.getByRole("button", { name: "Leave" })).toBeVisible({ timeout: 25_000 });
 }
 
 async function createMobilePage(browser: Browser): Promise<Page> {

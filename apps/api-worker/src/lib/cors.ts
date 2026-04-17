@@ -15,6 +15,7 @@ const ALLOWED_HEADERS = [
   "content-type",
   "idempotency-key",
   "sentry-trace",
+  "x-session-type",
   "x-workspace-id",
   "x-user-id",
   "x-user-email",

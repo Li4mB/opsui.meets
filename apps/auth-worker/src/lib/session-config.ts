@@ -11,8 +11,13 @@ export function buildSessionCookie(value: string, env: Env): string {
     `Domain=${env.COOKIE_DOMAIN}`,
     "Path=/",
     "HttpOnly",
-    "Secure",
+    ...(shouldUseSecureCookies(env) ? ["Secure"] : []),
     "SameSite=Lax",
     "Max-Age=86400",
   ].join("; ");
+}
+
+export function shouldUseSecureCookies(env: Env): boolean {
+  const cookieDomain = env.COOKIE_DOMAIN.replace(/^\.+/, "").trim().toLowerCase();
+  return cookieDomain !== "localhost" && cookieDomain !== "127.0.0.1";
 }

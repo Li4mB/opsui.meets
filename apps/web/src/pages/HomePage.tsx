@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { Modal } from "../components/Modal";
 import { createInstantMeeting, createRoom } from "../lib/commands";
 import { formatMeetingCodeLabel, generateMeetingCode, normalizeMeetingCode } from "../lib/meeting-code";
 
@@ -8,7 +7,6 @@ interface HomePageProps {
 }
 
 export function HomePage(props: HomePageProps) {
-  const [joinPromptOpen, setJoinPromptOpen] = useState(false);
   const [joinInput, setJoinInput] = useState("");
   const [joinError, setJoinError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -67,82 +65,95 @@ export function HomePage(props: HomePageProps) {
     }
 
     setJoinError(null);
-    setJoinPromptOpen(false);
     props.onNavigate(`/${nextCode}`);
   }
 
   return (
-    <>
-      <section className="page page--centered">
-        <div className="hero-card hero-card--compact">
-          <div className="eyebrow">Opsuimeets</div>
-          <h1 className="hero-title">Meetings without the clutter.</h1>
-          <p className="hero-copy">
-            Start a room instantly or join with a code or link. Everything else stays out of the way.
-          </p>
-          <div className="hero-actions">
-            <button
-              className="button button--secondary"
-              onClick={() => {
-                setJoinPromptOpen(true);
-              }}
-              type="button"
-            >
-              Join Meeting
-            </button>
-            <button
-              className="button button--primary"
-              disabled={isBusy}
-              onClick={() => {
-                void handleStartMeeting();
-              }}
-              type="button"
-            >
-              {isBusy ? "Starting..." : "Start Meeting"}
-            </button>
-          </div>
-          {statusMessage ? <p className="inline-feedback">{statusMessage}</p> : null}
-        </div>
-      </section>
+    <section className="home-page">
+      {/* Hero Content */}
+      <div className="home-hero">
+        {/* Headline */}
+        <h1 className="home-hero__title">
+          <span>Meetings without</span>
+          <br />
+          <span className="home-hero__title--subtle">the clutter.</span>
+        </h1>
 
-      <Modal
-        actions={
+        {/* Subheading */}
+        <p className="home-hero__copy">
+          Start a room instantly or join with a code.
+          <br />
+          Everything else stays out of the way.
+        </p>
+
+        {/* Action area */}
+        <div className="home-hero__actions">
+          {/* Start Meeting Button with Scribble */}
           <button
-            className="button button--primary"
-            onClick={handleJoin}
+            className="home-button home-button--start"
+            disabled={isBusy}
+            onClick={() => {
+              void handleStartMeeting();
+            }}
             type="button"
           >
-            Join Meeting
+            <img
+              src="/Create-Meet-Scribble.png"
+              alt=""
+              className="home-button__scribble"
+              draggable={false}
+            />
+            <span>{isBusy ? "Starting..." : "Start Meeting"}</span>
           </button>
-        }
-        description="Paste an invite link or enter the room code to open the meeting."
-        onClose={() => {
-          setJoinPromptOpen(false);
-          setJoinError(null);
-        }}
-        open={joinPromptOpen}
-        title="Join Meeting"
-      >
-        <label className="field">
-          <span className="field__label">Meeting code or link</span>
-          <input
-            autoFocus
-            className="field__input"
-            onChange={(event) => {
-              setJoinInput(event.target.value);
-              setJoinError(null);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                handleJoin();
-              }
-            }}
-            placeholder="ops-a1b2c3d4 or https://opsuimeets.com/ops-a1b2c3d4"
-            value={joinInput}
-          />
-        </label>
-        {joinError ? <p className="inline-feedback inline-feedback--error">{joinError}</p> : null}
-      </Modal>
-    </>
+
+          {/* Divider line */}
+          <div className="home-hero__divider" />
+
+          {/* Join Meeting - Inline Text Input */}
+          <div className="home-hero__join">
+            <div className="home-hero__join-input-wrap">
+              <input
+                className="home-input"
+                onChange={(event) => {
+                  setJoinInput(event.target.value);
+                  setJoinError(null);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    handleJoin();
+                  }
+                }}
+                placeholder="Enter meeting code"
+                type="text"
+                value={joinInput}
+              />
+            </div>
+            <button
+              className="home-button home-button--join"
+              onClick={handleJoin}
+              type="button"
+            >
+              Join
+            </button>
+          </div>
+        </div>
+
+        {/* Error / status messages */}
+        {joinError ? <p className="home-feedback home-feedback--error">{joinError}</p> : null}
+        {statusMessage ? <p className="home-feedback">{statusMessage}</p> : null}
+
+        {/* Subtle decorative elements */}
+        <div className="home-hero__decoration">
+          <div className="home-hero__decoration-line home-hero__decoration-line--left" />
+          <div className="home-hero__decoration-dot" />
+          <div className="home-hero__decoration-line home-hero__decoration-line--right" />
+        </div>
+      </div>
+
+      {/* Footer hint */}
+      <footer className="home-footer">
+        <p className="home-footer__text">No account needed · Just start</p>
+      </footer>
+    </section>
   );
 }

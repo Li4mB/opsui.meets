@@ -40,6 +40,11 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
   const [searchResults, setSearchResults] = useState<DirectMessageSearchResult[]>([]);
   const [isLoadingThread, setIsLoadingThread] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [hasLoadedThread, setHasLoadedThread] = useState(false);
+
+  useEffect(() => {
+    setHasLoadedThread(false);
+  }, [props.selectedThreadId]);
 
   useEffect(() => {
     if (!authenticated) {
@@ -47,11 +52,13 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
       setSelectedThread(null);
       setMessages([]);
       setPendingMessages([]);
+      setHasLoadedThread(false);
       props.onUnreadCountChange(0);
       return;
     }
 
     let cancelled = false;
+    let isInitialLoad = !hasLoadedThread;
 
     async function refreshAll() {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") {
@@ -70,10 +77,16 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
         setSelectedThread(null);
         setMessages([]);
         setPendingMessages([]);
+        setHasLoadedThread(false);
+        isInitialLoad = true;
         return;
       }
 
-      setIsLoadingThread(true);
+      const isFirstLoad = isInitialLoad;
+      if (isFirstLoad) {
+        setIsLoadingThread(true);
+      }
+
       const [nextThread, nextMessages] = await Promise.all([
         getDirectMessageThread(props.selectedThreadId),
         listDirectMessageMessages(props.selectedThreadId),
@@ -84,8 +97,12 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
 
       setSelectedThread(nextThread);
       setMessages(nextMessages);
-      setPendingMessages([]);
-      setIsLoadingThread(false);
+      if (isFirstLoad) {
+        setPendingMessages([]);
+        setIsLoadingThread(false);
+        setHasLoadedThread(true);
+        isInitialLoad = false;
+      }
       if (!nextThread) {
         setFeedback("That conversation could not be found.");
       }

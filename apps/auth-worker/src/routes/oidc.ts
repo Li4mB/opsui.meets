@@ -21,6 +21,7 @@ import {
   verifyOidcStateValue,
 } from "../lib/session-cookie";
 import { buildSessionCookie, getSessionSigningSecret } from "../lib/session-config";
+import { shouldUseSecureCookies } from "../lib/session-config";
 import type { Env } from "../types";
 
 export async function startOidcLogin(request: Request, env: Env): Promise<Response> {
@@ -692,12 +693,13 @@ function appendExpiredCookie(headers: Headers, name: string, cookieDomain: strin
 }
 
 function buildCookie(name: string, value: string, cookieDomain: string, maxAgeSeconds: number): string {
+  const secure = shouldUseSecureCookies({ COOKIE_DOMAIN: cookieDomain } as Env);
   return [
     `${name}=${value}`,
     `Domain=${cookieDomain}`,
     "Path=/",
     "HttpOnly",
-    "Secure",
+    ...(secure ? ["Secure"] : []),
     "SameSite=Lax",
     `Max-Age=${maxAgeSeconds}`,
     ...(maxAgeSeconds === 0 ? ["Expires=Thu, 01 Jan 1970 00:00:00 GMT"] : []),

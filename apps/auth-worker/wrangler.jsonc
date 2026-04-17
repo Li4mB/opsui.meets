@@ -3,6 +3,7 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-03-26",
   "compatibility_flags": ["nodejs_compat"],
+  "account_id": "bf60b83fe906594baefcb80399996adf",
   "workers_dev": false,
   "routes": [
     {

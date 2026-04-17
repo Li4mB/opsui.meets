@@ -28,11 +28,16 @@ export async function loadMeetingRoomData(meetingCode: string): Promise<MeetingR
     }
 
     if (!response.ok) {
+      console.error("[opsui-meets] loadMeetingRoomData failed:", response.status, response.statusText, "for code:", meetingCode);
       throw new Error("meeting_room_unavailable");
     }
 
     return (await response.json()) as MeetingRoomData;
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === "meeting_room_unavailable") {
+      throw error;
+    }
+    console.error("[opsui-meets] loadMeetingRoomData error:", error, "for code:", meetingCode);
     throw new Error("meeting_room_unavailable");
   }
 }

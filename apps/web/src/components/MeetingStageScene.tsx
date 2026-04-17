@@ -40,6 +40,7 @@ type StageLayoutMode = "grid" | "share-bottom" | "share-side";
 
 interface StageLayout {
   columns: number;
+  gap: number;
   gridHeight: number;
   gridWidth: number;
   mode: StageLayoutMode;
@@ -53,9 +54,7 @@ interface StageLayout {
 
 const DEFAULT_STAGE_WIDTH = 1200;
 const DEFAULT_STAGE_HEIGHT = 720;
-const STAGE_GAP = 16;
 const PARTICIPANT_TILE_ASPECT_RATIO = 16 / 9;
-const SIDE_SHARE_MIN_WIDTH = 540;
 const SOLO_STAGE_EDGE_BUFFER = 5;
 
 export function MeetingStageScene(props: MeetingStageSceneProps) {
@@ -344,10 +343,12 @@ function computeStageLayout(input: {
   const participantCount = Math.max(0, input.participantCount);
   const width = Math.max(320, input.width);
   const height = Math.max(220, input.height);
+  const gap = getStageGap(width);
 
   if (!participantCount) {
     return {
       columns: 1,
+      gap,
       gridHeight: 0,
       gridWidth: 0,
       mode: input.hasShare ? "share-bottom" : "grid",
@@ -362,6 +363,7 @@ function computeStageLayout(input: {
 
   if (!input.hasShare) {
     return getGridLayout({
+      gap,
       height,
       participantCount,
       width,
@@ -369,6 +371,7 @@ function computeStageLayout(input: {
   }
 
   return getShareLayout({
+    gap,
     height,
     participantCount,
     width,
@@ -376,6 +379,7 @@ function computeStageLayout(input: {
 }
 
 function getGridLayout(input: {
+  gap: number;
   height: number;
   participantCount: number;
   width: number;
@@ -393,6 +397,7 @@ function getGridLayout(input: {
   for (let columns = 1; columns <= maxColumns; columns += 1) {
     const rowCounts = buildBalancedRowCounts(input.participantCount, columns);
     const candidate = evaluateGridCandidate({
+      gap: input.gap,
       height: input.height,
       maxTileWidth: getGridTileWidthCap(input.participantCount, input.width, input.height),
       rowCounts,
@@ -431,6 +436,7 @@ function getGridLayout(input: {
 
   return {
     columns: bestLayout?.columns ?? 1,
+    gap: input.gap,
     gridHeight: bestLayout?.gridHeight ?? 0,
     gridWidth: bestLayout?.gridWidth ?? 0,
     mode: "grid",
@@ -444,174 +450,123 @@ function getGridLayout(input: {
 }
 
 function getShareLayout(input: {
+  gap: number;
   height: number;
   participantCount: number;
   width: number;
 }): StageLayout {
-  const sideCandidate = getShareSideLayout(input);
-  const bottomCandidate = getShareBottomLayout(input);
-
-  if (!sideCandidate) {
-    return bottomCandidate.layout;
-  }
-
-  if (!bottomCandidate) {
-    return sideCandidate.layout;
-  }
-
-  return sideCandidate.score >= bottomCandidate.score ? sideCandidate.layout : bottomCandidate.layout;
-}
-
-function getShareSideLayout(input: {
-  height: number;
-  participantCount: number;
-  width: number;
-}): { layout: StageLayout; score: number } | null {
-  if (input.width < 960 || input.height < 420) {
-    return null;
-  }
-
-  const railSlots = Math.max(
-    1,
-    Math.min(4, Math.floor((input.height + STAGE_GAP) / (108 + STAGE_GAP))),
-  );
-  const visibleParticipantCount =
-    input.participantCount > railSlots ? Math.max(1, railSlots - 1) : input.participantCount;
-  const overflowCount =
-    input.participantCount > railSlots ? input.participantCount - visibleParticipantCount : 0;
-  const displayedCells = visibleParticipantCount + (overflowCount > 0 ? 1 : 0);
-  const rowCounts = Array.from({ length: displayedCells }, () => 1);
-  const availableTileHeight = (input.height - STAGE_GAP * Math.max(0, displayedCells - 1)) / displayedCells;
-  const tileHeight = clampValue(
-    availableTileHeight,
-    92,
-    input.participantCount <= 2 ? 176 : 142,
-  );
-  const railWidth = Math.min(
-    tileHeight * PARTICIPANT_TILE_ASPECT_RATIO,
-    clampValue(input.width * 0.24, 188, 252),
-  );
-  const shareWidth = input.width - railWidth - STAGE_GAP;
-  if (shareWidth < SIDE_SHARE_MIN_WIDTH) {
-    return null;
-  }
-
-  const shareArea = shareWidth * input.height;
-  const supportingArea = tileHeight * railWidth * displayedCells;
-  const shareRatioPenalty = Math.max(0, 1.08 - shareWidth / input.height) * 52_000;
-
-  return {
-    layout: {
-      columns: 1,
-      gridHeight: tileHeight * displayedCells + STAGE_GAP * Math.max(0, displayedCells - 1),
-      gridWidth: railWidth,
-      mode: "share-side",
-      overflowCount,
-      railSize: railWidth,
-      rowCounts,
-      tileAspectRatio: PARTICIPANT_TILE_ASPECT_RATIO,
-      tileWidth: railWidth,
-      visibleParticipantCount,
-    },
-    score: shareArea + supportingArea * 0.34 - overflowCount * 2_200 - shareRatioPenalty,
-  };
+  return getShareBottomLayout(input).layout;
 }
 
 function getShareBottomLayout(input: {
+  gap: number;
   height: number;
   participantCount: number;
   width: number;
 }): { layout: StageLayout; score: number } {
-  const maxColumns = Math.min(
-    input.participantCount,
-    input.width >= 1260 ? 4 : input.width >= 920 ? 3 : 2,
+  const maxColumns = getShareColumnLimit(input.participantCount, input.width);
+  const minimumShareHeight = getMinimumShareHeight(input.width, input.height);
+  const maxRailHeight = Math.max(
+    116,
+    input.height - minimumShareHeight - input.gap,
   );
-  const maxRailHeight = clampValue(input.height * 0.32, 136, 248);
   let bestLayout:
     | {
         columns: number;
         gridHeight: number;
         gridWidth: number;
-        overflowCount: number;
         rowCounts: number[];
         score: number;
         tileWidth: number;
-        visibleCount: number;
+        shareHeight: number;
+      }
+    | null = null;
+  let fallbackLayout:
+    | {
+        columns: number;
+        gridHeight: number;
+        gridWidth: number;
+        rowCounts: number[];
+        score: number;
+        tileWidth: number;
+        shareHeight: number;
       }
     | null = null;
 
   for (let columns = 1; columns <= maxColumns; columns += 1) {
-    for (let rows = 1; rows <= 2; rows += 1) {
-      const capacity = columns * rows;
-      if (capacity <= 1 && input.participantCount > 1) {
-        continue;
-      }
+    const rowCounts = buildBalancedRowCounts(input.participantCount, columns);
+    const candidate = evaluateGridCandidate({
+      gap: input.gap,
+      height: maxRailHeight,
+      maxTileWidth: Math.min(
+        getSupportingTileWidthCap(input.participantCount, input.width),
+        (input.width - input.gap * (columns - 1)) / columns,
+      ),
+      rowCounts,
+      width: input.width,
+    });
 
-      const hasOverflow = input.participantCount > capacity;
-      const visibleParticipantCount = hasOverflow ? Math.max(1, capacity - 1) : input.participantCount;
-      const overflowCount = hasOverflow ? input.participantCount - visibleParticipantCount : 0;
-      const occupiedCells = visibleParticipantCount + (overflowCount > 0 ? 1 : 0);
-      const rowCounts = buildBalancedRowCounts(occupiedCells, columns);
-      const candidate = evaluateGridCandidate({
-        height: maxRailHeight,
-        maxTileWidth: Math.min(
-          getSupportingTileWidthCap(occupiedCells, input.width),
-          (input.width - STAGE_GAP * (columns - 1)) / columns,
-        ),
-        rowCounts,
-        width: input.width,
-      });
+    if (!candidate) {
+      continue;
+    }
 
-      if (!candidate) {
-        continue;
-      }
+    const railHeight = candidate.gridHeight;
+    const shareHeight = input.height - railHeight - input.gap;
 
-      const railHeight = candidate.gridHeight;
-      const shareHeight = input.height - railHeight - STAGE_GAP;
+    if (shareHeight < 160) {
+      continue;
+    }
 
-      if (railHeight > maxRailHeight || shareHeight < 260) {
-        continue;
-      }
+    const rows = rowCounts.length;
+    const maxRowItems = Math.max(...rowCounts);
+    const emptySlots = maxRowItems * rows - input.participantCount;
+    const rowPenalty = Math.max(0, rows - 1) * 1_850;
+    const emptySlotPenalty = emptySlots * 760;
+    const tinyTilePenalty = Math.max(0, 84 - candidate.tileHeight) * 2_400;
+    const score =
+      input.width * shareHeight +
+      candidate.tileWidth * candidate.tileHeight * input.participantCount * 0.38 -
+      rowPenalty -
+      emptySlotPenalty -
+      tinyTilePenalty;
+    const nextLayout = {
+      columns,
+      gridHeight: candidate.gridHeight,
+      gridWidth: candidate.gridWidth,
+      rowCounts,
+      score,
+      tileWidth: candidate.tileWidth,
+      shareHeight,
+    };
 
-      const shareArea = input.width * shareHeight;
-      const sparsePenalty = (capacity - occupiedCells) * 640;
-      const rowPenalty = Math.max(0, rowCounts.length - 1) * 2_400;
-      const score =
-        shareArea +
-        candidate.tileWidth * candidate.tileHeight * 0.42 -
-        sparsePenalty -
-        rowPenalty -
-        overflowCount * 980;
+    if (!fallbackLayout || score > fallbackLayout.score) {
+      fallbackLayout = nextLayout;
+    }
 
-      if (!bestLayout || score > bestLayout.score) {
-        bestLayout = {
-          columns,
-          gridHeight: candidate.gridHeight,
-          gridWidth: candidate.gridWidth,
-          overflowCount,
-          rowCounts,
-          score,
-          tileWidth: candidate.tileWidth,
-          visibleCount: visibleParticipantCount,
-        };
-      }
+    if (shareHeight < minimumShareHeight) {
+      continue;
+    }
+
+    if (!bestLayout || score > bestLayout.score) {
+      bestLayout = nextLayout;
     }
   }
 
-  if (!bestLayout) {
-    const overflowCount = Math.max(0, input.participantCount - 1);
+  const chosenLayout = bestLayout ?? fallbackLayout;
+  if (!chosenLayout) {
     return {
       layout: {
         columns: 1,
+        gap: input.gap,
         gridHeight: Math.min(maxRailHeight, 180),
         gridWidth: Math.min(input.width, 320),
         mode: "share-bottom",
-        overflowCount,
+        overflowCount: 0,
         railSize: null,
         rowCounts: [1],
         tileAspectRatio: PARTICIPANT_TILE_ASPECT_RATIO,
         tileWidth: Math.min(input.width, 320),
-        visibleParticipantCount: overflowCount > 0 ? 1 : input.participantCount,
+        visibleParticipantCount: input.participantCount,
       },
       score: 0,
     };
@@ -619,24 +574,25 @@ function getShareBottomLayout(input: {
 
   return {
     layout: {
-      columns: bestLayout.columns,
-      gridHeight: bestLayout.gridHeight,
-      gridWidth: bestLayout.gridWidth,
+      columns: chosenLayout.columns,
+      gap: input.gap,
+      gridHeight: chosenLayout.gridHeight,
+      gridWidth: chosenLayout.gridWidth,
       mode: "share-bottom",
-      overflowCount: bestLayout.overflowCount,
+      overflowCount: 0,
       railSize: null,
-      rowCounts: bestLayout.rowCounts,
+      rowCounts: chosenLayout.rowCounts,
       tileAspectRatio: PARTICIPANT_TILE_ASPECT_RATIO,
-      tileWidth: bestLayout.tileWidth,
-      visibleParticipantCount: bestLayout.visibleCount,
+      tileWidth: chosenLayout.tileWidth,
+      visibleParticipantCount: input.participantCount,
     },
-    score: bestLayout.score,
+    score: chosenLayout.score,
   };
 }
 
 function buildCanvasStyle(layout: StageLayout): CSSProperties {
   const style: Record<string, string> = {
-    "--stage-gap": `${STAGE_GAP}px`,
+    "--stage-gap": `${layout.gap}px`,
     "--stage-grid-max-height": `${Math.round(layout.gridHeight)}px`,
     "--stage-grid-max-width": `${Math.round(layout.gridWidth)}px`,
     "--stage-tile-aspect-ratio": String(layout.tileAspectRatio),
@@ -659,6 +615,7 @@ function buildTilesStyle(layout: StageLayout): CSSProperties {
 }
 
 function evaluateGridCandidate(input: {
+  gap: number;
   height: number;
   maxTileWidth: number;
   rowCounts: number[];
@@ -670,8 +627,8 @@ function evaluateGridCandidate(input: {
 
   const maxRowItems = Math.max(...input.rowCounts);
   const rows = input.rowCounts.length;
-  const availableTileWidth = (input.width - STAGE_GAP * Math.max(0, maxRowItems - 1)) / maxRowItems;
-  const availableTileHeight = (input.height - STAGE_GAP * Math.max(0, rows - 1)) / rows;
+  const availableTileWidth = (input.width - input.gap * Math.max(0, maxRowItems - 1)) / maxRowItems;
+  const availableTileHeight = (input.height - input.gap * Math.max(0, rows - 1)) / rows;
   const tileWidth = Math.min(
     availableTileWidth,
     availableTileHeight * PARTICIPANT_TILE_ASPECT_RATIO,
@@ -684,11 +641,23 @@ function evaluateGridCandidate(input: {
 
   const tileHeight = tileWidth / PARTICIPANT_TILE_ASPECT_RATIO;
   return {
-    gridHeight: tileHeight * rows + STAGE_GAP * Math.max(0, rows - 1),
-    gridWidth: tileWidth * maxRowItems + STAGE_GAP * Math.max(0, maxRowItems - 1),
+    gridHeight: tileHeight * rows + input.gap * Math.max(0, rows - 1),
+    gridWidth: tileWidth * maxRowItems + input.gap * Math.max(0, maxRowItems - 1),
     tileHeight,
     tileWidth,
   };
+}
+
+function getStageGap(width: number) {
+  if (width <= 640) {
+    return 8;
+  }
+
+  if (width <= 960) {
+    return 12;
+  }
+
+  return 16;
 }
 
 function getGridColumnLimit(participantCount: number, width: number) {
@@ -723,14 +692,35 @@ function getGridTileWidthCap(participantCount: number, width: number, height: nu
 
 function getSupportingTileWidthCap(displayedCells: number, width: number) {
   if (displayedCells <= 2) {
-    return Math.min(252, width * 0.24);
+    return Math.min(264, width * 0.3);
   }
 
   if (displayedCells <= 4) {
-    return Math.min(220, width * 0.2);
+    return Math.min(220, width * 0.22);
   }
 
-  return Math.min(196, width * 0.18);
+  if (displayedCells <= 8) {
+    return Math.min(188, width * 0.19);
+  }
+
+  return Math.min(172, width * 0.16);
+}
+
+function getShareColumnLimit(participantCount: number, width: number) {
+  const widthLimit = width >= 1440 ? 5 : width >= 1120 ? 4 : width >= 760 ? 3 : 2;
+  return Math.min(participantCount, widthLimit);
+}
+
+function getMinimumShareHeight(width: number, height: number) {
+  if (width <= 480) {
+    return clampValue(height * 0.42, 180, 320);
+  }
+
+  if (width <= 820) {
+    return clampValue(height * 0.46, 220, 360);
+  }
+
+  return clampValue(height * 0.52, 280, 480);
 }
 
 function buildBalancedRowCounts(itemCount: number, columns: number) {

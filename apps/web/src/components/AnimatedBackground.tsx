@@ -1,0 +1,181 @@
+import { useEffect, useRef } from "react";
+
+/**
+ * Animated canvas background with sweeping curved white lines and subtle radial glows.
+ * Extracted from the OpsUI Meets front-page design for reuse across pages.
+ */
+export function AnimatedBackground() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    let animationId: number;
+    let time = 0;
+
+    const resize = () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    };
+
+    resize();
+    window.addEventListener("resize", resize);
+
+    interface Line {
+      yBase: number;
+      amplitude: number;
+      frequency: number;
+      phase: number;
+      speed: number;
+      opacity: number;
+      width: number;
+    }
+
+    const lines: Line[] = [];
+
+    // Generate sweeping curved lines inspired by the banner
+    for (let i = 0; i < 26; i++) {
+      lines.push({
+        yBase: (i / 26) * 1.3 - 0.15,
+        amplitude: 0.025 + Math.random() * 0.09,
+        frequency: 0.6 + Math.random() * 1.8,
+        phase: Math.random() * Math.PI * 2,
+        speed: 0.1 + Math.random() * 0.35,
+        opacity: 0.03 + Math.random() * 0.09,
+        width: 0.3 + Math.random() * 1.5,
+      });
+    }
+
+    // A few brighter accent lines
+    for (let i = 0; i < 4; i++) {
+      lines.push({
+        yBase: 0.2 + Math.random() * 0.6,
+        amplitude: 0.04 + Math.random() * 0.06,
+        frequency: 0.5 + Math.random() * 1.2,
+        phase: Math.random() * Math.PI * 2,
+        speed: 0.2 + Math.random() * 0.2,
+        opacity: 0.12 + Math.random() * 0.06,
+        width: 0.4 + Math.random() * 0.6,
+      });
+    }
+
+    const draw = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      time += 0.003;
+
+      for (const line of lines) {
+        ctx.beginPath();
+        ctx.lineWidth = line.width;
+        ctx.lineCap = "round";
+
+        const yBase = line.yBase * canvas.height;
+
+        for (let x = 0; x <= canvas.width; x += 3) {
+          const xNorm = x / canvas.width;
+          const wave1 =
+            Math.sin(xNorm * line.frequency * Math.PI + time * line.speed + line.phase) * line.amplitude;
+          const wave2 =
+            Math.sin(
+              xNorm * line.frequency * 0.5 * Math.PI + time * line.speed * 0.7 + line.phase + 1,
+            ) *
+            line.amplitude *
+            0.5;
+          const y = yBase + (wave1 + wave2) * canvas.height;
+
+          if (x === 0) {
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
+        }
+
+        // Apply edge fade via gradient
+        const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0);
+        gradient.addColorStop(0, `rgba(255, 255, 255, 0)`);
+        gradient.addColorStop(0.1, `rgba(255, 255, 255, ${line.opacity})`);
+        gradient.addColorStop(0.5, `rgba(255, 255, 255, ${line.opacity * 1.2})`);
+        gradient.addColorStop(0.9, `rgba(255, 255, 255, ${line.opacity})`);
+        gradient.addColorStop(1, `rgba(255, 255, 255, 0)`);
+        ctx.strokeStyle = gradient;
+
+        ctx.stroke();
+      }
+
+      animationId = requestAnimationFrame(draw);
+    };
+
+    draw();
+
+    return () => {
+      cancelAnimationFrame(animationId);
+      window.removeEventListener("resize", resize);
+    };
+  }, []);
+
+  return (
+    <>
+      <canvas
+        ref={canvasRef}
+        style={{
+          position: "fixed",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          pointerEvents: "none",
+          zIndex: 0,
+        }}
+      />
+      {/* Subtle radial glows */}
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          pointerEvents: "none",
+          zIndex: 1,
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            transform: "translate(-50%, -50%)",
+            width: 900,
+            height: 500,
+            background: "rgba(255, 255, 255, 0.015)",
+            borderRadius: "50%",
+            filter: "blur(150px)",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            top: "30%",
+            left: "20%",
+            width: 500,
+            height: 500,
+            background: "rgba(255, 255, 255, 0.008)",
+            borderRadius: "50%",
+            filter: "blur(120px)",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            bottom: "20%",
+            right: "15%",
+            width: 400,
+            height: 400,
+            background: "rgba(255, 255, 255, 0.01)",
+            borderRadius: "50%",
+            filter: "blur(100px)",
+          }}
+        />
+      </div>
+    </>
+  );
+}

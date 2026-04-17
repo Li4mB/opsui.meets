@@ -106,21 +106,25 @@ test("three participants center the last row instead of stretching a wide third 
   await expectTilesContained(canvas, page.locator('[data-stage-role="participant"]'));
 });
 
-test("active share takes priority with a side rail on wide desktop layouts", async ({ page }) => {
+test("active share keeps the shared content primary while all participant cameras stay below it on wide desktop layouts", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/__stage-lab?participants=4&share=1&shareOwner=remote");
 
   const canvas = page.locator(".meeting-stage-canvas");
-  await expect(canvas).toHaveAttribute("data-stage-layout", "share-side");
+  await expect(canvas).toHaveAttribute("data-stage-layout", "share-bottom");
   await expect(page.locator('[data-stage-role="share"]')).toBeVisible();
+  await expect(page.locator('[data-stage-role="participant"]')).toHaveCount(4);
 
-  const [shareBox, tileBox] = await Promise.all([
+  const [shareBox, tilesBox, firstTileBox] = await Promise.all([
     getBox(page.locator('[data-stage-role="share"]')),
+    getBox(page.locator(".stage-tiles")),
     getBox(page.locator('[data-stage-role="participant"]').first()),
   ]);
 
-  expect(shareBox.x).toBeLessThan(tileBox.x);
-  expect(shareBox.width * shareBox.height).toBeGreaterThan(tileBox.width * tileBox.height * 3);
+  expect(shareBox.y).toBeLessThan(tilesBox.y);
+  expect(shareBox.width).toBeGreaterThan(tilesBox.width * 0.95);
+  expect(shareBox.height).toBeGreaterThan(tilesBox.height * 1.8);
+  expect(firstTileBox.y).toBeGreaterThan(shareBox.y + shareBox.height - GEOMETRY_TOLERANCE_PX);
   await expectTilesContained(canvas, page.locator('[data-stage-role="participant"], [data-stage-role="share"]'));
 });
 
@@ -139,16 +143,16 @@ test("active share falls back to a bottom rail on narrower widths", async ({ pag
   expect(shareBox.y).toBeLessThan(tilesBox.y);
   expect(shareBox.width).toBeGreaterThan(tilesBox.width * 0.9);
   expect(shareBox.height).toBeGreaterThan(220);
-  expect(shareBox.height).toBeGreaterThan(tilesBox.height * 2.3);
+  expect(shareBox.height).toBeGreaterThan(tilesBox.height * 1.6);
   await expectTilesContained(canvas, page.locator('[data-stage-role="participant"], [data-stage-role="share"]'));
 });
 
-test("share layout stays stable while participant count changes and tiles scale down", async ({ page }) => {
+test("share layout stays stable while participant count changes and all participant cameras remain rendered below the share", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/__stage-lab?participants=2&share=1&shareOwner=remote");
 
   const canvas = page.locator(".meeting-stage-canvas");
-  await expect(canvas).toHaveAttribute("data-stage-layout", "share-side");
+  await expect(canvas).toHaveAttribute("data-stage-layout", "share-bottom");
 
   const firstTile = page.locator('[data-stage-role="participant"]').first();
   const beforeBox = await getBox(firstTile);
@@ -157,15 +161,38 @@ test("share layout stays stable while participant count changes and tiles scale 
   await page.getByRole("button", { name: "Add participant" }).click();
 
   await expect(page.getByRole("status")).toContainText("4 participants");
-  await expect(canvas).toHaveAttribute("data-stage-layout", "share-side");
+  await expect(canvas).toHaveAttribute("data-stage-layout", "share-bottom");
+  await expect(page.locator('[data-stage-role="participant"]')).toHaveCount(4);
 
   const afterBox = await getBox(firstTile);
   expect(afterBox.width).toBeLessThan(beforeBox.width);
   expect(afterBox.width * afterBox.height).toBeLessThan(beforeBox.width * beforeBox.height);
-  await expectTilesContained(canvas, page.locator('[data-stage-role="participant"], [data-stage-role="overflow"]'));
+  await expectTilesContained(canvas, page.locator('[data-stage-role="participant"], [data-stage-role="share"]'));
 
   await page.getByRole("button", { name: "Stop share" }).click();
   await expect(canvas).toHaveAttribute("data-stage-layout", "grid");
+});
+
+test("mobile share layout keeps the shared content on top with all participant cameras contained below", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/__stage-lab?participants=6&share=1&shareOwner=remote");
+
+  const canvas = page.locator(".meeting-stage-canvas");
+  await expect(canvas).toHaveAttribute("data-stage-layout", "share-bottom");
+  await expect(page.locator('[data-stage-role="participant"]')).toHaveCount(6);
+
+  const [shareBox, tilesBox, firstTileBox, lastTileBox] = await Promise.all([
+    getBox(page.locator('[data-stage-role="share"]')),
+    getBox(page.locator(".stage-tiles")),
+    getBox(page.locator('[data-stage-role="participant"]').first()),
+    getBox(page.locator('[data-stage-role="participant"]').last()),
+  ]);
+
+  expect(shareBox.y).toBeLessThan(tilesBox.y);
+  expect(shareBox.height).toBeGreaterThan(tilesBox.height * 0.8);
+  expect(firstTileBox.y).toBeGreaterThan(shareBox.y + shareBox.height - GEOMETRY_TOLERANCE_PX);
+  expect(lastTileBox.y).toBeGreaterThan(shareBox.y + shareBox.height - GEOMETRY_TOLERANCE_PX);
+  await expectTilesContained(canvas, page.locator('[data-stage-role="participant"], [data-stage-role="share"]'));
 });
 
 test("multi-participant grid on tablet-sized widths avoids giant stretched tiles", async ({ page }) => {

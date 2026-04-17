@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import type { PropsWithChildren } from "react";
 import type { SessionInfo } from "@opsui/shared-types";
+import { AnimatedBackground } from "./AnimatedBackground";
 
 interface AppLayoutProps extends PropsWithChildren {
   currentMeetingCode: string | null;
@@ -88,25 +89,53 @@ export function AppLayout(props: AppLayoutProps) {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <button
-          aria-label="Open navigation"
-          className="icon-button"
-          onClick={props.onToggleSidebar}
-          type="button"
-        >
-          <span aria-hidden="true">☰</span>
-        </button>
-        <button
-          className="brand-mark"
-          onClick={() => {
-            props.onNavigate("/");
-          }}
-          type="button"
-        >
-          Opsuimeets
-        </button>
-        {isSuper ? <span className="status-pill status-pill--accent topbar__pill">Super</span> : null}
+      <AnimatedBackground />
+
+      <header className="topbar topbar--dark">
+        <div className="topbar__left">
+          <button
+            aria-label="Open navigation"
+            className="hamburger-button"
+            onClick={props.onToggleSidebar}
+            type="button"
+          >
+            <svg width="20" height="14" viewBox="0 0 20 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect width="20" height="1.5" rx="0.75" fill="white" fillOpacity="0.5" />
+              <rect y="6" width="14" height="1.5" rx="0.75" fill="white" fillOpacity="0.35" />
+              <rect y="12" width="20" height="1.5" rx="0.75" fill="white" fillOpacity="0.5" />
+            </svg>
+          </button>
+          <button
+            className="brand-mark brand-mark--dark"
+            onClick={() => {
+              props.onNavigate("/");
+            }}
+            type="button"
+          >
+            Opsuimeets
+          </button>
+          {isSuper ? <span className="status-pill status-pill--accent topbar__pill">Super</span> : null}
+        </div>
+        <div className="topbar__right">
+          <button
+            className="topbar-auth-button"
+            onClick={() => {
+              props.onNavigate("/sign-in");
+            }}
+            type="button"
+          >
+            Sign In
+          </button>
+          <button
+            className="topbar-auth-button topbar-auth-button--accent"
+            onClick={() => {
+              props.onNavigate("/sign-up");
+            }}
+            type="button"
+          >
+            Sign Up
+          </button>
+        </div>
       </header>
 
       <button
