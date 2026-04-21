@@ -64,6 +64,116 @@ test("searching by username opens a persistent thread with full saved history", 
   }
 });
 
+test("conversation list stays visible when a refresh request fails", async ({ browser }) => {
+  const firstContext = await browser.newContext();
+  const secondContext = await browser.newContext();
+  const firstPage = await firstContext.newPage();
+  const secondPage = await secondContext.newPage();
+  let failThreadListRefresh = false;
+  let failedThreadListRefreshes = 0;
+
+  try {
+    await firstPage.route("**/v1/direct-messages/threads", async (route) => {
+      if (route.request().method() === "GET" && failThreadListRefresh) {
+        failedThreadListRefreshes += 1;
+        await route.abort("failed");
+        return;
+      }
+
+      await route.continue();
+    });
+
+    await signUpIndividual(firstPage, {
+      email: "resilient-a@example.com",
+      username: "resilient.a",
+      firstName: "Resilient",
+      lastName: "Alpha",
+      password: "password123",
+    });
+    await signUpIndividual(secondPage, {
+      email: "resilient-b@example.com",
+      username: "resilient.b",
+      firstName: "Resilient",
+      lastName: "Beta",
+      password: "password123",
+    });
+
+    await openDirectMessageThread(firstPage, "resilient.b", /Resilient Beta/i);
+    await sendComposerMessage(firstPage, "This thread must not disappear after one failed refresh.");
+    await firstPage.goto("/direct-messages");
+    await expect(firstPage.getByRole("button", { name: /Resilient Beta/i })).toBeVisible();
+
+    failThreadListRefresh = true;
+    await firstPage.evaluate(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await expect.poll(() => failedThreadListRefreshes).toBeGreaterThan(0);
+    await expect(firstPage.getByRole("button", { name: /Resilient Beta/i })).toBeVisible();
+    await expect(
+      firstPage.getByText("Search for a username above to start your first direct conversation."),
+    ).toHaveCount(0);
+  } finally {
+    await Promise.allSettled([firstContext.close(), secondContext.close()]);
+  }
+});
+
+test("legacy direct-message payloads without attachments still render usable threads", async ({ browser }) => {
+  const firstContext = await browser.newContext();
+  const secondContext = await browser.newContext();
+  const firstPage = await firstContext.newPage();
+  const secondPage = await secondContext.newPage();
+  const pageErrors: string[] = [];
+
+  try {
+    firstPage.on("pageerror", (error) => {
+      pageErrors.push(error.message);
+    });
+    await signUpIndividual(firstPage, {
+      email: "legacy-a@example.com",
+      username: "legacy.a",
+      firstName: "Legacy",
+      lastName: "Alpha",
+      password: "password123",
+    });
+    await signUpIndividual(secondPage, {
+      email: "legacy-b@example.com",
+      username: "legacy.b",
+      firstName: "Legacy",
+      lastName: "Beta",
+      password: "password123",
+    });
+
+    await openDirectMessageThread(firstPage, "legacy.b", /Legacy Beta/i);
+    await sendComposerMessage(firstPage, "Old payload still needs to render.");
+    await firstPage.goto("/direct-messages");
+
+    await firstPage.route("**/v1/direct-messages/threads/*/messages", async (route) => {
+      const response = await route.fetch();
+      const payload = await response.json().catch(() => null) as { items?: Array<Record<string, unknown>> } | null;
+      if (payload && Array.isArray(payload.items)) {
+        payload.items = payload.items.map((item) => {
+          const next = { ...item };
+          delete next.attachments;
+          return next;
+        });
+      }
+
+      await route.fulfill({
+        response,
+        json: payload ?? { items: [] },
+      });
+    });
+
+    await firstPage.getByRole("button", { name: /Legacy Beta/i }).click();
+    await expect(firstPage.locator(".dm-thread-panel__header")).toBeVisible();
+    await expect(firstPage.locator(".chat-message__bubble").getByText("Old payload still needs to render.")).toBeVisible();
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await Promise.allSettled([firstContext.close(), secondContext.close()]);
+  }
+});
+
 test("direct messages work across organisation and personal accounts with unread badges", async ({ browser }) => {
   const organisationContext = await browser.newContext();
   const personalContext = await browser.newContext();
@@ -146,6 +256,59 @@ test("image attachments render inline in chat and remain visible after reload", 
     await firstPage.goto("/");
     await firstPage.goto("/direct-messages");
     await firstPage.getByRole("button", { name: /Nina Preview/i }).click();
+    await expect(firstPage.locator(".dm-attachment-card__image")).toBeVisible();
+  } finally {
+    await Promise.allSettled([firstContext.close(), secondContext.close()]);
+  }
+});
+
+test("shared files remain in direct-message history after logout and login", async ({ browser }) => {
+  const firstContext = await browser.newContext();
+  const secondContext = await browser.newContext();
+  const firstPage = await firstContext.newPage();
+  const secondPage = await secondContext.newPage();
+
+  try {
+    await signUpIndividual(firstPage, {
+      email: "history-a@example.com",
+      username: "history.a",
+      firstName: "History",
+      lastName: "Alpha",
+      password: "password123",
+    });
+    await signUpIndividual(secondPage, {
+      email: "history-b@example.com",
+      username: "history.b",
+      firstName: "History",
+      lastName: "Beta",
+      password: "password123",
+    });
+
+    await openDirectMessageThread(firstPage, "history.b", /History Beta/i);
+    await attachFiles(firstPage, [
+      {
+        name: "persistent.png",
+        mimeType: "image/png",
+        buffer: PNG_1X1,
+      },
+    ]);
+    await sendComposerMessage(firstPage, "File should survive auth churn.");
+    await expect(firstPage.locator(".chat-message__bubble").getByText("File should survive auth churn.")).toBeVisible();
+    await expect(firstPage.locator(".dm-attachment-card__image")).toBeVisible();
+
+    await firstPage.goto("/sign-in");
+    await firstPage.getByRole("button", { name: "Sign Out" }).click();
+    await expect(firstPage.getByRole("heading", { name: "Sign in to OpsUI Meets" })).toBeVisible();
+
+    await signInWithPassword(firstPage, {
+      email: "history-a@example.com",
+      password: "password123",
+    });
+    await firstPage.goto("/direct-messages");
+    await firstPage.getByRole("button", { name: /History Beta/i }).click();
+
+    await expect(firstPage.locator(".chat-message__bubble").getByText("File should survive auth churn.")).toBeVisible();
+    await expect(firstPage.locator(".dm-attachment-card__meta").getByText("persistent.png")).toBeVisible();
     await expect(firstPage.locator(".dm-attachment-card__image")).toBeVisible();
   } finally {
     await Promise.allSettled([firstContext.close(), secondContext.close()]);
@@ -354,6 +517,92 @@ test("attachment APIs reject cross-thread reuse and non-member access", async ({
   }
 });
 
+test("composer stays pinned while long direct-message threads scroll", async ({ browser }) => {
+  const firstContext = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const secondContext = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const firstPage = await firstContext.newPage();
+  const secondPage = await secondContext.newPage();
+
+  try {
+    await signUpIndividual(firstPage, {
+      email: "pinned-a@example.com",
+      username: "pinned.a",
+      firstName: "Pinned",
+      lastName: "Alpha",
+      password: "password123",
+    });
+    await signUpIndividual(secondPage, {
+      email: "pinned-b@example.com",
+      username: "pinned.b",
+      firstName: "Pinned",
+      lastName: "Beta",
+      password: "password123",
+    });
+
+    await openDirectMessageThread(firstPage, "pinned.b", /Pinned Beta/i);
+    const threadId = currentThreadId(firstPage.url());
+
+    for (let index = 0; index < 24; index += 1) {
+      const response = await dmApiRequest(firstPage, {
+        method: "POST",
+        pathname: `/v1/direct-messages/threads/${threadId}/messages`,
+        body: {
+          text: `Pinned message ${index + 1}`,
+          attachmentIds: [],
+        },
+      });
+      expect(response.status).toBe(201);
+    }
+
+    await firstPage.reload();
+    await expect(firstPage.locator(".chat-message")).toHaveCount(24);
+    await expect(firstPage.locator(".conversation-composer__input")).toBeVisible();
+
+    const beforeScroll = await firstPage.evaluate(() => {
+      const composer = document.querySelector(".conversation-composer");
+      const log = document.querySelector(".dm-thread-panel__messages");
+      if (!(composer instanceof HTMLElement) || !(log instanceof HTMLElement)) {
+        return null;
+      }
+
+      const composerRect = composer.getBoundingClientRect();
+      return {
+        composerBottom: composerRect.bottom,
+        composerTop: composerRect.top,
+        logClientHeight: log.clientHeight,
+        logScrollHeight: log.scrollHeight,
+        viewportHeight: window.innerHeight,
+      };
+    });
+
+    expect(beforeScroll).not.toBeNull();
+    expect(beforeScroll?.logScrollHeight ?? 0).toBeGreaterThan(beforeScroll?.logClientHeight ?? 0);
+
+    const afterScroll = await firstPage.evaluate(() => {
+      const composer = document.querySelector(".conversation-composer");
+      const log = document.querySelector(".dm-thread-panel__messages");
+      if (!(composer instanceof HTMLElement) || !(log instanceof HTMLElement)) {
+        return null;
+      }
+
+      log.scrollTop = log.scrollHeight;
+      const composerRect = composer.getBoundingClientRect();
+      return {
+        composerBottom: composerRect.bottom,
+        composerTop: composerRect.top,
+        viewportHeight: window.innerHeight,
+      };
+    });
+
+    expect(afterScroll).not.toBeNull();
+    expect(beforeScroll?.composerTop ?? 0).toBeCloseTo(afterScroll?.composerTop ?? 0, 0);
+    expect(beforeScroll?.composerBottom ?? 0).toBeCloseTo(afterScroll?.composerBottom ?? 0, 0);
+    expect(afterScroll?.composerBottom ?? 0).toBeLessThanOrEqual((afterScroll?.viewportHeight ?? 0) - 12);
+  } finally {
+    await Promise.allSettled([firstContext.close(), secondContext.close()]);
+  }
+});
+
 async function signUpIndividual(
   page: Page,
   input: { email: string; username: string; firstName: string; lastName: string; password: string },
@@ -362,6 +611,17 @@ async function signUpIndividual(
   await fillIdentityFields(page, input);
   await page.getByRole("button", { name: "Create Account" }).click();
   await expect(page).toHaveURL("/");
+}
+
+async function signInWithPassword(
+  page: Page,
+  input: { email: string; password: string },
+) {
+  await page.goto("/sign-in");
+  await page.getByRole("textbox", { name: "Email", exact: true }).fill(input.email);
+  await page.getByLabel("Password").fill(input.password);
+  await page.getByRole("main").getByRole("button", { name: "Sign In" }).click();
+  await expect(page.getByRole("button", { name: "Signed In" })).toBeDisabled();
 }
 
 async function signUpOrganisation(

@@ -7,6 +7,7 @@ const AUTH_PORT = Number(process.env.E2E_AUTH_PORT ?? 9878);
 const APP_ORIGIN = process.env.E2E_APP_ORIGIN ?? "http://127.0.0.1:4173";
 const SESSION_COOKIE_NAME = "opsui_meets_e2e_auth";
 const OIDC_PENDING_COOKIE_NAME = "opsui_meets_e2e_oidc_pending";
+const SESSION_MAX_AGE_SECONDS = 400 * 24 * 60 * 60;
 
 let state = createInitialState();
 
@@ -2342,7 +2343,7 @@ function parseCookies(cookieHeader) {
 }
 
 function buildSessionCookie(token) {
-  return `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; HttpOnly; Max-Age=86400; Path=/; SameSite=Lax`;
+  return `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; HttpOnly; Max-Age=${SESSION_MAX_AGE_SECONDS}; Path=/; SameSite=Lax`;
 }
 
 function buildPendingOidcCookie(token) {

@@ -7,6 +7,7 @@ export interface JoinTokenResponse {
 }
 
 const SESSION_CACHE_TTL_MS = 30_000;
+const STALE_AUTHENTICATED_SESSION_GRACE_MS = 5 * 60_000;
 const LOCAL_DEV_SESSION_STORAGE_KEY = "opsui-meets.local-dev-session";
 const FALLBACK_SESSION: SessionInfo = {
   authenticated: false,
@@ -28,6 +29,7 @@ export async function getSessionState(forceRefresh = false): Promise<SessionInfo
     return sessionCache.value;
   }
 
+  const staleSession = sessionCache?.value ?? null;
   try {
     const response = await fetch(`${AUTH_BASE_URL}/v1/session`, {
       cache: "no-store",
@@ -54,6 +56,14 @@ export async function getSessionState(forceRefresh = false): Promise<SessionInfo
       expiresAt: Date.now() + SESSION_CACHE_TTL_MS,
     };
     return localDevSession;
+  }
+
+  if (staleSession?.authenticated) {
+    sessionCache = {
+      value: staleSession,
+      expiresAt: Date.now() + STALE_AUTHENTICATED_SESSION_GRACE_MS,
+    };
+    return staleSession;
   }
 
   sessionCache = {

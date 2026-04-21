@@ -9,6 +9,10 @@ import type {
 import { getActorContext } from "../lib/actor";
 import { recordApiMetric } from "../lib/analytics";
 import { getRepositories } from "../lib/data";
+import {
+  getDirectMessageAttachmentBlob,
+  putDirectMessageAttachmentBlob,
+} from "../lib/direct-message-attachment-storage";
 import { ApiError, json } from "../lib/http";
 import { enforceRateLimit } from "../lib/rate-limit";
 import { parseJson, requireNonEmptyString } from "../lib/request";
@@ -61,6 +65,13 @@ interface MediaDownloadInfoResponse {
   ok?: boolean;
   error?: string;
   downloadUrl?: string;
+}
+
+interface DirectMessageAttachmentUploadSlot {
+  attachmentId: string;
+  uploadUrl: string;
+  uploadMethod: "PUT";
+  uploadHeaders: Record<string, string>;
 }
 
 export async function listDirectMessageThreads(request: Request, env: Env): Promise<Response> {
@@ -286,21 +297,12 @@ export async function signDirectMessageAttachments(
   const payload = await parseJson<DirectMessageAttachmentSignPayload>(request);
   const files = parseAttachmentFiles(payload.files);
   const now = new Date().toISOString();
-  const items: Array<{
-    attachmentId: string;
-    uploadUrl: string;
-    uploadMethod: "PUT";
-    uploadHeaders: Record<string, string>;
-  }> = [];
+  const items: DirectMessageAttachmentUploadSlot[] = [];
 
   for (const file of files) {
     const attachmentId = crypto.randomUUID();
     const contentType = normalizeContentType(file.contentType);
     const objectKey = buildAttachmentObjectKey(threadId, attachmentId);
-    const signedUpload = await signMediaUpload(env, {
-      contentType,
-      objectKey,
-    });
     const attachment = repositories.directMessages.createAttachment({
       id: attachmentId,
       threadId,
@@ -314,12 +316,10 @@ export async function signDirectMessageAttachments(
       createdAt: now,
     });
 
-    items.push({
-      attachmentId: attachment.id,
-      uploadUrl: signedUpload.uploadUrl,
-      uploadMethod: signedUpload.uploadMethod,
-      uploadHeaders: signedUpload.uploadHeaders,
-    });
+    items.push(await createAttachmentUploadSlot(request, env, attachment, {
+      contentType,
+      objectKey,
+    }));
   }
 
   await repositories.commit();
@@ -330,6 +330,67 @@ export async function signDirectMessageAttachments(
     status: response.status,
     request,
     outcome: String(items.length),
+    workspaceId: actor.workspaceId,
+  });
+  return response;
+}
+
+export async function uploadDirectMessageAttachmentContent(
+  request: Request,
+  attachmentId: string,
+  env: Env,
+): Promise<Response> {
+  enforceRateLimit(request, {
+    bucket: "dm-attachment-upload",
+    limit: 60,
+    windowMs: 60_000,
+  });
+
+  const actor = getActorContext(request);
+  const userId = requireAuthenticatedUserId(request);
+  const repositories = await getRepositories(env);
+  const attachment = repositories.directMessages.getAttachmentById(attachmentId);
+
+  if (!attachment) {
+    throw new ApiError(404, "attachment_not_found", "That attachment could not be found.");
+  }
+
+  assertThreadMembership(repositories.directMessages.getThreadMember(attachment.threadId, userId));
+  if (attachment.uploaderUserId !== userId) {
+    throw new ApiError(403, "attachment_not_owned", "Only your own pending attachments can be uploaded.");
+  }
+  if (attachment.messageId) {
+    throw new ApiError(400, "attachment_already_sent", "This attachment has already been sent.");
+  }
+
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (bytes.byteLength > MAX_DIRECT_MESSAGE_ATTACHMENT_SIZE_BYTES) {
+    throw new ApiError(
+      400,
+      "attachment_too_large",
+      `Files must be ${formatBytes(MAX_DIRECT_MESSAGE_ATTACHMENT_SIZE_BYTES)} or smaller.`,
+    );
+  }
+
+  if (bytes.byteLength !== attachment.sizeBytes) {
+    throw new ApiError(400, "attachment_size_mismatch", "This attachment upload did not match the expected file size.");
+  }
+
+  await putDirectMessageAttachmentBlob(env, {
+    attachmentId: attachment.id,
+    threadId: attachment.threadId,
+    uploaderUserId: userId,
+    contentType: normalizeContentType(request.headers.get("content-type") ?? attachment.contentType),
+    sizeBytes: bytes.byteLength,
+    bytes,
+  });
+
+  const response = json({ ok: true });
+  recordApiMetric(env, {
+    route: "dm-attachment-upload",
+    status: response.status,
+    request,
+    outcome: "uploaded",
     workspaceId: actor.workspaceId,
   });
   return response;
@@ -455,6 +516,35 @@ export async function getDirectMessageAttachmentContent(
   assertThreadMembership(repositories.directMessages.getThreadMember(attachment.threadId, userId));
 
   const url = new URL(request.url);
+  const storedBlob = await getDirectMessageAttachmentBlob(env, attachment.id);
+  if (storedBlob) {
+    const headers = new Headers();
+    headers.set("cache-control", "private, no-store");
+    headers.set("content-type", storedBlob.contentType || attachment.contentType || "application/octet-stream");
+    headers.set("content-length", String(storedBlob.sizeBytes));
+    headers.set(
+      "content-disposition",
+      buildContentDisposition(url.searchParams.get("download") === "1" ? "attachment" : "inline", attachment.filename),
+    );
+
+    const responseBody = new Uint8Array(storedBlob.bytes).buffer;
+    const response = new Response(
+      responseBody,
+      {
+        status: 200,
+        headers,
+      },
+    );
+    recordApiMetric(env, {
+      route: "dm-attachment-content",
+      status: response.status,
+      request,
+      outcome: url.searchParams.get("download") === "1" ? "download" : "inline",
+      workspaceId: actor.workspaceId,
+    });
+    return response;
+  }
+
   const downloadUrl = await resolveMediaDownloadUrl(env, attachment.objectKey);
   const upstream = await fetch(downloadUrl);
   if (!upstream.ok || !upstream.body) {
@@ -874,6 +964,46 @@ function createMessagePreview(text: string): string {
 
 function buildAbsoluteUrl(pathname: string, request: Request): string {
   return new URL(pathname, request.url).toString();
+}
+
+async function createAttachmentUploadSlot(
+  request: Request,
+  env: Env,
+  attachment: {
+    id: string;
+    threadId: string;
+    filename: string;
+    contentType: string;
+    sizeBytes: number;
+    uploaderUserId: string;
+  },
+  payload: MediaUploadSignPayload,
+): Promise<DirectMessageAttachmentUploadSlot> {
+  try {
+    const signedUpload = await signMediaUpload(env, payload);
+    return {
+      attachmentId: attachment.id,
+      uploadUrl: signedUpload.uploadUrl,
+      uploadMethod: signedUpload.uploadMethod,
+      uploadHeaders: signedUpload.uploadHeaders,
+    };
+  } catch (error) {
+    if (error instanceof ApiError && error.code !== "attachment_upload_sign_failed") {
+      throw error;
+    }
+  }
+
+  return {
+    attachmentId: attachment.id,
+    uploadUrl: buildAbsoluteUrl(
+      `/v1/direct-messages/attachments/${encodeURIComponent(attachment.id)}/content`,
+      request,
+    ),
+    uploadMethod: "PUT",
+    uploadHeaders: {
+      "content-type": attachment.contentType,
+    },
+  };
 }
 
 async function signMediaUpload(

@@ -1,4 +1,4 @@
-import { SESSION_COOKIE_NAME } from "./session-cookie";
+import { SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS } from "./session-cookie";
 import type { Env } from "../types";
 
 export function getSessionSigningSecret(env: Env): string {
@@ -13,7 +13,7 @@ export function buildSessionCookie(value: string, env: Env): string {
     "HttpOnly",
     ...(shouldUseSecureCookies(env) ? ["Secure"] : []),
     "SameSite=Lax",
-    "Max-Age=86400",
+    `Max-Age=${SESSION_MAX_AGE_SECONDS}`,
   ].join("; ");
 }
 

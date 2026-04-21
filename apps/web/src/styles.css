@@ -1045,18 +1045,23 @@ button {
 
 .page--direct-messages {
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .dm-layout {
   display: grid;
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
   gap: 18px;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .dm-sidebar,
 .dm-thread-panel {
   min-height: 0;
+  overflow: hidden;
 }
 
 .dm-sidebar {
@@ -1137,6 +1142,9 @@ button {
 
 .dm-thread-panel__messages {
   min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .dm-thread-panel__empty {

@@ -2,7 +2,8 @@ import type { AuthProvider, LiveRole, SessionActor } from "@opsui/shared-types";
 
 export const SESSION_COOKIE_NAME = "opsui_meets_session";
 const SESSION_SIGNATURE_VERSION = "v1";
-const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+export const SESSION_MAX_AGE_SECONDS = 400 * 24 * 60 * 60;
+const SESSION_TTL_MS = SESSION_MAX_AGE_SECONDS * 1000;
 
 export interface SessionClaims {
   actor: SessionActor;
@@ -147,7 +148,7 @@ export function getOidcPendingCookieName(): string {
   return OIDC_PENDING_COOKIE_NAME;
 }
 
-async function buildSessionToken(
+export async function buildSessionToken(
   input: {
     actor: SessionActor;
     sessionType: "user";

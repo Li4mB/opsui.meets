@@ -23,7 +23,7 @@ const ALLOWED_HEADERS = [
   "x-idempotency-key",
 ];
 
-const ALLOWED_METHODS = ["GET", "POST", "PATCH", "OPTIONS"];
+const ALLOWED_METHODS = ["GET", "POST", "PUT", "PATCH", "OPTIONS"];
 
 export function getCorsHeaders(request: Request): Headers {
   const headers = new Headers();

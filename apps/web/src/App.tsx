@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { AuthCapabilities, SessionInfo } from "@opsui/shared-types";
 import { AppLayout } from "./components/AppLayout";
 import { getAuthCapabilities, getSessionState } from "./lib/auth";
-import { listDirectMessageThreads } from "./lib/direct-messages";
+import { loadDirectMessageThreads } from "./lib/direct-messages";
 import { useAppRoute } from "./lib/router";
 import { CompleteAccountPage } from "./pages/CompleteAccountPage";
 import { DirectMessagesPage } from "./pages/DirectMessagesPage";
@@ -48,13 +48,17 @@ export function App() {
         return;
       }
 
-      const threads = await listDirectMessageThreads();
+      const threads = await loadDirectMessageThreads();
       if (cancelled) {
         return;
       }
 
+      if (!threads.ok) {
+        return;
+      }
+
       setDirectMessagesUnreadCount(
-        threads.reduce((total, thread) => total + thread.unreadCount, 0),
+        threads.items.reduce((total, thread) => total + thread.unreadCount, 0),
       );
     }
 

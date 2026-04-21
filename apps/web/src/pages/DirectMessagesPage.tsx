@@ -13,7 +13,7 @@ import {
   fetchDirectMessageAttachmentBlob,
   getDirectMessageThread,
   listDirectMessageMessages,
-  listDirectMessageThreads,
+  loadDirectMessageThreads,
   markDirectMessageThreadRead,
   openDirectMessageThread,
   searchDirectMessageUsers,
@@ -93,13 +93,15 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
         return;
       }
 
-      const nextThreads = await listDirectMessageThreads();
+      const nextThreads = await loadDirectMessageThreads();
       if (cancelled) {
         return;
       }
 
-      setThreads(nextThreads);
-      props.onUnreadCountChange(sumUnreadCount(nextThreads));
+      if (nextThreads.ok) {
+        setThreads(nextThreads.items);
+        props.onUnreadCountChange(sumUnreadCount(nextThreads.items));
+      }
 
       if (!props.selectedThreadId) {
         setSelectedThread(null);
@@ -202,13 +204,15 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
         return;
       }
 
-      const nextThreads = await listDirectMessageThreads();
+      const nextThreads = await loadDirectMessageThreads();
       if (cancelled) {
         return;
       }
 
-      setThreads(nextThreads);
-      props.onUnreadCountChange(sumUnreadCount(nextThreads));
+      if (nextThreads.ok) {
+        setThreads(nextThreads.items);
+        props.onUnreadCountChange(sumUnreadCount(nextThreads.items));
+      }
       setSelectedThread((current) => (current ? { ...current, unreadCount: 0 } : current));
     }
 
@@ -329,9 +333,11 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
         : current,
     );
 
-    const nextThreads = await listDirectMessageThreads();
-    setThreads(nextThreads);
-    props.onUnreadCountChange(sumUnreadCount(nextThreads));
+    const nextThreads = await loadDirectMessageThreads();
+    if (nextThreads.ok) {
+      setThreads(nextThreads.items);
+      props.onUnreadCountChange(sumUnreadCount(nextThreads.items));
+    }
     setIsSending(false);
   }
 
@@ -481,6 +487,7 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
                 ) : null}
                 {messages.map((message) => {
                   const isSelf = message.senderUserId === currentUserId;
+                  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
                   return (
                     <article className={`chat-message${isSelf ? " chat-message--self" : ""}`} key={message.id}>
                       <div className="chat-message__meta">
@@ -488,9 +495,9 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
                         <span>{formatRelativeTime(message.sentAt)}</span>
                       </div>
                       {message.body.trim() ? <div className="chat-message__bubble">{message.body}</div> : null}
-                      {message.attachments.length ? (
+                      {attachments.length ? (
                         <div className="dm-message-attachments">
-                          {message.attachments.map((attachment) => (
+                          {attachments.map((attachment) => (
                             <DirectMessageAttachmentCard attachment={attachment} key={attachment.id} />
                           ))}
                         </div>
@@ -795,15 +802,16 @@ function getFileExtension(filename: string): string {
 }
 
 function buildThreadPreviewFromMessage(message: DirectMessageMessage): string {
+  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
   if (message.body.trim()) {
     return truncatePreview(message.body.trim());
   }
 
-  if (message.attachments.length === 1) {
-    return truncatePreview(message.attachments[0]?.filename ?? "Sent a file");
+  if (attachments.length === 1) {
+    return truncatePreview(attachments[0]?.filename ?? "Sent a file");
   }
 
-  return `Sent ${message.attachments.length} files`;
+  return `Sent ${attachments.length} files`;
 }
 
 function truncatePreview(value: string) {

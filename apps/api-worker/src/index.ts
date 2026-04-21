@@ -23,6 +23,7 @@ import {
   searchDirectMessageUsers,
   sendDirectMessage,
   signDirectMessageAttachments,
+  uploadDirectMessageAttachmentContent,
 } from "./routes/direct-messages";
 import { listRoomEvents } from "./routes/events";
 import { getMeetingDetail } from "./routes/meeting-detail";
@@ -419,6 +420,18 @@ export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
         const mediaSessionPath = getMeetingMediaSessionPath(url.pathname);
         if (mediaSessionPath) {
           routeResponse = await createMeetingMediaSession(request, mediaSessionPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
+        }
+      }
+
+      if (request.method === "PUT") {
+        const directMessageAttachmentContentPath = getDirectMessageAttachmentContentPath(url.pathname);
+        if (directMessageAttachmentContentPath) {
+          routeResponse = await uploadDirectMessageAttachmentContent(
+            request,
+            directMessageAttachmentContentPath.attachmentId,
+            env,
+          );
           return withCors(routeResponse, request);
         }
       }

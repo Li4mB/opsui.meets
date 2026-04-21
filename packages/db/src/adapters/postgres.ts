@@ -21,8 +21,6 @@ import { compactRuntimeStore, createSeedStore, hydrateMemoryStore, type MemorySt
 
 const DEFAULT_SCOPE = "global";
 
-type SqlClient = ReturnType<typeof postgres>;
-
 interface PersistedRuntimeStateRow {
   version: number | string;
   state: MemoryStore | string;
@@ -73,6 +71,7 @@ interface MutationRecord {
 }
 
 type MutationFn = (...args: any[]) => any;
+export type SqlClient = ReturnType<typeof postgres>;
 
 export async function createPostgresRepositoryContext(
   options: PostgresRepositoryContextOptions = {},
@@ -475,7 +474,7 @@ function normalizeStore(raw: MemoryStore | string): MemoryStore {
   return hydrateMemoryStore(raw);
 }
 
-function createSqlClient(connectionString: string): SqlClient {
+export function createSqlClient(connectionString: string): SqlClient {
   return postgres(connectionString, {
     prepare: false,
     max: 1,

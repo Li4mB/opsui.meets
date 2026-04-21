@@ -1,4 +1,5 @@
 import type {
+  DirectMessageAttachment,
   DirectMessageMessage,
   DirectMessageSearchResult,
   DirectMessageThreadDetail,
@@ -15,7 +16,11 @@ export interface DirectMessageAttachmentUploadSlot {
   uploadHeaders: Record<string, string>;
 }
 
-export async function listDirectMessageThreads(): Promise<DirectMessageThreadSummary[]> {
+export type DirectMessageThreadsResult =
+  | { ok: true; items: DirectMessageThreadSummary[] }
+  | { ok: false; error: string; status?: number };
+
+export async function loadDirectMessageThreads(): Promise<DirectMessageThreadsResult> {
   try {
     const headers = await getActorHeaders();
     const response = await fetch(`${API_BASE_URL}/v1/direct-messages/threads`, {
@@ -25,14 +30,33 @@ export async function listDirectMessageThreads(): Promise<DirectMessageThreadSum
     });
 
     if (!response.ok) {
-      return [];
+      return {
+        ok: false,
+        error: "threads_unavailable",
+        status: response.status,
+      };
     }
 
     const payload = (await response.json()) as { items?: DirectMessageThreadSummary[] };
-    return Array.isArray(payload.items) ? payload.items : [];
+    return {
+      ok: true,
+      items: Array.isArray(payload.items) ? payload.items : [],
+    };
   } catch {
-    return [];
+    return {
+      ok: false,
+      error: "network_error",
+    };
   }
+}
+
+export async function listDirectMessageThreads(): Promise<DirectMessageThreadSummary[]> {
+  const result = await loadDirectMessageThreads();
+  if (result.ok) {
+    return result.items;
+  }
+
+  return [];
 }
 
 export async function searchDirectMessageUsers(query: string): Promise<DirectMessageSearchResult[]> {
@@ -128,7 +152,7 @@ export async function listDirectMessageMessages(threadId: string): Promise<Direc
     }
 
     const payload = (await response.json()) as { items?: DirectMessageMessage[] };
-    return Array.isArray(payload.items) ? payload.items : [];
+    return Array.isArray(payload.items) ? payload.items.map(normalizeDirectMessageMessage) : [];
   } catch {
     return [];
   }
@@ -187,15 +211,22 @@ export async function uploadDirectMessageAttachment(
   file: File,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
-    const headers = new Headers(slot.uploadHeaders);
+    let headers = new Headers(slot.uploadHeaders);
     if (!headers.has("content-type") && file.type) {
       headers.set("content-type", file.type);
+    }
+
+    let credentials: RequestCredentials | undefined;
+    if (isInternalDirectMessageAttachmentUpload(slot.uploadUrl)) {
+      headers = new Headers(await getActorHeaders(Object.fromEntries(headers.entries())));
+      credentials = "include";
     }
 
     const response = await fetch(slot.uploadUrl, {
       method: slot.uploadMethod,
       headers,
       body: file,
+      credentials,
     });
     if (!response.ok) {
       return {
@@ -242,7 +273,7 @@ export async function sendDirectMessage(
 
     return {
       ok: true,
-      message: (await response.json()) as DirectMessageMessage,
+      message: normalizeDirectMessageMessage((await response.json()) as DirectMessageMessage),
     };
   } catch {
     return {
@@ -289,6 +320,40 @@ export async function markDirectMessageThreadRead(threadId: string): Promise<boo
     });
 
     return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeDirectMessageMessage(message: DirectMessageMessage): DirectMessageMessage {
+  return {
+    ...message,
+    attachments: Array.isArray(message.attachments)
+      ? message.attachments.map(normalizeDirectMessageAttachment)
+      : [],
+  };
+}
+
+function normalizeDirectMessageAttachment(attachment: DirectMessageAttachment): DirectMessageAttachment {
+  return {
+    ...attachment,
+    contentType: typeof attachment.contentType === "string" ? attachment.contentType : "application/octet-stream",
+    contentUrl: typeof attachment.contentUrl === "string" ? attachment.contentUrl : "",
+    downloadUrl: typeof attachment.downloadUrl === "string" ? attachment.downloadUrl : "",
+    filename: typeof attachment.filename === "string" ? attachment.filename : "attachment",
+    kind: attachment.kind === "image" || attachment.kind === "video" ? attachment.kind : "file",
+    messageId: typeof attachment.messageId === "string" ? attachment.messageId : "",
+    sizeBytes: typeof attachment.sizeBytes === "number" && Number.isFinite(attachment.sizeBytes)
+      ? attachment.sizeBytes
+      : 0,
+  };
+}
+
+function isInternalDirectMessageAttachmentUpload(uploadUrl: string): boolean {
+  try {
+    const target = new URL(uploadUrl);
+    return target.origin === new URL(API_BASE_URL).origin
+      && /^\/v1\/direct-messages\/attachments\/[^/]+\/content$/.test(target.pathname);
   } catch {
     return false;
   }
