@@ -4,6 +4,7 @@ import { AppLayout } from "./components/AppLayout";
 import { getAuthCapabilities, getSessionState } from "./lib/auth";
 import { loadDirectMessageThreads } from "./lib/direct-messages";
 import { useAppRoute } from "./lib/router";
+import { AccountPlaceholderPage } from "./pages/AccountPlaceholderPage";
 import { CompleteAccountPage } from "./pages/CompleteAccountPage";
 import { DirectMessagesPage } from "./pages/DirectMessagesPage";
 import { HomePage } from "./pages/HomePage";
@@ -105,6 +106,9 @@ export function App() {
       onNavigate={(pathname) => {
         navigate(pathname);
       }}
+      onRefreshSession={(forceRefresh) => {
+        return refreshAuth(forceRefresh);
+      }}
       onToggleSidebar={() => {
         setSidebarOpen((current) => !current);
       }}
@@ -154,6 +158,8 @@ export function App() {
           session={session}
         />
       ) : null}
+      {route.kind === "my-profile" ? <AccountPlaceholderPage title="My profile" /> : null}
+      {route.kind === "appearance" ? <AccountPlaceholderPage title="Appearance" /> : null}
       {route.kind === "direct-messages" || route.kind === "direct-message-thread" ? (
         <DirectMessagesPage
           onNavigate={(pathname) => {

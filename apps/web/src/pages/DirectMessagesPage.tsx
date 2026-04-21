@@ -8,7 +8,6 @@ import type {
   DirectMessageThreadSummary,
   SessionInfo,
 } from "@opsui/shared-types";
-import { getSessionDisplayName } from "../lib/auth";
 import {
   fetchDirectMessageAttachmentBlob,
   getDirectMessageThread,
@@ -43,6 +42,7 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
   const currentUserId = props.session?.actor.userId ?? "";
   const fileInputRef = useRef<HTMLInputElement>(null);
   const draftAttachmentsRef = useRef<ComposerAttachmentDraft[]>([]);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const [threads, setThreads] = useState<DirectMessageThreadSummary[]>([]);
   const [selectedThread, setSelectedThread] = useState<DirectMessageThreadDetail | null>(null);
@@ -222,6 +222,11 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
     };
   }, [authenticated, messages.length, props.onUnreadCountChange, props.selectedThreadId]);
 
+  // Auto-scroll to bottom on new messages
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length]);
+
   async function handleSearchSelect(result: DirectMessageSearchResult) {
     setFeedback(null);
     const nextThread = await openDirectMessageThread(result.username);
@@ -375,33 +380,45 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
     );
   }
 
+  const unreadTotal = sumUnreadCount(threads);
+
   return (
-    <section className={`page page--direct-messages${props.selectedThreadId ? " page--direct-messages-thread" : ""}`}>
+    <section className={`page page--direct-messages${props.selectedThreadId ? " page--direct-messages-thread" : ""}`} style={{ padding: 0 }}>
       <div className="dm-layout">
-        <aside className="panel-card dm-sidebar">
-          <div className="panel-card__header dm-sidebar__header">
+        {/* ── Left Sidebar ────────────────────────── */}
+        <aside className="dm-sidebar">
+          <div className="dm-sidebar__header">
             <div>
-              <div className="eyebrow">Inbox</div>
-              <h1 className="panel-card__title">Direct Messages</h1>
+              <p className="dm-eyebrow">Inbox</p>
+              <h1 className="dm-title">Direct Messages</h1>
             </div>
-            <span className="status-pill">{sumUnreadCount(threads)} unread</span>
+            {unreadTotal > 0 ? (
+              <span className="dm-unread-badge">{unreadTotal} unread</span>
+            ) : null}
           </div>
 
-          <label className="field">
-            <span className="field__label">Search by username</span>
+          {/* Search */}
+          <div className="dm-search">
+            <span className="dm-search__icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+            </span>
             <input
-              className="field__input"
+              className="dm-search__input"
               onChange={(event) => {
                 setSearchQuery(event.target.value);
               }}
-              placeholder="@username"
+              placeholder="Search by username..."
               type="search"
               value={searchQuery}
             />
-          </label>
+          </div>
 
+          {/* Search Results */}
           {searchQuery.trim() ? (
-            <div className="dm-search-results">
+            <div className="dm-search-results" style={{ paddingBottom: 8 }}>
               {searchResults.length ? (
                 searchResults.map((result) => (
                   <button
@@ -412,104 +429,156 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
                     }}
                     type="button"
                   >
-                    <strong>{result.displayName}</strong>
-                    <span>@{result.username}</span>
+                    <div className="dm-avatar dm-avatar--md">
+                      {getInitials(result.displayName)}
+                    </div>
+                    <div className="dm-search-result__info">
+                      <span className="dm-search-result__name">{result.displayName}</span>
+                      <span className="dm-search-result__username">@{result.username}</span>
+                    </div>
                   </button>
                 ))
               ) : (
-                <p className="empty-list">No matching usernames yet.</p>
+                <p style={{ fontSize: 12, color: "rgba(255,255,255,0.2)", padding: "8px 4px", margin: 0 }}>
+                  No matching usernames.
+                </p>
               )}
             </div>
           ) : null}
 
           {feedback && !props.selectedThreadId ? (
-            <p className="inline-feedback inline-feedback--error">{feedback}</p>
+            <p className="inline-feedback inline-feedback--error" style={{ fontSize: 12, padding: "0 16px", margin: 0 }}>
+              {feedback}
+            </p>
           ) : null}
 
-          <div className="dm-thread-list">
+          {/* Thread List */}
+          <div className="dm-thread-list custom-scrollbar">
             {threads.length ? (
               threads.map((thread) => (
                 <button
-                  className={`dm-thread-list__item${thread.id === props.selectedThreadId ? " is-active" : ""}`}
+                  className={`dm-thread-item${thread.id === props.selectedThreadId ? " is-active" : ""}`}
                   key={thread.id}
                   onClick={() => {
                     props.onNavigate(`/direct-messages/${encodeURIComponent(thread.id)}`);
                   }}
                   type="button"
                 >
-                  <div className="dm-thread-list__item-main">
-                    <strong>{thread.participant.displayName}</strong>
-                    <span>@{thread.participant.username}</span>
-                    <p>{thread.lastMessagePreview ?? "No messages yet."}</p>
+                  <div className="dm-avatar dm-avatar--md">
+                    {getInitials(thread.participant.displayName)}
+                    {"isOnline" in thread.participant && (thread.participant as Record<string, unknown>).isOnline ? (
+                      <div className="dm-avatar__online" />
+                    ) : null}
                   </div>
-                  <div className="dm-thread-list__item-meta">
-                    <span>{formatRelativeTime(thread.lastMessageAt ?? thread.updatedAt)}</span>
-                    {thread.unreadCount ? <span className="status-pill status-pill--accent">{thread.unreadCount}</span> : null}
+                  <div className="dm-thread-item__info">
+                    <div className="dm-thread-item__top">
+                      <span className="dm-thread-item__name">{thread.participant.displayName}</span>
+                      <span className="dm-thread-item__time">
+                        {formatRelativeTime(thread.lastMessageAt ?? thread.updatedAt)}
+                      </span>
+                    </div>
+                    <div className="dm-thread-item__bottom">
+                      <span className="dm-thread-item__preview">
+                        {thread.lastMessagePreview ?? "No messages yet."}
+                      </span>
+                      {thread.unreadCount ? (
+                        <span className="dm-thread-item__unread">{thread.unreadCount}</span>
+                      ) : null}
+                    </div>
                   </div>
                 </button>
               ))
             ) : (
-              <p className="empty-list">
-                Search for a username above to start your first direct conversation.
+              <p style={{ fontSize: 12, color: "rgba(255,255,255,0.2)", padding: "16px 8px", margin: 0, textAlign: "center" }}>
+                Search for a username to start your first conversation.
               </p>
             )}
           </div>
         </aside>
 
-        <section className="panel-card panel-card--conversation dm-thread-panel">
+        {/* ── Right Panel — Conversation ─────────── */}
+        <section className="dm-conversation">
           {props.selectedThreadId ? (
             <>
-              <div className="panel-card__header dm-thread-panel__header">
-                <div>
-                  <div className="eyebrow">Conversation</div>
-                  <h2 className="panel-card__title">
-                    {selectedThread?.participant.displayName ?? "Loading conversation..."}
-                  </h2>
-                  {selectedThread ? <p className="people-row__meta">@{selectedThread.participant.username}</p> : null}
+              {/* Conversation Header */}
+              <div className="dm-conversation__header">
+                <div className="dm-conversation__user">
+                  <div className="dm-avatar dm-avatar--lg">
+                    {selectedThread
+                      ? getInitials(selectedThread.participant.displayName)
+                      : ""}
+                  </div>
+                  <div className="dm-conversation__user-info">
+                    <p className="dm-conversation__eyebrow">Conversation</p>
+                    <div className="dm-conversation__name">
+                      {selectedThread?.participant.displayName ?? "Loading..."}
+                    </div>
+                    {selectedThread ? (
+                      <div className="dm-conversation__username">
+                        @{selectedThread.participant.username}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
-                <button
-                  className="button button--ghost dm-thread-panel__back"
-                  onClick={() => {
-                    props.onNavigate("/direct-messages");
-                  }}
-                  type="button"
-                >
-                  Back
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div className="dm-conversation__actions">
+                    {/* Phone button — visual only */}
+                    <button className="dm-action-btn" type="button">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+                      </svg>
+                    </button>
+                    {/* Video button — visual only */}
+                    <button className="dm-action-btn" type="button">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <polygon points="23 7 16 12 23 17 23 7" />
+                        <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                      </svg>
+                    </button>
+                    {/* More button — visual only */}
+                    <button className="dm-action-btn" type="button">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                        <circle cx="12" cy="5" r="1.5" />
+                        <circle cx="12" cy="12" r="1.5" />
+                        <circle cx="12" cy="19" r="1.5" />
+                      </svg>
+                    </button>
+                  </div>
+                  <button
+                    className="dm-back-btn dm-thread-panel__back"
+                    onClick={() => {
+                      props.onNavigate("/direct-messages");
+                    }}
+                    type="button"
+                  >
+                    ← Back
+                  </button>
+                </div>
               </div>
 
-              <div className="conversation-log dm-thread-panel__messages">
-                {isLoadingThread ? <p className="empty-list">Loading conversation…</p> : null}
+              {/* Messages Area */}
+              <div className="dm-conversation__messages custom-scrollbar">
+                {isLoadingThread ? (
+                  <p style={{ fontSize: 12, color: "rgba(255,255,255,0.2)", textAlign: "center", margin: 0 }}>
+                    Loading conversation…
+                  </p>
+                ) : null}
                 {!isLoadingThread && !messages.length ? (
-                  <p className="empty-list">
+                  <p style={{ fontSize: 13, color: "rgba(255,255,255,0.3)", textAlign: "center", margin: "auto 0", lineHeight: 1.6 }}>
                     This conversation is ready. Send the first message whenever you are.
                   </p>
                 ) : null}
-                {messages.map((message) => {
-                  const isSelf = message.senderUserId === currentUserId;
-                  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
-                  return (
-                    <article className={`chat-message${isSelf ? " chat-message--self" : ""}`} key={message.id}>
-                      <div className="chat-message__meta">
-                        <strong>{isSelf ? "You" : message.senderDisplayName}</strong>
-                        <span>{formatRelativeTime(message.sentAt)}</span>
-                      </div>
-                      {message.body.trim() ? <div className="chat-message__bubble">{message.body}</div> : null}
-                      {attachments.length ? (
-                        <div className="dm-message-attachments">
-                          {attachments.map((attachment) => (
-                            <DirectMessageAttachmentCard attachment={attachment} key={attachment.id} />
-                          ))}
-                        </div>
-                      ) : null}
-                    </article>
-                  );
-                })}
+                {renderMessageGroups(messages, currentUserId)}
+                <div ref={messagesEndRef} />
               </div>
 
-              <form className="conversation-composer" onSubmit={(event) => {
-                void handleSendMessage(event);
-              }}>
+              {/* Message Composer */}
+              <form
+                className="dm-composer"
+                onSubmit={(event) => {
+                  void handleSendMessage(event);
+                }}
+              >
                 <input
                   accept="*/*"
                   aria-label="Attach files"
@@ -519,88 +588,86 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
                   ref={fileInputRef}
                   type="file"
                 />
-                {draftAttachments.length ? (
-                  <div className="dm-composer__attachments">
-                    {draftAttachments.map((attachment) => (
-                      <article className="dm-composer-attachment" key={attachment.id}>
-                        <div className="dm-composer-attachment__preview">
-                          {attachment.previewUrl && attachment.kind === "image" ? (
-                            <img
-                              alt={attachment.file.name}
-                              className="dm-composer-attachment__image"
-                              src={attachment.previewUrl}
-                            />
-                          ) : attachment.previewUrl && attachment.kind === "video" ? (
-                            <video
-                              className="dm-composer-attachment__video"
-                              muted
-                              playsInline
-                              preload="metadata"
-                              src={attachment.previewUrl}
-                            />
-                          ) : (
-                            <span className="dm-composer-attachment__icon">{getAttachmentKindLabel(attachment.kind)}</span>
-                          )}
+                <div className="dm-composer__shell">
+                  {draftAttachments.length ? (
+                    <div className="dm-composer__drafts">
+                      {draftAttachments.map((attachment) => (
+                        <div key={attachment.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "rgba(255,255,255,0.5)" }}>
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>
+                            {attachment.file.name}
+                          </span>
+                          <button
+                            aria-label={`Remove ${attachment.file.name}`}
+                            onClick={() => {
+                              handleRemoveDraftAttachment(attachment.id);
+                            }}
+                            style={{ background: "none", border: "none", color: "rgba(255,255,255,0.3)", cursor: "pointer", fontSize: 14, padding: "0 4px", font: "inherit" }}
+                            type="button"
+                          >
+                            ×
+                          </button>
                         </div>
-                        <div className="dm-composer-attachment__meta">
-                          <strong title={attachment.file.name}>{attachment.file.name}</strong>
-                          <span>{formatAttachmentMeta(attachment)}</span>
-                        </div>
-                        <button
-                          aria-label={`Remove ${attachment.file.name}`}
-                          className="icon-button icon-button--small"
-                          onClick={() => {
-                            handleRemoveDraftAttachment(attachment.id);
-                          }}
-                          type="button"
-                        >
-                          ×
-                        </button>
-                      </article>
-                    ))}
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="dm-composer__row">
+                    <button
+                      aria-label="Open file picker"
+                      className="dm-composer__attach-btn"
+                      onClick={() => {
+                        fileInputRef.current?.click();
+                      }}
+                      type="button"
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M21.4 11.1 12 20.5a6 6 0 0 1-8.5-8.5l9.6-9.6a4 4 0 1 1 5.6 5.7l-9.8 9.8a2 2 0 1 1-2.8-2.8l8.7-8.7" />
+                      </svg>
+                    </button>
+                    <input
+                      className="dm-composer__text-input"
+                      onChange={(event) => {
+                        setDraft(event.target.value);
+                      }}
+                      placeholder={`Message @${selectedThread?.participant.username ?? "user"}...`}
+                      value={draft}
+                    />
+                    <span className="dm-composer__counter">
+                      {draftAttachments.length}/{MAX_ATTACHMENTS_PER_MESSAGE}
+                    </span>
+                    <button
+                      className="dm-composer__send-btn"
+                      disabled={(!draft.trim() && !draftAttachments.length) || isSending}
+                      type="submit"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13" />
+                        <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                      </svg>
+                    </button>
                   </div>
-                ) : null}
-                <div className="conversation-composer__row">
-                  <button
-                    aria-label="Open file picker"
-                    className="conversation-send-button conversation-send-button--attach"
-                    onClick={() => {
-                      fileInputRef.current?.click();
-                    }}
-                    type="button"
-                  >
-                    <PaperclipIcon />
-                  </button>
-                  <input
-                    className="field__input conversation-composer__input"
-                    onChange={(event) => {
-                      setDraft(event.target.value);
-                    }}
-                    placeholder={`Message @${selectedThread?.participant.username ?? "user"}`}
-                    value={draft}
-                  />
-                  <button
-                    className="conversation-send-button"
-                    disabled={(!draft.trim() && !draftAttachments.length) || isSending}
-                    type="submit"
-                  >
-                    {isSending ? "…" : "↗"}
-                  </button>
-                </div>
-                <div className="dm-composer__footer">
-                  <span>{draftAttachments.length}/{MAX_ATTACHMENTS_PER_MESSAGE} files</span>
-                  {feedback ? <p className="inline-feedback inline-feedback--error">{feedback}</p> : null}
                 </div>
               </form>
+              {feedback ? (
+                <div className="dm-composer__footer">
+                  <p className="inline-feedback inline-feedback--error" style={{ margin: 0, fontSize: 11 }}>
+                    {feedback}
+                  </p>
+                </div>
+              ) : null}
             </>
           ) : (
-            <div className="dm-thread-panel__empty">
-              <div className="eyebrow">Direct Messages</div>
-              <h2 className="panel-card__title">Pick a conversation</h2>
-              <p className="settings-card__copy">
+            /* Empty State */
+            <div className="dm-conversation__empty">
+              <p className="dm-eyebrow">Direct Messages</p>
+              <h2 className="dm-conversation__empty-title">Pick a conversation</h2>
+              <p className="dm-conversation__empty-copy">
                 Search by unique username or open any thread from your existing inbox.
               </p>
-              {feedback ? <p className="inline-feedback inline-feedback--error">{feedback}</p> : null}
+              {feedback ? (
+                <p className="inline-feedback inline-feedback--error" style={{ margin: 0, fontSize: 12 }}>
+                  {feedback}
+                </p>
+              ) : null}
             </div>
           )}
         </section>
@@ -608,6 +675,59 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
     </section>
   );
 }
+
+/* ── Message Group Rendering ─────────────────────── */
+
+function renderMessageGroups(messages: DirectMessageMessage[], currentUserId: string) {
+  const groups: Array<{ date: string; messages: DirectMessageMessage[] }> = [];
+  let currentDate = "";
+
+  for (const message of messages) {
+    const date = formatDate(message.sentAt);
+    if (date !== currentDate) {
+      currentDate = date;
+      groups.push({ date, messages: [message] });
+    } else {
+      groups[groups.length - 1]!.messages.push(message);
+    }
+  }
+
+  return groups.map((group, gi) => (
+    <div key={gi}>
+      <div className="dm-date-separator">
+        <div className="dm-date-separator__line" />
+        <span className="dm-date-separator__text">{group.date}</span>
+        <div className="dm-date-separator__line" />
+      </div>
+      {group.messages.map((message) => {
+        const isSelf = message.senderUserId === currentUserId;
+        const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+        return (
+          <div className={`dm-message${isSelf ? " dm-message--sent" : " dm-message--received"}`} key={message.id}>
+            <div className="dm-message__content">
+              <div className="dm-message__meta">
+                <span className="dm-message__sender">{isSelf ? "You" : message.senderDisplayName}</span>
+                <span className="dm-message__time">{formatRelativeTime(message.sentAt)}</span>
+              </div>
+              {message.body.trim() ? (
+                <div className="dm-message__bubble">{message.body}</div>
+              ) : null}
+              {attachments.length ? (
+                <div className="dm-message-attachments" style={{ marginTop: message.body.trim() ? 4 : 0 }}>
+                  {attachments.map((attachment) => (
+                    <DirectMessageAttachmentCard attachment={attachment} key={attachment.id} />
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  ));
+}
+
+/* ── Attachment Card Component ───────────────────── */
 
 function DirectMessageAttachmentCard(props: { attachment: DirectMessageAttachment }) {
   const isInlineMedia = props.attachment.kind === "image" || props.attachment.kind === "video";
@@ -692,25 +812,65 @@ function DirectMessageAttachmentCard(props: { attachment: DirectMessageAttachmen
     }
   }
 
-  return (
-    <article className={`dm-attachment-card dm-attachment-card--${props.attachment.kind}`}>
-      {isInlineMedia && previewUrl && !loadError ? (
-        <div className="dm-attachment-card__preview-shell">
-          {props.attachment.kind === "image" ? (
+  // Image attachment card
+  if (isInlineMedia && props.attachment.kind === "image") {
+    return (
+      <article className="dm-message-image">
+        {previewUrl && !loadError ? (
+          <div className="dm-message-image__preview">
             <img
               alt={props.attachment.filename}
-              className="dm-attachment-card__image"
               src={previewUrl}
             />
-          ) : (
-            <video
-              className="dm-attachment-card__video"
-              controls
-              playsInline
-              preload="metadata"
-              src={previewUrl}
-            />
-          )}
+          </div>
+        ) : isLoadingPreview ? (
+          <div className="dm-message-image__preview" style={{ display: "grid", placeItems: "center" }}>
+            <span style={{ fontSize: 11, color: "rgba(255,255,255,0.2)" }}>Loading…</span>
+          </div>
+        ) : null}
+        <div className="dm-message-image__info">
+          <div className="dm-message-image__filename">{props.attachment.filename}</div>
+          <span className="dm-message-image__size">{formatBytes(props.attachment.sizeBytes)}</span>
+          {loadError ? <span className="dm-message-image__size">{loadError}</span> : null}
+        </div>
+        <div className="dm-message-image__actions">
+          <button
+            className="dm-image-action"
+            disabled={isBusy}
+            onClick={() => {
+              void handleOpen();
+            }}
+            type="button"
+          >
+            Open
+          </button>
+          <button
+            className="dm-image-action"
+            disabled={isBusy}
+            onClick={() => {
+              void handleDownload();
+            }}
+            type="button"
+          >
+            Download
+          </button>
+        </div>
+      </article>
+    );
+  }
+
+  // Non-image attachment card
+  return (
+    <article className="dm-attachment-card">
+      {isInlineMedia && previewUrl && !loadError ? (
+        <div className="dm-attachment-card__preview-shell">
+          <video
+            className="dm-attachment-card__video"
+            controls
+            playsInline
+            preload="metadata"
+            src={previewUrl}
+          />
         </div>
       ) : isInlineMedia && isLoadingPreview ? (
         <div className="dm-attachment-card__placeholder">Loading preview…</div>
@@ -723,7 +883,7 @@ function DirectMessageAttachmentCard(props: { attachment: DirectMessageAttachmen
         </div>
         <div className="dm-attachment-card__actions">
           <button
-            className="button button--ghost"
+            className="dm-image-action"
             disabled={isBusy}
             onClick={() => {
               void handleOpen();
@@ -733,7 +893,7 @@ function DirectMessageAttachmentCard(props: { attachment: DirectMessageAttachmen
             Open
           </button>
           <button
-            className="button button--ghost"
+            className="dm-image-action"
             disabled={isBusy}
             onClick={() => {
               void handleDownload();
@@ -746,6 +906,17 @@ function DirectMessageAttachmentCard(props: { attachment: DirectMessageAttachmen
       </div>
     </article>
   );
+}
+
+/* ── Helper Functions ────────────────────────────── */
+
+function getInitials(displayName: string): string {
+  if (!displayName) return "?";
+  const parts = displayName.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return (parts[0]![0] + parts[parts.length - 1]![0]).toUpperCase();
+  }
+  return displayName.slice(0, 2).toUpperCase();
 }
 
 function sumUnreadCount(threads: DirectMessageThreadSummary[]) {
@@ -845,6 +1016,30 @@ function formatRelativeTime(value: string) {
   return new Date(timestamp).toLocaleDateString();
 }
 
+function formatDate(value: string): string {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) {
+    return "";
+  }
+
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) {
+    return "Today";
+  }
+  if (diffDays === 1) {
+    return "Yesterday";
+  }
+  if (diffDays < 7) {
+    return date.toLocaleDateString(undefined, { weekday: "long" });
+  }
+
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
 function formatBytes(value: number) {
   if (value >= 1024 * 1024) {
     return `${(value / (1024 * 1024)).toFixed(value >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
@@ -863,10 +1058,6 @@ function getAttachmentKindLabel(kind: DirectMessageAttachmentKind) {
     return "VID";
   }
   return "FILE";
-}
-
-function formatAttachmentMeta(attachment: ComposerAttachmentDraft) {
-  return `${getAttachmentKindLabel(attachment.kind)} · ${formatBytes(attachment.file.size)}`;
 }
 
 function formatExistingAttachmentMeta(attachment: DirectMessageAttachment) {
@@ -896,22 +1087,4 @@ function downloadObjectUrl(url: string, filename: string, revokeLater = false) {
       URL.revokeObjectURL(url);
     }, 60_000);
   }
-}
-
-function PaperclipIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      fill="none"
-      height="18"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.9"
-      viewBox="0 0 24 24"
-      width="18"
-    >
-      <path d="M21.4 11.1 12 20.5a6 6 0 0 1-8.5-8.5l9.6-9.6a4 4 0 1 1 5.6 5.7l-9.8 9.8a2 2 0 1 1-2.8-2.8l8.7-8.7" />
-    </svg>
-  );
 }

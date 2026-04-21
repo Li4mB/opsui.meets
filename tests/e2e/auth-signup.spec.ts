@@ -1,4 +1,4 @@
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import { devices, expect, test, type Browser, type Page } from "@playwright/test";
 
 const FIXTURE_RESET_URL = "http://127.0.0.1:9877/__reset";
 
@@ -21,11 +21,79 @@ test("individual signup creates a signed-in personal account without My Organisa
   await expect(page).toHaveURL("/");
   await page.getByRole("button", { name: "Open navigation" }).click();
   await expect(page.getByRole("button", { name: "My Organisation" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Sign In" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign In" })).toHaveCount(0);
 
   await page.goto("/ops-signin");
-  await expect(page.getByRole("main").getByText("Casey", { exact: true })).toBeVisible();
+  await expect(page.getByRole("main").getByText("Casey", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("main").getByText("casey.lane")).toHaveCount(0);
+});
+
+test("signed-in topbar shows profile menu with blank profile and appearance routes", async ({ page }) => {
+  await signInThroughUi(page, "liam@example.com");
+  await page.goto("/");
+
+  await expect(page.getByRole("button", { name: "Sign In" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Sign Up" })).toHaveCount(0);
+
+  const profileTrigger = page.getByRole("button", { name: /@liam/i });
+  await expect(profileTrigger).toBeVisible();
+
+  await profileTrigger.hover();
+  const menu = page.getByRole("menu", { name: "Account" });
+  await expect(menu).toBeVisible();
+  await page.getByRole("menuitem", { name: "My profile" }).hover();
+  await expect(menu).toBeVisible();
+
+  await page.getByRole("menuitem", { name: "My profile" }).click();
+  await expect(page).toHaveURL("/my-profile");
+  await expect(page.getByRole("heading", { name: "My profile" })).toBeVisible();
+
+  await page.getByRole("button", { name: /@liam/i }).hover();
+  await page.getByRole("menuitem", { name: "Appearance" }).click();
+  await expect(page).toHaveURL("/appearance");
+  await expect(page.getByRole("heading", { name: "Appearance" })).toBeVisible();
+});
+
+test("profile menu sign out requires confirmation", async ({ page }) => {
+  await signInThroughUi(page, "liam@example.com");
+  await page.goto("/");
+
+  await page.getByRole("button", { name: /@liam/i }).hover();
+  await page.getByRole("menuitem", { name: "Sign out" }).click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByRole("heading", { name: "Sign out?" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /@liam/i })).toBeVisible();
+
+  await page.getByRole("button", { name: /@liam/i }).hover();
+  await page.getByRole("menuitem", { name: "Sign out" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Sign out" }).click();
+
+  await expect(page).toHaveURL("/sign-in");
+  await expect(page.getByRole("banner").getByRole("button", { name: "Sign In" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /@liam/i })).toHaveCount(0);
+});
+
+test("profile menu opens from mobile tap", async ({ browser }) => {
+  const context = await browser.newContext({ ...devices["iPhone 13"] });
+  const page = await context.newPage();
+
+  try {
+    await signInThroughUi(page, "liam@example.com");
+    await page.goto("/");
+
+    const profileTrigger = page.getByRole("button", { name: /@liam/i });
+    await profileTrigger.tap();
+    const menu = page.getByRole("menu", { name: "Account" });
+    await expect(menu).toBeVisible();
+
+    await profileTrigger.tap();
+    await expect(menu).toBeHidden();
+  } finally {
+    await context.close();
+  }
 });
 
 test("create organisation signs the owner in and exposes My Organisation with code and roster", async ({ page }) => {
@@ -124,13 +192,13 @@ test("password sign-in works after signup and forms expose password-manager-frie
 
   await page.goto("/sign-in");
   await page.getByRole("button", { name: "Sign Out" }).click();
-  await expect(page.getByRole("button", { name: "Sign In" })).toBeVisible();
+  await expect(page.getByRole("main").getByRole("button", { name: "Sign In" })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Email", exact: true })).toHaveAttribute("autocomplete", "email");
   await expect(page.getByLabel("Password")).toHaveAttribute("autocomplete", "current-password");
 
   await page.getByRole("textbox", { name: "Email", exact: true }).fill("login@example.com");
   await page.getByLabel("Password").fill("password123");
-  await page.getByRole("button", { name: "Sign In" }).click();
+  await page.getByRole("main").getByRole("button", { name: "Sign In" }).click();
 
   await expect(page.getByText("You are signed in.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Signed In" })).toBeDisabled();
@@ -227,4 +295,12 @@ async function fillIdentityFields(
   await page.getByRole("textbox", { name: "First name", exact: true }).fill(input.firstName);
   await page.getByRole("textbox", { name: "Last name", exact: true }).fill(input.lastName);
   await page.getByLabel("Password").fill(input.password);
+}
+
+async function signInThroughUi(page: Page, email: string) {
+  await page.goto("/sign-in");
+  await page.getByRole("textbox", { name: "Mock auth email" }).fill(email);
+  await page.getByRole("button", { name: "Use Dev Sign-In" }).click();
+  await expect(page.getByText("You are signed in for local testing.")).toBeVisible();
+  await expect(page.getByText("Signed in", { exact: true })).toBeVisible();
 }

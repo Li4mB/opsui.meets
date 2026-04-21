@@ -6,6 +6,8 @@ export type AppRoute =
   | { kind: "sign-in"; pathname: "/sign-in" }
   | { kind: "sign-up"; pathname: "/sign-up" }
   | { kind: "complete-account"; pathname: "/complete-account" }
+  | { kind: "my-profile"; pathname: "/my-profile" }
+  | { kind: "appearance"; pathname: "/appearance" }
   | { kind: "direct-messages"; pathname: "/direct-messages"; threadId: null }
   | { kind: "direct-message-thread"; pathname: string; threadId: string }
   | { kind: "my-organisation"; pathname: "/my-organisation" }
@@ -64,6 +66,14 @@ function parseRoute(location: Location): AppRoute {
 
   if (pathname === "/complete-account") {
     return { kind: "complete-account", pathname };
+  }
+
+  if (pathname === "/my-profile") {
+    return { kind: "my-profile", pathname };
+  }
+
+  if (pathname === "/appearance") {
+    return { kind: "appearance", pathname };
   }
 
   if (pathname === "/direct-messages") {

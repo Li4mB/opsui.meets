@@ -141,12 +141,11 @@ export function AnimatedBackground() {
         <div
           style={{
             position: "absolute",
-            top: "50%",
-            left: "50%",
-            transform: "translate(-50%, -50%)",
-            width: 900,
-            height: 500,
-            background: "rgba(255, 255, 255, 0.015)",
+            top: "33%",
+            left: "25%",
+            width: 600,
+            height: 400,
+            background: "rgba(255, 255, 255, 0.01)",
             borderRadius: "50%",
             filter: "blur(150px)",
           }}
@@ -154,25 +153,13 @@ export function AnimatedBackground() {
         <div
           style={{
             position: "absolute",
-            top: "30%",
-            left: "20%",
-            width: 500,
-            height: 500,
+            bottom: "25%",
+            right: "33%",
+            width: 400,
+            height: 400,
             background: "rgba(255, 255, 255, 0.008)",
             borderRadius: "50%",
             filter: "blur(120px)",
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            bottom: "20%",
-            right: "15%",
-            width: 400,
-            height: 400,
-            background: "rgba(255, 255, 255, 0.01)",
-            borderRadius: "50%",
-            filter: "blur(100px)",
           }}
         />
       </div>
