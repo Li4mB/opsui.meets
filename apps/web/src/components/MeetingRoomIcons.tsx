@@ -26,6 +26,88 @@ export function ChatBubbleIcon() {
   );
 }
 
+export function ToolsIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">
+      <path
+        d="M6.8 5.5H17.2"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M6.8 12H17.2"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M6.8 18.5H17.2"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+      <circle cx="9.2" cy="5.5" fill="currentColor" r="1.8" />
+      <circle cx="14.6" cy="12" fill="currentColor" r="1.8" />
+      <circle cx="11.2" cy="18.5" fill="currentColor" r="1.8" />
+    </svg>
+  );
+}
+
+export function WhiteboardIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">
+      <rect
+        height="13.5"
+        rx="2.4"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        width="17"
+        x="3.5"
+        y="4.5"
+      />
+      <path
+        d="M8 19H16"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M12 18V20.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M8 13.6C9.3 11.5 10.5 10.4 11.7 10.4C13.4 10.4 13.1 13.6 14.8 13.6C15.5 13.6 16.1 13.1 16.8 12.1"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
+export function PenToolIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">
+      <path
+        d="M13.2 5.6L18.4 10.8"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M4.8 17.9L6.1 13.2L14.7 4.6C15.7 3.6 17.4 3.6 18.4 4.6L19.4 5.6C20.4 6.6 20.4 8.3 19.4 9.3L10.8 17.9L6.1 19.2L4.8 17.9Z"
+        stroke="currentColor"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
 export function ApplicationWindowIcon() {
   return (
     <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">

@@ -12,6 +12,29 @@ export interface RealtimeConnectionState {
   lastSeenAt: string;
 }
 
+export interface WhiteboardPoint {
+  x: number;
+  y: number;
+}
+
+export type WhiteboardStrokeMode = "direct" | "smooth";
+
+export interface WhiteboardStroke {
+  strokeId: string;
+  participantId: string;
+  color: string;
+  thickness: number;
+  mode?: WhiteboardStrokeMode;
+  points: WhiteboardPoint[];
+  updatedAt: string;
+  completedAt?: string | null;
+}
+
+export interface RealtimeWhiteboardState {
+  strokes: WhiteboardStroke[];
+  updatedAt: string | null;
+}
+
 export interface RealtimeRoomSnapshot {
   meetingInstanceId: string | null;
   meetingStatus: MeetingStatus | null;
@@ -23,6 +46,7 @@ export interface RealtimeRoomSnapshot {
   mutedAllAt: string | null;
   endedAt: string | null;
   lastEventNumber: number;
+  whiteboard: RealtimeWhiteboardState;
 }
 
 export interface RealtimeParticipantPatch {

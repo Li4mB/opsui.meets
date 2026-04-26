@@ -4,6 +4,7 @@ import type {
   RealtimeRoomSnapshot,
   RealtimeRoomStatePatch,
   RoomEvent,
+  WhiteboardStroke,
 } from "@opsui/shared-types";
 
 interface Env {}
@@ -30,7 +31,8 @@ type ClientMessage =
   | { type: "signal.ice"; payload: SignalPayloadBase & { candidate: string; mid?: string; mLineIndex?: number } }
   | { type: "room.lock"; payload: { participantId: string } }
   | { type: "room.unlock"; payload: { participantId: string } }
-  | { type: "recording.state"; payload: { participantId: string; state: RealtimeRoomSnapshot["recordingState"] } };
+  | { type: "recording.state"; payload: { participantId: string; state: RealtimeRoomSnapshot["recordingState"] } }
+  | { type: "whiteboard.stroke.upsert"; payload: { stroke: WhiteboardStroke } };
 
 interface ConnectionAttachment {
   participantId?: string;
@@ -46,7 +48,7 @@ export class RoomCoordinator {
     ctx.blockConcurrencyWhile(async () => {
       const stored = await ctx.storage.get<RealtimeRoomSnapshot>("snapshot");
       if (stored) {
-        this.snapshot = stored;
+        this.snapshot = normalizeSnapshot(stored);
       }
     });
   }
@@ -211,6 +213,38 @@ export class RoomCoordinator {
           recordingState: this.snapshot.recordingState,
         },
       });
+      return;
+    }
+
+    if (parsed.type === "whiteboard.stroke.upsert") {
+      const sender = this.getAttachment(ws);
+      if (!sender?.participantId) {
+        ws.send(JSON.stringify({ type: "error", payload: { reason: "missing_sender_identity" } }));
+        return;
+      }
+
+      const stroke = sanitizeWhiteboardStroke(parsed.payload.stroke, sender.participantId);
+      if (!stroke) {
+        ws.send(JSON.stringify({ type: "error", payload: { reason: "invalid_whiteboard_stroke" } }));
+        return;
+      }
+
+      const nextStrokes = this.snapshot.whiteboard.strokes.filter((entry) => entry.strokeId !== stroke.strokeId);
+      nextStrokes.push(stroke);
+      this.snapshot.whiteboard = {
+        strokes: nextStrokes.slice(-MAX_WHITEBOARD_STROKES),
+        updatedAt: stroke.updatedAt,
+      };
+
+      await this.ctx.storage.put("snapshot", this.snapshot);
+      this.broadcast({
+        type: "whiteboard.stroke.upsert",
+        payload: { stroke },
+      });
+      this.broadcast({
+        type: "room.snapshot",
+        payload: this.snapshot,
+      });
     }
   }
 
@@ -346,9 +380,65 @@ function createSnapshot(): RealtimeRoomSnapshot {
     mutedAllAt: null,
     endedAt: null,
     lastEventNumber: 0,
+    whiteboard: {
+      strokes: [],
+      updatedAt: null,
+    },
   };
 }
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+const MAX_WHITEBOARD_POINTS_PER_STROKE = 1_200;
+const MAX_WHITEBOARD_STROKES = 500;
+
+function normalizeSnapshot(snapshot: RealtimeRoomSnapshot): RealtimeRoomSnapshot {
+  return {
+    ...snapshot,
+    whiteboard: snapshot.whiteboard ?? {
+      strokes: [],
+      updatedAt: null,
+    },
+  };
+}
+
+function sanitizeWhiteboardStroke(stroke: WhiteboardStroke, participantId: string): WhiteboardStroke | null {
+  if (!stroke || typeof stroke.strokeId !== "string" || !stroke.strokeId.trim()) {
+    return null;
+  }
+
+  const points = Array.isArray(stroke.points)
+    ? stroke.points
+        .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+        .map((point) => ({
+          x: clamp(point.x, 0, 1),
+          y: clamp(point.y, 0, 1),
+        }))
+        .slice(0, MAX_WHITEBOARD_POINTS_PER_STROKE)
+    : [];
+
+  if (!points.length) {
+    return null;
+  }
+
+  return {
+    strokeId: stroke.strokeId.slice(0, 96),
+    participantId,
+    color: isValidHexColor(stroke.color) ? stroke.color : "#f8fafc",
+    thickness: clamp(stroke.thickness, 1, 24),
+    mode: stroke.mode === "smooth" ? "smooth" : "direct",
+    points,
+    updatedAt: new Date().toISOString(),
+    completedAt: stroke.completedAt ? new Date().toISOString() : null,
+  };
+}
+
+function isValidHexColor(value: string): boolean {
+  return /^#[0-9a-f]{6}$/i.test(value);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }

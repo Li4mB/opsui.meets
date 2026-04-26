@@ -2667,7 +2667,7 @@ button {
   min-width: 0;
   width: 100%;
   max-width: 100%;
-  overflow-x: hidden;
+  overflow: visible;
 }
 
 .meeting-room-drawer {
@@ -2747,7 +2747,7 @@ button {
   min-width: 0;
   width: 100%;
   max-width: 100%;
-  overflow-x: hidden;
+  overflow: visible;
   transition:
     gap 220ms ease,
     padding 220ms ease;
@@ -2769,6 +2769,8 @@ button {
 }
 
 .meeting-stage-canvas {
+  position: relative;
+  z-index: 1;
   display: grid;
   --stage-gap: 16px;
   --stage-columns: 1;
@@ -3037,6 +3039,8 @@ button {
 }
 
 .meeting-control-surface {
+  position: relative;
+  z-index: 40;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -3045,7 +3049,7 @@ button {
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  overflow-x: hidden;
+  overflow: visible;
   transition: width 240ms ease, padding 240ms ease;
 }
 
@@ -3071,6 +3075,8 @@ button {
 }
 
 .meeting-control-dock {
+  position: relative;
+  z-index: 50;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3091,6 +3097,7 @@ button {
   flex-wrap: nowrap;
   margin-inline: auto;
   min-width: 0;
+  overflow: visible;
   transition:
     padding 240ms ease,
     transform 240ms ease,
@@ -3188,6 +3195,412 @@ button {
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.68);
   transform: translateX(-50%);
+}
+
+.meeting-tools-launcher {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+}
+
+.meeting-tools-launcher.is-open {
+  z-index: 90;
+}
+
+.meeting-tools-launcher__panel {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 14px);
+  z-index: 100;
+  display: grid;
+  min-width: 178px;
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02)),
+    rgba(14, 18, 25, 0.9);
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.46);
+  backdrop-filter: blur(22px);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 10px) scale(0.98);
+  transform-origin: bottom center;
+  transition:
+    opacity 180ms ease,
+    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    visibility 0s linear 180ms;
+  visibility: hidden;
+}
+
+.meeting-tools-launcher__panel.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0) scale(1);
+  transition:
+    opacity 180ms ease,
+    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  visibility: visible;
+}
+
+.meeting-tools-launcher__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 12px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+  font-size: 0.88rem;
+  font-weight: 700;
+  text-align: left;
+  transition:
+    background 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.meeting-tools-launcher__item:hover,
+.meeting-tools-launcher__item.is-active {
+  background: rgba(255, 255, 255, 0.08);
+  color: white;
+}
+
+.meeting-tools-launcher__item:hover {
+  transform: translateY(-1px);
+}
+
+.meeting-tools-launcher__item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  background: rgba(125, 211, 252, 0.12);
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+
+.meeting-stage-runtime--tool-open {
+  --meeting-stage-runtime-gap: 12px;
+}
+
+.meeting-tool-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 26px;
+  background:
+    linear-gradient(135deg, rgba(232, 238, 245, 0.98), rgba(216, 226, 236, 0.96)),
+    #e8eef5;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.meeting-tool-stage__surface {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.meeting-tool-stage__pip {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 5;
+  width: clamp(170px, 20vw, 260px);
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(125, 211, 252, 0.18), transparent 38%),
+    rgba(5, 10, 20, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 18px 50px rgba(2, 8, 23, 0.44);
+}
+
+.meeting-tool-stage__pip-media,
+.meeting-tool-stage__pip-video,
+.meeting-tool-stage__pip-placeholder {
+  width: 100%;
+  height: 100%;
+}
+
+.meeting-tool-stage__pip-media {
+  position: relative;
+}
+
+.meeting-tool-stage__pip-video {
+  display: block;
+  object-fit: cover;
+}
+
+.meeting-tool-stage__pip-placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at top right, rgba(125, 211, 252, 0.16), transparent 38%),
+    linear-gradient(180deg, rgba(15, 27, 46, 0.98) 0%, rgba(10, 19, 33, 0.98) 100%);
+}
+
+.meeting-tool-stage__pip-placeholder .participant-tile__avatar {
+  min-width: 54px;
+  height: 54px;
+  border-radius: 18px;
+  font-size: 1.1rem;
+}
+
+.meeting-tool-stage__pip-nameplate {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  overflow: hidden;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(4, 10, 20, 0.7);
+  border: 1px solid rgba(149, 184, 209, 0.16);
+  color: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(14px);
+  font-size: 0.78rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meeting-whiteboard {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  color: #0f172a;
+}
+
+.meeting-whiteboard__topbar {
+  position: relative;
+  z-index: 6;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  pointer-events: none;
+}
+
+.meeting-whiteboard__toolset,
+.meeting-whiteboard__close {
+  pointer-events: auto;
+}
+
+.meeting-whiteboard__toolset {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 58px);
+  padding: 8px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 18px;
+  background: rgba(248, 250, 252, 0.74);
+  box-shadow: 0 14px 40px rgba(15, 23, 42, 0.14);
+  backdrop-filter: blur(18px);
+}
+
+.meeting-whiteboard__tool-pill,
+.meeting-whiteboard__thickness-button,
+.meeting-whiteboard__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.06);
+  color: #0f172a;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.meeting-whiteboard__tool-pill {
+  gap: 8px;
+  padding: 0 12px;
+}
+
+.meeting-whiteboard__tool-pill--active {
+  background: rgba(14, 165, 233, 0.14);
+  color: #075985;
+}
+
+.meeting-whiteboard__swatches {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.meeting-whiteboard__swatch {
+  width: 26px;
+  height: 26px;
+  border: 2px solid rgba(15, 23, 42, 0.14);
+  border-radius: 999px;
+  background: var(--whiteboard-swatch-color);
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.meeting-whiteboard__swatch:hover,
+.meeting-whiteboard__swatch.is-active {
+  border-color: rgba(15, 23, 42, 0.72);
+  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
+}
+
+.meeting-whiteboard__thickness {
+  position: relative;
+}
+
+.meeting-whiteboard__thickness-button {
+  gap: 8px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.meeting-whiteboard__mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 10px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.06);
+  color: #0f172a;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.meeting-whiteboard__mode span {
+  color: rgba(15, 23, 42, 0.58);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.meeting-whiteboard__mode select {
+  min-width: 94px;
+  border: 0;
+  background: transparent;
+  color: #0f172a;
+  cursor: pointer;
+  font: inherit;
+  outline: none;
+}
+
+.meeting-whiteboard__mode select option {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.meeting-whiteboard__thickness-dot {
+  width: var(--whiteboard-thickness);
+  height: var(--whiteboard-thickness);
+  min-width: 4px;
+  min-height: 4px;
+  max-width: 24px;
+  max-height: 24px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.meeting-whiteboard__thickness-popover {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 10px);
+  z-index: 7;
+  display: grid;
+  gap: 10px;
+  width: 220px;
+  padding: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.92);
+  box-shadow: 0 18px 46px rgba(15, 23, 42, 0.18);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, -5px);
+  transition:
+    opacity 160ms ease,
+    transform 180ms ease,
+    visibility 0s linear 160ms;
+  visibility: hidden;
+}
+
+.meeting-whiteboard__thickness-popover.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0);
+  transition:
+    opacity 160ms ease,
+    transform 180ms ease;
+  visibility: visible;
+}
+
+.meeting-whiteboard__thickness-popover input {
+  width: 100%;
+  accent-color: #0ea5e9;
+}
+
+.meeting-whiteboard__thickness-preview {
+  width: 100%;
+  height: 32px;
+}
+
+.meeting-whiteboard__close {
+  width: 42px;
+  padding: 0;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(248, 250, 252, 0.78);
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.12);
+  cursor: pointer;
+  backdrop-filter: blur(18px);
+}
+
+.meeting-whiteboard__canvas-shell {
+  position: relative;
+  min-height: 0;
+  margin-top: -70px;
+}
+
+.meeting-whiteboard__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.meeting-whiteboard__disabled {
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  z-index: 4;
+  max-width: min(420px, calc(100% - 48px));
+  padding: 10px 14px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 999px;
+  background: rgba(248, 250, 252, 0.86);
+  color: #475569;
+  font-size: 0.86rem;
+  font-weight: 700;
+  text-align: center;
+  transform: translateX(-50%);
+  backdrop-filter: blur(16px);
 }
 
 .meeting-drawer-panel {
@@ -3579,6 +3992,32 @@ button {
     border-radius: 16px;
   }
 
+  .meeting-tools-launcher__panel {
+    bottom: calc(100% + 10px);
+  }
+
+  .meeting-whiteboard__topbar {
+    padding: 10px;
+  }
+
+  .meeting-whiteboard__toolset {
+    flex-wrap: wrap;
+    gap: 8px;
+    max-width: calc(100% - 52px);
+    padding: 7px;
+  }
+
+  .meeting-whiteboard__canvas-shell {
+    margin-top: -62px;
+  }
+
+  .meeting-tool-stage__pip {
+    right: 12px;
+    bottom: 12px;
+    width: clamp(142px, 34vw, 210px);
+    border-radius: 16px;
+  }
+
   .meeting-info-panel__host-actions {
     grid-template-columns: 1fr;
   }
@@ -3655,6 +4094,62 @@ button {
 
   .meeting-control-button {
     justify-content: center;
+  }
+
+  .meeting-tools-launcher__panel {
+    left: auto;
+    right: 0;
+    min-width: 168px;
+    transform: translateY(10px) scale(0.98);
+    transform-origin: bottom right;
+  }
+
+  .meeting-tools-launcher__panel.is-open {
+    transform: translateY(0) scale(1);
+  }
+
+  .meeting-whiteboard__toolset {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    width: calc(100vw - 110px);
+  }
+
+  .meeting-whiteboard__swatches {
+    justify-content: end;
+  }
+
+  .meeting-whiteboard__thickness {
+    grid-column: 1 / -1;
+  }
+
+  .meeting-whiteboard__mode {
+    grid-column: 1 / -1;
+    justify-content: space-between;
+  }
+
+  .meeting-whiteboard__mode select {
+    min-width: 0;
+    text-align: right;
+  }
+
+  .meeting-whiteboard__thickness-button {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .meeting-whiteboard__thickness-popover {
+    left: 0;
+    width: min(220px, calc(100vw - 96px));
+    transform: translateY(-5px);
+  }
+
+  .meeting-whiteboard__thickness-popover.is-open {
+    transform: translateY(0);
+  }
+
+  .meeting-tool-stage__pip {
+    width: clamp(132px, 42vw, 176px);
   }
 
   .screen-share-stage__overlay {

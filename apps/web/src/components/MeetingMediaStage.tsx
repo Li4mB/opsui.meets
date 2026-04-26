@@ -75,6 +75,7 @@ interface MeetingMediaStageProps {
   screenShareDisabledReason?: string | null;
   stageMessages?: Array<{ kind: "default" | "warning"; text: string }>;
   shouldConnect: boolean;
+  toolStage?: ReactNode;
 }
 
 const BASE_SCREEN_SHARE_CONFIGURATION: ScreenshareConfiguration = {
@@ -373,6 +374,8 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
       onLeave={props.onLeave}
       onLiveMediaStateChange={props.onLiveMediaStateChange}
       onLiveParticipantCountChange={props.onLiveParticipantCountChange}
+      participantDisplayName={props.participantDisplayName}
+      participantId={props.participantId}
       onRetry={
         props.shouldConnect
           ? () => {
@@ -382,6 +385,7 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
       }
       screenShareDisabledReason={props.screenShareDisabledReason ?? null}
       stageMessages={props.stageMessages ?? []}
+      toolStage={props.toolStage}
     />
   );
 
@@ -415,6 +419,7 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
           participantId={props.participantId}
           screenShareDisabledReason={props.screenShareDisabledReason ?? null}
           stageMessages={props.stageMessages ?? []}
+          toolStage={props.toolStage}
         />
       </RealtimeKitProvider>
     </div>
@@ -437,6 +442,7 @@ function ConnectedMediaStage(props: {
   participantId: string | null;
   screenShareDisabledReason: string | null;
   stageMessages: Array<{ kind: "default" | "warning"; text: string }>;
+  toolStage?: ReactNode;
 }) {
   const roomJoined = useRealtimeKitSelector((currentMeeting) => currentMeeting.self.roomJoined);
   const self = useRealtimeKitSelector((currentMeeting) => currentMeeting.self);
@@ -448,8 +454,12 @@ function ConnectedMediaStage(props: {
     () => new Map(props.activeParticipants.map((participant) => [participant.participantId, participant])),
     [props.activeParticipants],
   );
-  const otherRemoteParticipants = remoteParticipants.filter(
-    (participant) => participant.id !== self.id && participant.customParticipantId !== self.customParticipantId,
+  const otherRemoteParticipants = useMemo(
+    () =>
+      remoteParticipants.filter(
+        (participant) => participant.id !== self.id && participant.customParticipantId !== self.customParticipantId,
+      ),
+    [remoteParticipants, self.customParticipantId, self.id],
   );
   const shareSupported = useMemo(
     () => typeof navigator !== "undefined" && Boolean(navigator.mediaDevices?.getDisplayMedia),
@@ -483,6 +493,7 @@ function ConnectedMediaStage(props: {
         audioEnabled: self.audioEnabled,
         displayName: props.participantDisplayName,
         isSelf: true,
+        participantId: props.participantId,
         videoEnabled: self.videoEnabled,
         videoTrack: self.videoTrack,
       },
@@ -491,6 +502,7 @@ function ConnectedMediaStage(props: {
           audioEnabled: participant.audioEnabled,
           audioTrack: participant.audioTrack,
           displayName: resolveParticipantName(participant, participantDirectory),
+          participantId: participant.customParticipantId ?? participant.id,
           videoEnabled: participant.videoEnabled,
           videoTrack: participant.videoTrack,
         } satisfies MeetingStageParticipantTile;
@@ -505,6 +517,11 @@ function ConnectedMediaStage(props: {
       self.videoTrack,
     ],
   );
+  const activeSpeakerParticipantId = useActiveSpeakerParticipantId(otherRemoteParticipants);
+  const activeSpeakerTile =
+    stageParticipantTiles.find((tile) => tile.participantId && tile.participantId === activeSpeakerParticipantId) ??
+    stageParticipantTiles[0] ??
+    null;
   const liveMediaStateByParticipantId = useMemo(() => {
     const nextState: Record<string, ParticipantMediaIndicators> = {};
 
@@ -623,9 +640,13 @@ function ConnectedMediaStage(props: {
 
   return (
     <div
-      className={`meeting-stage-runtime${primaryScreenShare ? " meeting-stage-runtime--sharing" : ""}${showImmersiveSoloStage ? " meeting-stage-runtime--solo" : ""}`}
+      className={`meeting-stage-runtime${primaryScreenShare ? " meeting-stage-runtime--sharing" : ""}${showImmersiveSoloStage ? " meeting-stage-runtime--solo" : ""}${props.toolStage ? " meeting-stage-runtime--tool-open" : ""}`}
     >
-      {!roomJoined ? (
+      {props.toolStage ? (
+        <MeetingToolStageShell activeSpeakerTile={activeSpeakerTile} toolStage={props.toolStage}>
+          <HiddenParticipantAudio participants={otherRemoteParticipants} />
+        </MeetingToolStageShell>
+      ) : !roomJoined ? (
         <div className="meeting-stage-canvas meeting-stage-canvas--grid">
           <div className="stage-tiles" style={{ ["--stage-columns" as string]: "1" }}>
             <div className="stage-tiles__row" data-stage-row="1" data-stage-row-size="1">
@@ -797,9 +818,12 @@ function StageFallback(props: {
   onLeave?: () => void;
   onLiveMediaStateChange?: (state: Record<string, ParticipantMediaIndicators>) => void;
   onLiveParticipantCountChange?: (count: number | null) => void;
+  participantDisplayName: string;
+  participantId: string | null;
   onRetry: (() => void) | null;
   screenShareDisabledReason: string | null;
   stageMessages: Array<{ kind: "default" | "warning"; text: string }>;
+  toolStage?: ReactNode;
 }) {
   const showImmersiveSoloStage = Boolean(
     props.immersiveSoloMode && props.activeParticipants.length === 1,
@@ -809,10 +833,21 @@ function StageFallback(props: {
       props.activeParticipants.map((participant) => ({
         audioEnabled: participant.audio === "unmuted",
         displayName: participant.displayName,
+        participantId: participant.participantId,
         videoEnabled: participant.video === "on",
       })),
     [props.activeParticipants],
   );
+  const activeSpeakerTile =
+    fallbackStageTiles.find((tile) => tile.participantId && tile.participantId === props.participantId) ??
+    fallbackStageTiles[0] ??
+    {
+      audioEnabled: false,
+      displayName: props.participantDisplayName,
+      isSelf: true,
+      participantId: props.participantId,
+      videoEnabled: false,
+    };
 
   useEffect(() => {
     props.onLiveParticipantCountChange?.(
@@ -836,8 +871,10 @@ function StageFallback(props: {
   }, [props.activeParticipants, props.onLiveMediaStateChange]);
 
   return (
-    <div className={`meeting-stage-runtime${showImmersiveSoloStage ? " meeting-stage-runtime--solo" : ""}`}>
-      {fallbackStageTiles.length > 0 ? (
+    <div className={`meeting-stage-runtime${showImmersiveSoloStage ? " meeting-stage-runtime--solo" : ""}${props.toolStage ? " meeting-stage-runtime--tool-open" : ""}`}>
+      {props.toolStage ? (
+        <MeetingToolStageShell activeSpeakerTile={activeSpeakerTile} toolStage={props.toolStage} />
+      ) : fallbackStageTiles.length > 0 ? (
         <MeetingStageScene
           immersiveSoloMode={showImmersiveSoloStage}
           participantTiles={fallbackStageTiles}
@@ -880,6 +917,163 @@ function StageFallback(props: {
       />
     </div>
   );
+}
+
+function MeetingToolStageShell(props: {
+  activeSpeakerTile: MeetingStageParticipantTile | null;
+  children?: ReactNode;
+  toolStage: ReactNode;
+}) {
+  return (
+    <div className="meeting-tool-stage">
+      <div className="meeting-tool-stage__surface">{props.toolStage}</div>
+      {props.activeSpeakerTile ? <ActiveSpeakerPip tile={props.activeSpeakerTile} /> : null}
+      {props.children}
+    </div>
+  );
+}
+
+function ActiveSpeakerPip(props: { tile: MeetingStageParticipantTile }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (!videoRef.current) {
+      return;
+    }
+
+    if (props.tile.videoEnabled && props.tile.videoTrack) {
+      videoRef.current.srcObject = new MediaStream([props.tile.videoTrack]);
+      return;
+    }
+
+    videoRef.current.srcObject = null;
+  }, [props.tile.videoEnabled, props.tile.videoTrack]);
+
+  return (
+    <article className="meeting-tool-stage__pip" aria-label="Active speaker">
+      <div className="meeting-tool-stage__pip-media">
+        <video
+          autoPlay
+          className="meeting-tool-stage__pip-video"
+          muted
+          playsInline
+          ref={videoRef}
+        />
+        {!props.tile.videoEnabled || !props.tile.videoTrack ? (
+          <div className="meeting-tool-stage__pip-placeholder">
+            <div className="participant-tile__avatar">{getInitials(props.tile.displayName)}</div>
+          </div>
+        ) : null}
+        <div className="meeting-tool-stage__pip-nameplate">
+          <strong>{props.tile.displayName}</strong>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function HiddenParticipantAudio(props: { participants: RTKParticipant[] }) {
+  return (
+    <>
+      {props.participants.map((participant) =>
+        participant.audioTrack ? (
+          <RemoteAudioSink
+            audioEnabled={participant.audioEnabled}
+            audioTrack={participant.audioTrack}
+            key={participant.customParticipantId ?? participant.id}
+          />
+        ) : null,
+      )}
+    </>
+  );
+}
+
+function RemoteAudioSink(props: { audioEnabled: boolean; audioTrack: MediaStreamTrack }) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    if (!audioRef.current) {
+      return;
+    }
+
+    if (props.audioEnabled) {
+      audioRef.current.srcObject = new MediaStream([props.audioTrack]);
+      void audioRef.current.play().catch(() => {});
+      return;
+    }
+
+    audioRef.current.srcObject = null;
+  }, [props.audioEnabled, props.audioTrack]);
+
+  return <audio autoPlay className="sr-only" ref={audioRef} />;
+}
+
+function useActiveSpeakerParticipantId(participants: RTKParticipant[]): string | null {
+  const [activeParticipantId, setActiveParticipantId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const audioParticipants = participants.filter((participant) => participant.audioEnabled && participant.audioTrack);
+    if (!audioParticipants.length) {
+      setActiveParticipantId(null);
+      return;
+    }
+
+    const AudioContextConstructor =
+      window.AudioContext ??
+      (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextConstructor) {
+      setActiveParticipantId(audioParticipants[0].customParticipantId ?? audioParticipants[0].id);
+      return;
+    }
+
+    const context = new AudioContextConstructor();
+    const analysers = audioParticipants.map((participant) => {
+      const source = context.createMediaStreamSource(new MediaStream([participant.audioTrack as MediaStreamTrack]));
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      return {
+        analyser,
+        data: new Uint8Array(analyser.fftSize),
+        id: participant.customParticipantId ?? participant.id,
+        source,
+      };
+    });
+
+    void context.resume().catch(() => {});
+    const intervalId = window.setInterval(() => {
+      let best: { id: string; level: number } | null = null;
+
+      for (const entry of analysers) {
+        entry.analyser.getByteTimeDomainData(entry.data);
+        const level = getAudioLevel(entry.data);
+        if (!best || level > best.level) {
+          best = { id: entry.id, level };
+        }
+      }
+
+      setActiveParticipantId(best && best.level > 5 ? best.id : null);
+    }, 240);
+
+    return () => {
+      window.clearInterval(intervalId);
+      for (const entry of analysers) {
+        entry.source.disconnect();
+      }
+      void context.close().catch(() => {});
+    };
+  }, [participants]);
+
+  return activeParticipantId;
+}
+
+function getAudioLevel(data: Uint8Array): number {
+  let sum = 0;
+  for (const value of data) {
+    const centered = value - 128;
+    sum += centered * centered;
+  }
+  return Math.sqrt(sum / data.length);
 }
 
 function buildStageScreenShares(input: {
@@ -1200,4 +1394,16 @@ function getScreenShareAudioTrack(
   participant: Pick<RTKSelf, "screenShareTracks"> | Pick<RTKParticipant, "screenShareTracks">,
 ): MediaStreamTrack | null {
   return participant.screenShareTracks?.audio ?? null;
+}
+
+function getInitials(value: string): string {
+  const words = value.trim().split(/\s+/).filter(Boolean);
+  if (!words.length) {
+    return "OM";
+  }
+
+  return words
+    .slice(0, 2)
+    .map((word) => word[0]?.toUpperCase() ?? "")
+    .join("");
 }

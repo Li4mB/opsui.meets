@@ -3,14 +3,19 @@ import type {
   AuthCapabilities,
   ChatMessageEventPayload,
   ParticipantState,
+  RealtimeRoomSnapshot,
+  RealtimeWhiteboardState,
   RoomEvent,
   SessionInfo,
+  WhiteboardStroke,
 } from "@opsui/shared-types";
 import { MeetingConversationPanel } from "../components/MeetingConversationPanel";
 import { MeetingControlButton } from "../components/MeetingControlButton";
 import { MeetingInfoPanel } from "../components/MeetingInfoPanel";
 import { MeetingJoinLoader } from "../components/MeetingJoinLoader";
 import { MeetingMediaStage, type MediaConnectionPhase } from "../components/MeetingMediaStage";
+import { MeetingToolsLauncher } from "../components/MeetingToolsLauncher";
+import { MeetingWhiteboardStage } from "../components/MeetingWhiteboardStage";
 import {
   type ParticipantMediaIndicators,
   MeetingParticipantsPanel,
@@ -55,12 +60,25 @@ type LoadState =
 
 type JoinUiState = "idle" | "joining" | "direct" | "lobby" | "blocked" | "error";
 type ActiveDrawer = "chat" | "info" | "participants" | null;
+type ActiveMeetingTool = "whiteboard" | null;
+type RealtimeSocketStatus = "unavailable" | "connecting" | "connected" | "disconnected";
 const DRAWER_SWITCH_DELAY_MS = 220;
 const HEARTBEAT_INTERVAL_MS = 15_000;
 const REALTIME_PING_INTERVAL_MS = 20_000;
 const REALTIME_RECONNECT_MAX_DELAY_MS = 10_000;
 const ROOM_REFRESH_DEBOUNCE_MS = 250;
 const ROOM_REFRESH_WARNING_GRACE_MS = 15_000;
+const MEETING_SERVICE_RECONNECTING_MESSAGE = "Connection to meeting services was interrupted. Reconnecting...";
+const MEETING_SERVICE_RETRYING_MESSAGE =
+  "Connection to meeting services was interrupted. Retrying in the background.";
+
+function clearMeetingServiceInterruption(message: string | null): string | null {
+  if (message === MEETING_SERVICE_RECONNECTING_MESSAGE || message === MEETING_SERVICE_RETRYING_MESSAGE) {
+    return null;
+  }
+
+  return message;
+}
 
 export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
@@ -77,9 +95,15 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const [isJoinLoaderMounted, setIsJoinLoaderMounted] = useState(true);
   const [joinLoaderCycleKey, setJoinLoaderCycleKey] = useState(0);
   const [participantId, setParticipantId] = useState<string | null>(null);
+  const [activeMeetingTool, setActiveMeetingTool] = useState<ActiveMeetingTool>(null);
+  const [isToolsLauncherOpen, setIsToolsLauncherOpen] = useState(false);
   const [liveStageParticipantCount, setLiveStageParticipantCount] = useState<number | null>(null);
   const [liveMediaByParticipantId, setLiveMediaByParticipantId] = useState<Record<string, ParticipantMediaIndicators>>(
     {},
+  );
+  const [realtimeSnapshot, setRealtimeSnapshot] = useState<RealtimeRoomSnapshot | null>(null);
+  const [realtimeSocketStatus, setRealtimeSocketStatus] = useState<RealtimeSocketStatus>(
+    REALTIME_BASE_URL ? "disconnected" : "unavailable",
   );
   const activeMeetingSessionRef = useRef<{ meetingId: string; participantId: string } | null>(null);
   const autoJoinKeyRef = useRef<string | null>(null);
@@ -93,6 +117,8 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const roomRefreshQueuedRef = useRef(false);
   const roomRefreshTimeoutRef = useRef<number | null>(null);
   const lastSuccessfulRoomRefreshAtRef = useRef(0);
+  const realtimeHelloKeyRef = useRef<string | null>(null);
+  const realtimeSocketRef = useRef<WebSocket | null>(null);
   const sessionRef = useRef(props.session);
   const suppressGuestPromptRef = useRef(false);
 
@@ -155,12 +181,16 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     setServiceMessage(null);
     setHasDirectJoinLoaderYielded(false);
     setParticipantId(null);
+    setActiveMeetingTool(null);
+    setIsToolsLauncherOpen(false);
     setLiveStageParticipantCount(null);
     setLiveMediaByParticipantId({});
+    setRealtimeSnapshot(null);
     setGuestModalOpen(false);
     activeMeetingSessionRef.current = null;
     autoJoinKeyRef.current = null;
     lastLeaveRequestKeyRef.current = null;
+    realtimeHelloKeyRef.current = null;
 
     if (options?.clearGuestDisplayName) {
       setGuestDisplayName("");
@@ -221,7 +251,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
         roomRefreshFailureCountRef.current >= 2 ||
         Date.now() - lastSuccessfulRoomRefreshAtRef.current >= ROOM_REFRESH_WARNING_GRACE_MS
       ) {
-        setServiceMessage("Connection to meeting services was interrupted. Retrying in the background.");
+        setServiceMessage(MEETING_SERVICE_RETRYING_MESSAGE);
       }
     }
   });
@@ -298,8 +328,12 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     setHasDirectJoinLoaderYielded(false);
     setIsJoinLoaderMounted(true);
     setParticipantId(null);
+    setActiveMeetingTool(null);
+    setIsToolsLauncherOpen(false);
     setLiveStageParticipantCount(null);
     setLiveMediaByParticipantId({});
+    setRealtimeSnapshot(null);
+    realtimeHelloKeyRef.current = null;
     setGuestModalOpen(false);
     setLoadState({ status: "loading" });
 
@@ -314,6 +348,10 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const currentParticipant = participantId
     ? participants.find((entry) => entry.participantId === participantId) ?? null
     : null;
+  const participantDisplayName =
+    currentParticipant?.displayName ??
+    (props.session?.authenticated ? getSessionDisplayName(props.session) : guestDisplayName.trim() || "Guest User");
+  const participantRole = currentParticipant?.role ?? props.session?.actor.workspaceRole ?? "participant";
 
   useEffect(() => {
     if (suppressGuestPromptRef.current) {
@@ -332,9 +370,11 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     }
 
     if (currentParticipant.presence === "reconnecting") {
-      setServiceMessage((current) => current ?? "Connection to meeting services was interrupted. Reconnecting...");
+      setServiceMessage((current) => current ?? MEETING_SERVICE_RECONNECTING_MESSAGE);
       return;
     }
+
+    setServiceMessage(clearMeetingServiceInterruption);
 
     if (joinState === "lobby" && currentParticipant.presence === "active") {
       setJoinState("direct");
@@ -368,7 +408,63 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       setParticipantId(null);
       setJoinState("idle");
       setJoinMessage("Meeting connection expired. Rejoining...");
+      setServiceMessage(null);
+      return;
     }
+
+    if (participant.presence === "reconnecting") {
+      setServiceMessage(MEETING_SERVICE_RECONNECTING_MESSAGE);
+      return;
+    }
+
+    setServiceMessage(clearMeetingServiceInterruption);
+  });
+
+  const sendRealtimeHello = useEffectEvent(() => {
+    const socket = realtimeSocketRef.current;
+    if (
+      !socket ||
+      socket.readyState !== WebSocket.OPEN ||
+      !meeting?.id ||
+      !participantId ||
+      joinState !== "direct" ||
+      !currentParticipant
+    ) {
+      return;
+    }
+
+    const helloKey = `${meeting.id}:${participantId}:${participantDisplayName}:${participantRole}`;
+    if (realtimeHelloKeyRef.current === helloKey) {
+      return;
+    }
+
+    realtimeHelloKeyRef.current = helloKey;
+    socket.send(
+      JSON.stringify({
+        type: "hello",
+        payload: {
+          displayName: participantDisplayName,
+          meetingInstanceId: meeting.id,
+          participantId,
+          role: participantRole,
+        },
+      }),
+    );
+  });
+
+  const sendWhiteboardStroke = useEffectEvent((stroke: WhiteboardStroke): boolean => {
+    const socket = realtimeSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || joinState !== "direct" || !participantId) {
+      return false;
+    }
+
+    socket.send(
+      JSON.stringify({
+        type: "whiteboard.stroke.upsert",
+        payload: { stroke },
+      }),
+    );
+    return true;
   });
 
   useEffect(() => {
@@ -414,6 +510,9 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
 
   useEffect(() => {
     if (!meeting?.id || !REALTIME_BASE_URL) {
+      realtimeSocketRef.current = null;
+      setRealtimeSocketStatus(REALTIME_BASE_URL ? "disconnected" : "unavailable");
+      setRealtimeSnapshot(null);
       return;
     }
 
@@ -432,9 +531,13 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     };
 
     function connect() {
+      realtimeHelloKeyRef.current = null;
+      setRealtimeSocketStatus("connecting");
       socket = new WebSocket(`${REALTIME_BASE_URL}/v1/rooms/${meetingId}`);
+      realtimeSocketRef.current = socket;
       socket.addEventListener("open", () => {
         reconnectAttempt = 0;
+        setRealtimeSocketStatus("connected");
         clearPingInterval();
         pingIntervalId = window.setInterval(() => {
           if (socket?.readyState === WebSocket.OPEN) {
@@ -442,13 +545,25 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
           }
         }, REALTIME_PING_INTERVAL_MS);
         socket?.send(JSON.stringify({ type: "snapshot.request" }));
+        sendRealtimeHello();
         const scopeId = meetingScopeRef.current;
         void heartbeatMeetingSession(scopeId).finally(() => {
           scheduleRoomRefresh({ immediate: true, scopeId });
         });
       });
       socket.addEventListener("message", (event) => {
-        if (parseRealtimeMessageType(event.data) === "pong") {
+        const message = parseRealtimeMessage(event.data);
+        if (!message || message.type === "pong") {
+          return;
+        }
+
+        if (message.type === "room.snapshot") {
+          setRealtimeSnapshot(message.payload);
+          return;
+        }
+
+        if (message.type === "whiteboard.stroke.upsert") {
+          setRealtimeSnapshot((current) => upsertRealtimeWhiteboardStroke(current, message.payload.stroke));
           return;
         }
 
@@ -459,8 +574,14 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       });
       socket.addEventListener("close", () => {
         clearPingInterval();
+        const isCurrentSocket = realtimeSocketRef.current === socket;
+        if (isCurrentSocket) {
+          realtimeSocketRef.current = null;
+          realtimeHelloKeyRef.current = null;
+          setRealtimeSocketStatus("disconnected");
+        }
         socket = null;
-        if (!closed) {
+        if (!closed && isCurrentSocket) {
           const reconnectDelay = Math.min(
             1_000 * Math.max(1, 2 ** reconnectAttempt),
             REALTIME_RECONNECT_MAX_DELAY_MS,
@@ -489,6 +610,8 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
           reconnectTimeoutId = null;
         }
         connect();
+      } else {
+        sendRealtimeHello();
       }
     };
 
@@ -506,9 +629,16 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       document.removeEventListener("visibilitychange", resumeRealtime);
       window.removeEventListener("focus", resumeRealtime);
       window.removeEventListener("online", resumeRealtime);
+      if (realtimeSocketRef.current === socket) {
+        realtimeSocketRef.current = null;
+      }
       socket?.close();
     };
   }, [meeting?.id]);
+
+  useEffect(() => {
+    sendRealtimeHello();
+  }, [currentParticipant, joinState, meeting?.id, participantDisplayName, participantId, participantRole, sendRealtimeHello]);
 
   useEffect(() => {
     const resumeMeetingSession = () => {
@@ -656,6 +786,8 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   }
 
   function toggleDrawer(nextDrawer: Exclude<ActiveDrawer, null>) {
+    setIsToolsLauncherOpen(false);
+
     if (drawerSwitchTimeoutRef.current) {
       window.clearTimeout(drawerSwitchTimeoutRef.current);
       drawerSwitchTimeoutRef.current = null;
@@ -676,6 +808,21 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     }
 
     setActiveDrawer(nextDrawer);
+  }
+
+  function toggleToolsLauncher() {
+    closeDrawers();
+    setIsToolsLauncherOpen((current) => !current);
+  }
+
+  function openWhiteboardTool() {
+    closeDrawers();
+    setIsToolsLauncherOpen(false);
+    setActiveMeetingTool("whiteboard");
+  }
+
+  function closeActiveTool() {
+    setActiveMeetingTool(null);
   }
 
   function closeDrawers() {
@@ -850,10 +997,6 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
         ["owner", "host", "co_host", "moderator", "presenter"].includes(currentParticipant.role),
     ) ||
     Boolean(meeting?.hostUserId && meeting.hostUserId === props.session?.actor.userId);
-  const participantDisplayName =
-    currentParticipant?.displayName ??
-    (props.session?.authenticated ? getSessionDisplayName(props.session) : guestDisplayName.trim() || "Guest User");
-  const participantRole = currentParticipant?.role ?? props.session?.actor.workspaceRole ?? "participant";
   const shouldConnectMedia = joinState === "direct" && Boolean(currentParticipant && participantId);
   const chatDisabledReason = getChatDisabledReason({
     canManageMeeting,
@@ -905,8 +1048,18 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const isChatOpen = activeDrawer === "chat";
   const isInfoOpen = activeDrawer === "info";
   const isParticipantsOpen = activeDrawer === "participants";
+  const isWhiteboardOpen = activeMeetingTool === "whiteboard";
+  const whiteboardState = realtimeSnapshot?.whiteboard ?? createEmptyWhiteboardState();
+  const whiteboardCollaboratorReady = realtimeSocketStatus === "connected" && Boolean(REALTIME_BASE_URL);
+  const whiteboardDisabledReason =
+    joinState !== "direct" || !participantId || !currentParticipant
+      ? "Join the room to use the whiteboard."
+      : !whiteboardCollaboratorReady
+        ? "Realtime whiteboard is reconnecting."
+        : null;
   const effectiveStageParticipantCount = liveStageParticipantCount ?? activeParticipants.length;
   const immersiveSoloMode = joinState === "direct" && effectiveStageParticipantCount === 1;
+  const shouldUseImmersiveStageSurface = immersiveSoloMode && !isWhiteboardOpen;
   const stageMessages = [
     serviceMessage
       ? { kind: "warning" as const, text: serviceMessage }
@@ -999,7 +1152,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
 
           <div className="meeting-room-stage-layout">
             <section
-              className={`meeting-room-stage-surface${immersiveSoloMode ? " meeting-room-stage-surface--immersive" : ""}`}
+              className={`meeting-room-stage-surface${shouldUseImmersiveStageSurface ? " meeting-room-stage-surface--immersive" : ""}`}
             >
               <MeetingMediaStage
                 activeParticipants={activeParticipants}
@@ -1012,6 +1165,12 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
                       onClick={() => {
                         toggleDrawer("chat");
                       }}
+                    />
+                    <MeetingToolsLauncher
+                      activeTool={activeMeetingTool}
+                      open={isToolsLauncherOpen}
+                      onSelectWhiteboard={openWhiteboardTool}
+                      onToggleOpen={toggleToolsLauncher}
                     />
                     <MeetingControlButton
                       active={isParticipantsOpen}
@@ -1033,7 +1192,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
                 }
                 meetingActive={Boolean(meeting)}
                 meetingId={meeting?.id ?? null}
-                immersiveSoloMode={immersiveSoloMode}
+                immersiveSoloMode={shouldUseImmersiveStageSurface}
                 onConnectionPhaseChange={setMediaConnectionPhase}
                 onLeave={leaveRoom}
                 onLiveMediaStateChange={setLiveMediaByParticipantId}
@@ -1044,6 +1203,17 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
                 screenShareDisabledReason={screenShareDisabledReason}
                 stageMessages={stageMessages}
                 shouldConnect={shouldConnectMedia}
+                toolStage={
+                  isWhiteboardOpen ? (
+                    <MeetingWhiteboardStage
+                      disabledReason={whiteboardDisabledReason}
+                      onClose={closeActiveTool}
+                      onStrokeUpsert={sendWhiteboardStroke}
+                      participantId={participantId}
+                      strokes={whiteboardState.strokes}
+                    />
+                  ) : null
+                }
               />
             </section>
           </div>
@@ -1228,13 +1398,85 @@ function getJoinMessage(
   return "You cannot join this meeting right now.";
 }
 
-function parseRealtimeMessageType(raw: string): string | null {
+type RealtimeClientMessage =
+  | { type: "pong" }
+  | { type: "room.snapshot"; payload: RealtimeRoomSnapshot }
+  | { type: "whiteboard.stroke.upsert"; payload: { stroke: WhiteboardStroke } }
+  | { type: "other" };
+
+function parseRealtimeMessage(raw: string): RealtimeClientMessage | null {
   try {
-    const parsed = JSON.parse(raw) as { type?: string };
-    return typeof parsed.type === "string" ? parsed.type : null;
+    const parsed = JSON.parse(raw) as { payload?: unknown; type?: string };
+    if (parsed.type === "pong") {
+      return { type: "pong" };
+    }
+
+    if (parsed.type === "room.snapshot" && isRealtimeRoomSnapshot(parsed.payload)) {
+      return { type: "room.snapshot", payload: parsed.payload };
+    }
+
+    if (parsed.type === "whiteboard.stroke.upsert" && isWhiteboardStrokePayload(parsed.payload)) {
+      return { type: "whiteboard.stroke.upsert", payload: parsed.payload };
+    }
+
+    return typeof parsed.type === "string" ? { type: "other" } : null;
   } catch {
     return null;
   }
+}
+
+function isRealtimeRoomSnapshot(value: unknown): value is RealtimeRoomSnapshot {
+  return Boolean(value && typeof value === "object" && "whiteboard" in value);
+}
+
+function isWhiteboardStrokePayload(value: unknown): value is { stroke: WhiteboardStroke } {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      "stroke" in value &&
+      value.stroke &&
+      typeof value.stroke === "object",
+  );
+}
+
+function upsertRealtimeWhiteboardStroke(
+  snapshot: RealtimeRoomSnapshot | null,
+  stroke: WhiteboardStroke,
+): RealtimeRoomSnapshot {
+  const baseSnapshot = snapshot ?? createEmptyRealtimeSnapshot();
+  const nextStrokes = baseSnapshot.whiteboard.strokes.filter((entry) => entry.strokeId !== stroke.strokeId);
+  nextStrokes.push(stroke);
+
+  return {
+    ...baseSnapshot,
+    whiteboard: {
+      strokes: nextStrokes,
+      updatedAt: stroke.updatedAt,
+    },
+  };
+}
+
+function createEmptyRealtimeSnapshot(): RealtimeRoomSnapshot {
+  return {
+    meetingInstanceId: null,
+    meetingStatus: null,
+    lockState: "unlocked",
+    recordingState: "idle",
+    participants: {},
+    lobby: [],
+    handsRaised: [],
+    mutedAllAt: null,
+    endedAt: null,
+    lastEventNumber: 0,
+    whiteboard: createEmptyWhiteboardState(),
+  };
+}
+
+function createEmptyWhiteboardState(): RealtimeWhiteboardState {
+  return {
+    strokes: [],
+    updatedAt: null,
+  };
 }
 
 function getChatDisabledReason(input: {

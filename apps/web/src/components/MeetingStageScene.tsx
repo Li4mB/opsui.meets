@@ -13,6 +13,7 @@ export interface MeetingStageParticipantTile {
   audioTrack?: MediaStreamTrack | null;
   displayName: string;
   isSelf?: boolean;
+  participantId?: string | null;
   videoEnabled: boolean;
   videoTrack?: MediaStreamTrack | null;
 }
@@ -123,7 +124,8 @@ export function MeetingStageScene(props: MeetingStageSceneProps) {
                   displayName={tile.displayName}
                   immersive={showImmersiveSoloStage}
                   isSelf={tile.isSelf}
-                  key={`${tile.displayName}-${rowIndex}-${index}`}
+                  key={`${tile.participantId ?? tile.displayName}-${rowIndex}-${index}`}
+                  participantId={tile.participantId}
                   supporting={supportingStage}
                   videoEnabled={tile.videoEnabled}
                   videoTrack={tile.videoTrack}
@@ -143,6 +145,7 @@ function MediaTile(props: {
   displayName: string;
   immersive?: boolean;
   isSelf?: boolean;
+  participantId?: string | null;
   supporting?: boolean;
   videoEnabled: boolean;
   videoTrack?: MediaStreamTrack | null;
