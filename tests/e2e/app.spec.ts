@@ -13,15 +13,50 @@ test("start meeting creates a room and keeps guests on the same room URL", async
 
   await page.getByRole("button", { name: "Start Meeting" }).click();
   await expect(page).toHaveURL(/\/ops-/);
+  await expect(page.locator(".meeting-entry-loader")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Join as a guest" })).toBeVisible();
 
   const roomPath = new URL(page.url()).pathname;
   await page.getByRole("textbox", { name: "Display name" }).fill("Guest Runner");
   await page.getByRole("button", { name: "Enter Room" }).click();
+  await expect(page.locator(".meeting-entry-loader")).toBeVisible();
 
   await expect(page).toHaveURL(new RegExp(`${escapeRegex(roomPath)}$`));
   await expect(page.locator('[role="dialog"]')).toHaveCount(0);
   await expectRoomNotice(page, "You are waiting in the lobby for a host to admit you.");
+});
+
+test("start meeting shows loader immediately before room creation finishes", async ({ page }) => {
+  await page.goto("/");
+
+  let createRoomSeen = false;
+  let releaseCreateRoom: (() => void) | null = null;
+  const createRoomGate = new Promise<void>((resolve) => {
+    releaseCreateRoom = resolve;
+  });
+
+  await page.route("**/v1/rooms", async (route) => {
+    if (route.request().method() !== "POST" || createRoomSeen) {
+      await route.continue();
+      return;
+    }
+
+    createRoomSeen = true;
+    await createRoomGate;
+    await route.continue();
+  });
+
+  await page.getByRole("button", { name: "Start Meeting" }).click();
+
+  await expect.poll(() => createRoomSeen).toBe(true);
+  await expect(page).toHaveURL("/");
+  await expect(page.locator(".meeting-entry-loader")).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Meetings without/i })).toBeHidden();
+
+  releaseCreateRoom?.();
+
+  await expect(page).toHaveURL(/\/ops-/);
+  await expect(page.locator(".meeting-entry-loader")).toBeVisible();
 });
 
 test("join meeting accepts legacy invite links from the landing page", async ({ page }) => {
@@ -53,6 +88,7 @@ test("sign-in page mock auth enables direct room entry and host controls", async
   await expect(page.getByRole("button", { name: "Signed In" })).toBeDisabled();
 
   await page.goto("/ops-signin");
+  await expect(page.locator(".meeting-entry-loader")).toBeVisible();
   await expect(page.locator('[role="dialog"]')).toHaveCount(0);
   await expectSoloImmersiveStage(page);
   await openInfoDrawer(page);
@@ -72,6 +108,7 @@ test("signed-in users can start a meeting from home and enter directly", async (
   await page.getByRole("button", { name: "Start Meeting" }).click();
 
   await expect(page).toHaveURL(/\/ops-/);
+  await expect(page.locator(".meeting-entry-loader")).toBeVisible();
   await expect(page.locator('[role="dialog"]')).toHaveCount(0);
   await expectSoloImmersiveStage(page);
   await openInfoDrawer(page);
@@ -122,10 +159,14 @@ test("screen share control sits beside the camera control in the bottom dock", a
 
   await expectSoloImmersiveStage(page);
 
-  const primaryControls = page.locator(".meeting-control-dock__cluster").first();
-  const dockLabels = await primaryControls.locator(".meeting-control-button__label").allTextContents();
-  expect(dockLabels.slice(0, 3)).toEqual(["Mic Off", "Camera Off", "Share Screen"]);
-  await expect(primaryControls.getByRole("button", { name: "Share Screen" })).toBeVisible();
+  const dock = page.locator(".meeting-control-dock");
+  const dockLabels = await dock.locator(".meeting-control-button").evaluateAll((elements) =>
+    elements.map((element) => element.getAttribute("aria-label")),
+  );
+  expect(dockLabels).toEqual(["Mic Off", "Camera Off", "Share Screen", "Chat", "Participants", "Info", "Leave"]);
+  await expect(dock.locator(".meeting-control-dock__separator")).toHaveCount(2);
+  await expect(dock.getByRole("button", { name: "Share Screen" })).toBeVisible();
+  await expect(dock.locator(".meeting-control-button__label").first()).not.toBeVisible();
   await expect(page.locator(".meeting-share-picker")).toHaveCount(0);
 });
 
@@ -422,7 +463,7 @@ test("mobile sidebar opens and closes without scrolling the page", async ({ page
   await expectNoPageScroll(page);
 });
 
-test("mobile meeting room stays contained and keeps the control dock on a single row after the real join wait", async ({ browser }) => {
+test("mobile meeting room keeps dock contained with media controls on first row and actions on second row", async ({ browser }) => {
   const context = await browser.newContext({
     ...devices["iPhone 13"],
   });
@@ -455,7 +496,11 @@ test("mobile meeting room stays contained and keeps the control dock on a single
     expect(runtimeBox.y).toBeGreaterThanOrEqual(surfaceBox.y - 2);
     expect(runtimeBox.x + runtimeBox.width).toBeLessThanOrEqual(surfaceBox.x + surfaceBox.width + 2);
     expect(runtimeBox.y + runtimeBox.height).toBeLessThanOrEqual(surfaceBox.y + surfaceBox.height + 2);
-    expect(Math.max(...buttonTopOffsets) - Math.min(...buttonTopOffsets)).toBeLessThanOrEqual(8);
+    const mediaRowOffsets = buttonTopOffsets.slice(0, 3);
+    const actionRowOffsets = buttonTopOffsets.slice(3);
+    expect(Math.max(...mediaRowOffsets) - Math.min(...mediaRowOffsets)).toBeLessThanOrEqual(8);
+    expect(Math.max(...actionRowOffsets) - Math.min(...actionRowOffsets)).toBeLessThanOrEqual(8);
+    expect(Math.min(...actionRowOffsets) - Math.max(...mediaRowOffsets)).toBeGreaterThanOrEqual(16);
     await expect(page.locator(".meeting-control-dock")).toBeVisible();
   } finally {
     await context.close();
@@ -493,6 +538,7 @@ async function expectSoloImmersiveStage(page: Page) {
   await waitForMeetingReady(page);
 
   const canvas = page.locator(".meeting-stage-canvas");
+  const dock = page.locator(".meeting-control-dock");
   const stageSurface = page.locator(".meeting-room-stage-surface");
   const firstControlSurfaceChild = page.locator(".meeting-control-surface > *").first();
   const tile = page.locator(".participant-tile--immersive, .participant-tile--fallback-summary-solo").first();
@@ -501,19 +547,21 @@ async function expectSoloImmersiveStage(page: Page) {
   await expect(canvas).toHaveAttribute("data-stage-columns", "1");
   await expect(tile).toBeVisible();
 
-  const [canvasBox, stageSurfaceBox, firstControlSurfaceChildBox, tileBox] = await Promise.all([
+  const [canvasBox, dockBox, stageSurfaceBox, firstControlSurfaceChildBox, tileBox] = await Promise.all([
     canvas.boundingBox(),
+    dock.boundingBox(),
     stageSurface.boundingBox(),
     firstControlSurfaceChild.boundingBox(),
     tile.boundingBox(),
   ]);
-  if (!canvasBox || !stageSurfaceBox || !firstControlSurfaceChildBox || !tileBox) {
+  if (!canvasBox || !dockBox || !stageSurfaceBox || !firstControlSurfaceChildBox || !tileBox) {
     throw new Error("Expected solo meeting stage to expose measurable geometry");
   }
 
   const tileRatio = tileBox.width / tileBox.height;
   const topGap = tileBox.y - stageSurfaceBox.y;
   const bottomGap = firstControlSurfaceChildBox.y - (tileBox.y + tileBox.height);
+  const dockBottomGap = stageSurfaceBox.y + stageSurfaceBox.height - (dockBox.y + dockBox.height);
   expect(tileRatio).toBeGreaterThan(1.72);
   expect(tileRatio).toBeLessThan(1.84);
   expect(tileBox.width).toBeLessThanOrEqual(canvasBox.width - 8);
@@ -523,11 +571,13 @@ async function expectSoloImmersiveStage(page: Page) {
   expect(topGap).toBeLessThanOrEqual(8);
   expect(bottomGap).toBeGreaterThanOrEqual(4);
   expect(bottomGap).toBeLessThanOrEqual(8);
+  expect(dockBottomGap).toBeGreaterThanOrEqual(10);
   await expect(page.getByRole("heading", { name: /Meeting OPS-/i })).toHaveCount(0);
   await expect(page.getByText("Waiting for more people")).toHaveCount(0);
 }
 
 async function waitForMeetingReady(page: Page) {
+  await page.locator(".meeting-entry-loader").waitFor({ state: "detached", timeout: 25_000 }).catch(() => {});
   await expect(page.locator('[role="dialog"]')).toHaveCount(0, { timeout: 25_000 });
   await expect(page.locator(".meeting-stage-runtime")).toBeVisible({ timeout: 25_000 });
   await expect(page.locator(".meeting-control-dock")).toBeVisible({ timeout: 25_000 });

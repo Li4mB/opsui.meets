@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ChangeEvent, type FormEvent } from "react";
 import type {
   DirectMessageAttachment,
   DirectMessageAttachmentKind,
   DirectMessageMessage,
+  ProfileVisualAsset,
   DirectMessageSearchResult,
   DirectMessageThreadDetail,
   DirectMessageThreadSummary,
@@ -429,9 +430,12 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
                     }}
                     type="button"
                   >
-                    <div className="dm-avatar dm-avatar--md">
-                      {getInitials(result.displayName)}
-                    </div>
+                    <DirectMessageAvatar
+                      displayName={result.displayName}
+                      isOnline={result.isOnline}
+                      size="md"
+                      visual={result.avatarVisual}
+                    />
                     <div className="dm-search-result__info">
                       <span className="dm-search-result__name">{result.displayName}</span>
                       <span className="dm-search-result__username">@{result.username}</span>
@@ -464,12 +468,12 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
                   }}
                   type="button"
                 >
-                  <div className="dm-avatar dm-avatar--md">
-                    {getInitials(thread.participant.displayName)}
-                    {"isOnline" in thread.participant && (thread.participant as Record<string, unknown>).isOnline ? (
-                      <div className="dm-avatar__online" />
-                    ) : null}
-                  </div>
+                  <DirectMessageAvatar
+                    displayName={thread.participant.displayName}
+                    isOnline={thread.participant.isOnline}
+                    size="md"
+                    visual={thread.participant.avatarVisual}
+                  />
                   <div className="dm-thread-item__info">
                     <div className="dm-thread-item__top">
                       <span className="dm-thread-item__name">{thread.participant.displayName}</span>
@@ -503,11 +507,12 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
               {/* Conversation Header */}
               <div className="dm-conversation__header">
                 <div className="dm-conversation__user">
-                  <div className="dm-avatar dm-avatar--lg">
-                    {selectedThread
-                      ? getInitials(selectedThread.participant.displayName)
-                      : ""}
-                  </div>
+                  <DirectMessageAvatar
+                    displayName={selectedThread?.participant.displayName ?? ""}
+                    isOnline={selectedThread?.participant.isOnline}
+                    size="lg"
+                    visual={selectedThread?.participant.avatarVisual}
+                  />
                   <div className="dm-conversation__user-info">
                     <p className="dm-conversation__eyebrow">Conversation</p>
                     <div className="dm-conversation__name">
@@ -910,6 +915,37 @@ function DirectMessageAttachmentCard(props: { attachment: DirectMessageAttachmen
 
 /* ── Helper Functions ────────────────────────────── */
 
+function DirectMessageAvatar(props: {
+  displayName: string;
+  isOnline?: boolean;
+  size: "md" | "lg";
+  visual?: ProfileVisualAsset;
+}) {
+  const initials = getInitials(props.displayName);
+  const visual = props.visual;
+  const showImage = visual?.mode === "image" && Boolean(visual.imageDataUrl);
+
+  return (
+    <div className={`dm-avatar dm-avatar--${props.size}`}>
+      <div
+        className={`dm-avatar__surface${showImage ? " dm-avatar__surface--image" : ""}`}
+        style={{ "--dm-avatar-color": visual?.color ?? "#4A5568" } as CSSProperties}
+      >
+        {showImage ? (
+          <img
+            alt=""
+            src={visual?.imageDataUrl}
+            style={{ transform: `scale(${getAvatarVisualScale(visual)})` }}
+          />
+        ) : (
+          initials
+        )}
+      </div>
+      {props.isOnline ? <div className="dm-avatar__online" /> : null}
+    </div>
+  );
+}
+
 function getInitials(displayName: string): string {
   if (!displayName) return "?";
   const parts = displayName.trim().split(/\s+/);
@@ -917,6 +953,14 @@ function getInitials(displayName: string): string {
     return (parts[0]![0] + parts[parts.length - 1]![0]).toUpperCase();
   }
   return displayName.slice(0, 2).toUpperCase();
+}
+
+function getAvatarVisualScale(visual: ProfileVisualAsset | undefined): number {
+  if (!visual) {
+    return 1;
+  }
+
+  return 1 + (Math.min(100, Math.max(0, visual.zoom)) / 100) * 1.5;
 }
 
 function sumUnreadCount(threads: DirectMessageThreadSummary[]) {

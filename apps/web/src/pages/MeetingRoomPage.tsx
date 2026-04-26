@@ -9,7 +9,8 @@ import type {
 import { MeetingConversationPanel } from "../components/MeetingConversationPanel";
 import { MeetingControlButton } from "../components/MeetingControlButton";
 import { MeetingInfoPanel } from "../components/MeetingInfoPanel";
-import { MeetingMediaStage } from "../components/MeetingMediaStage";
+import { MeetingJoinLoader } from "../components/MeetingJoinLoader";
+import { MeetingMediaStage, type MediaConnectionPhase } from "../components/MeetingMediaStage";
 import {
   type ParticipantMediaIndicators,
   MeetingParticipantsPanel,
@@ -65,12 +66,16 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
   const [activeDrawer, setActiveDrawer] = useState<ActiveDrawer>(null);
   const [joinState, setJoinState] = useState<JoinUiState>("idle");
+  const [mediaConnectionPhase, setMediaConnectionPhase] = useState<MediaConnectionPhase>("idle");
   const [guestDisplayName, setGuestDisplayName] = useState("");
   const [guestModalOpen, setGuestModalOpen] = useState(false);
   const [joinMessage, setJoinMessage] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [serviceMessage, setServiceMessage] = useState<string | null>(null);
   const [isActionBusy, setIsActionBusy] = useState(false);
+  const [hasDirectJoinLoaderYielded, setHasDirectJoinLoaderYielded] = useState(false);
+  const [isJoinLoaderMounted, setIsJoinLoaderMounted] = useState(true);
+  const [joinLoaderCycleKey, setJoinLoaderCycleKey] = useState(0);
   const [participantId, setParticipantId] = useState<string | null>(null);
   const [liveStageParticipantCount, setLiveStageParticipantCount] = useState<number | null>(null);
   const [liveMediaByParticipantId, setLiveMediaByParticipantId] = useState<Record<string, ParticipantMediaIndicators>>(
@@ -81,6 +86,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const drawerSwitchTimeoutRef = useRef<number | null>(null);
   const lastLeaveRequestKeyRef = useRef<string | null>(null);
   const meetingCodeRef = useRef(props.meetingCode);
+  const joinLoaderVisibleRef = useRef(true);
   const meetingScopeRef = useRef(0);
   const roomRefreshFailureCountRef = useRef(0);
   const roomRefreshPromiseRef = useRef<Promise<void> | null>(null);
@@ -143,9 +149,11 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const resetMeetingSessionState = useEffectEvent((options?: { clearGuestDisplayName?: boolean }) => {
     closeDrawers();
     setJoinState("idle");
+    setMediaConnectionPhase("idle");
     setJoinMessage(null);
     setActionMessage(null);
     setServiceMessage(null);
+    setHasDirectJoinLoaderYielded(false);
     setParticipantId(null);
     setLiveStageParticipantCount(null);
     setLiveMediaByParticipantId({});
@@ -282,10 +290,13 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     suppressGuestPromptRef.current = false;
     autoJoinKeyRef.current = null;
     setJoinState("idle");
+    setMediaConnectionPhase("idle");
     setActiveDrawer(null);
     setJoinMessage(null);
     setActionMessage(null);
     setServiceMessage(null);
+    setHasDirectJoinLoaderYielded(false);
+    setIsJoinLoaderMounted(true);
     setParticipantId(null);
     setLiveStageParticipantCount(null);
     setLiveMediaByParticipantId({});
@@ -679,13 +690,102 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     exitMeetingToHome();
   }
 
+  const directJoinLoaderIdentity = joinState === "direct" && participantId ? `${meeting?.id ?? "meeting"}:${participantId}` : null;
+  const waitingForGuestPrompt =
+    loadState.status === "ready" &&
+    Boolean(meeting) &&
+    !props.isAuthLoading &&
+    !props.session?.authenticated &&
+    !participantId &&
+    !joinMessage &&
+    joinState === "idle" &&
+    !guestModalOpen;
+  const waitingForSignedInAutoJoin =
+    loadState.status === "ready" &&
+    Boolean(meeting) &&
+    !props.isAuthLoading &&
+    Boolean(props.session?.authenticated) &&
+    !participantId &&
+    !joinMessage &&
+    joinState === "idle";
+  const waitingForAuthResolution =
+    loadState.status === "ready" &&
+    Boolean(meeting) &&
+    props.isAuthLoading &&
+    !participantId &&
+    !joinMessage &&
+    joinState === "idle";
+  const waitingForJoinSubmit = joinState === "joining";
+  const waitingForDirectJoinHandoff = joinState === "direct" && !hasDirectJoinLoaderYielded;
+  const shouldShowMeetingJoinLoader =
+    loadState.status === "loading" ||
+    waitingForAuthResolution ||
+    waitingForGuestPrompt ||
+    waitingForSignedInAutoJoin ||
+    waitingForJoinSubmit ||
+    waitingForDirectJoinHandoff;
+
+  useEffect(() => {
+    setHasDirectJoinLoaderYielded(false);
+  }, [directJoinLoaderIdentity]);
+
+  useEffect(() => {
+    if (joinState !== "direct") {
+      setHasDirectJoinLoaderYielded(false);
+      return;
+    }
+
+    if (
+      mediaConnectionPhase === "requesting-device-access" ||
+      mediaConnectionPhase === "connected" ||
+      mediaConnectionPhase === "warning" ||
+      mediaConnectionPhase === "error"
+    ) {
+      setHasDirectJoinLoaderYielded(true);
+    }
+  }, [joinState, mediaConnectionPhase]);
+
+  useEffect(() => {
+    let timeoutId: number | null = null;
+
+    if (shouldShowMeetingJoinLoader) {
+      setIsJoinLoaderMounted(true);
+      if (!joinLoaderVisibleRef.current) {
+        setJoinLoaderCycleKey((current) => current + 1);
+      }
+    } else if (joinLoaderVisibleRef.current) {
+      timeoutId = window.setTimeout(() => {
+        setIsJoinLoaderMounted(false);
+      }, 280);
+    }
+
+    joinLoaderVisibleRef.current = shouldShowMeetingJoinLoader;
+
+    return () => {
+      if (timeoutId !== null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [shouldShowMeetingJoinLoader]);
+
+  function handleJoinLoaderCancel() {
+    if (participantId || activeMeetingSessionRef.current) {
+      exitMeetingToHome();
+      return;
+    }
+
+    suppressGuestPromptRef.current = true;
+    props.onNavigate("/", { replace: true });
+  }
+
   if (loadState.status === "loading") {
     return (
-      <section className="page page--centered">
-        <div className="status-card">
-          <div className="eyebrow">Meeting</div>
-          <h1 className="status-card__title">Opening room...</h1>
-        </div>
+      <section className="page page--room page--room-loader-only">
+        <MeetingJoinLoader
+          active
+          meetingCode={props.meetingCode}
+          onCancel={handleJoinLoaderCancel}
+        />
       </section>
     );
   }
@@ -822,9 +922,20 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   return (
     <>
       <section className={`page page--room${guestModalOpen ? " page--obscured" : ""}`}>
+        {isJoinLoaderMounted ? (
+          <MeetingJoinLoader
+            active={shouldShowMeetingJoinLoader}
+            className="meeting-entry-loader--overlay"
+            key={joinLoaderCycleKey}
+            meetingCode={props.meetingCode}
+            onCancel={handleJoinLoaderCancel}
+          />
+        ) : null}
+
         <div
           className={[
             "meeting-room-shell",
+            shouldShowMeetingJoinLoader ? " meeting-room-shell--loader-hidden" : "",
             isChatOpen ? " meeting-room-shell--chat-open" : "",
             isInfoOpen ? " meeting-room-shell--info-open" : "",
             isParticipantsOpen ? " meeting-room-shell--participants-open" : "",
@@ -923,6 +1034,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
                 meetingActive={Boolean(meeting)}
                 meetingId={meeting?.id ?? null}
                 immersiveSoloMode={immersiveSoloMode}
+                onConnectionPhaseChange={setMediaConnectionPhase}
                 onLeave={leaveRoom}
                 onLiveMediaStateChange={setLiveMediaByParticipantId}
                 onLiveParticipantCountChange={setLiveStageParticipantCount}

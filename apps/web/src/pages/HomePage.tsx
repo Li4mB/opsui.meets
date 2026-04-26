@@ -1,61 +1,24 @@
-import { useState } from "react";
-import { createInstantMeeting, createRoom } from "../lib/commands";
-import { formatMeetingCodeLabel, generateMeetingCode, normalizeMeetingCode } from "../lib/meeting-code";
+import { useEffect, useState } from "react";
+import { normalizeMeetingCode } from "../lib/meeting-code";
 
 interface HomePageProps {
   onNavigate(pathname: string): void;
+  onStartMeeting(): void;
+  startMeetingError?: string | null;
+  startMeetingPending?: boolean;
 }
 
 export function HomePage(props: HomePageProps) {
   const [joinInput, setJoinInput] = useState("");
   const [joinError, setJoinError] = useState<string | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [isBusy, setIsBusy] = useState(false);
 
-  async function handleStartMeeting() {
-    setIsBusy(true);
-    setStatusMessage(null);
-
-    const room = await createRoomWithRetry();
-
-    if (!room) {
-      setIsBusy(false);
-      setStatusMessage("We could not create a room right now.");
+  useEffect(() => {
+    if (!props.startMeetingPending) {
       return;
     }
 
-    const meeting = await createInstantMeeting({
-      roomId: room.id,
-      startsAt: new Date().toISOString(),
-      title: `Meeting ${formatMeetingCodeLabel(room.slug)}`,
-    });
-
-    setIsBusy(false);
-
-    if (!meeting) {
-      setStatusMessage("The room exists, but the meeting could not be started.");
-      return;
-    }
-
-    props.onNavigate(`/${room.slug}`);
-  }
-
-  async function createRoomWithRetry() {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const proposedCode = generateMeetingCode();
-      const room = await createRoom({
-        isPersistent: false,
-        name: proposedCode,
-        roomType: "instant",
-      });
-
-      if (room) {
-        return room;
-      }
-    }
-
-    return null;
-  }
+    setJoinError(null);
+  }, [props.startMeetingPending]);
 
   function handleJoin() {
     const nextCode = normalizeMeetingCode(joinInput);
@@ -91,9 +54,9 @@ export function HomePage(props: HomePageProps) {
           {/* Start Meeting Button with Scribble */}
           <button
             className="home-button home-button--start"
-            disabled={isBusy}
+            disabled={props.startMeetingPending}
             onClick={() => {
-              void handleStartMeeting();
+              props.onStartMeeting();
             }}
             type="button"
           >
@@ -103,7 +66,7 @@ export function HomePage(props: HomePageProps) {
               className="home-button__scribble"
               draggable={false}
             />
-            <span>{isBusy ? "Starting..." : "Start Meeting"}</span>
+            <span>{props.startMeetingPending ? "Starting..." : "Start Meeting"}</span>
           </button>
 
           {/* Divider line */}
@@ -140,7 +103,7 @@ export function HomePage(props: HomePageProps) {
 
         {/* Error / status messages */}
         {joinError ? <p className="home-feedback home-feedback--error">{joinError}</p> : null}
-        {statusMessage ? <p className="home-feedback">{statusMessage}</p> : null}
+        {props.startMeetingError ? <p className="home-feedback">{props.startMeetingError}</p> : null}
 
         {/* Subtle decorative elements */}
         <div className="home-hero__decoration">

@@ -21,6 +21,7 @@ import type { Env } from "../types";
 const MAX_DIRECT_MESSAGE_LENGTH = 2_000;
 const DIRECT_MESSAGE_PREVIEW_LIMIT = 120;
 const SEARCH_RESULT_LIMIT = 20;
+const WEBSITE_ACTIVE_WINDOW_MS = 75_000;
 const MAX_DIRECT_MESSAGE_ATTACHMENTS = 10;
 const MAX_DIRECT_MESSAGE_ATTACHMENT_SIZE_BYTES = 100 * 1024 * 1024;
 const GENERIC_ATTACHMENT_CONTENT_TYPES = new Set([
@@ -643,6 +644,8 @@ function buildSearchResult(user: {
   firstName: string;
   lastName: string;
   displayName: string;
+  profileVisuals?: { avatar?: DirectMessageSearchResult["avatarVisual"] };
+  websiteLastSeenAt?: string;
 }): DirectMessageSearchResult {
   return {
     userId: user.id,
@@ -650,6 +653,8 @@ function buildSearchResult(user: {
     firstName: user.firstName,
     lastName: user.lastName,
     displayName: user.displayName,
+    avatarVisual: user.profileVisuals?.avatar,
+    isOnline: isUserWebsiteActive(user.websiteLastSeenAt),
   };
 }
 
@@ -817,6 +822,19 @@ function getUnreadCount(
   return messages
     .slice(lastReadIndex + 1)
     .filter((message) => message.senderUserId !== currentUserId).length;
+}
+
+function isUserWebsiteActive(websiteLastSeenAt: string | undefined): boolean {
+  if (!websiteLastSeenAt) {
+    return false;
+  }
+
+  const lastSeenAt = Date.parse(websiteLastSeenAt);
+  if (!Number.isFinite(lastSeenAt)) {
+    return false;
+  }
+
+  return Date.now() - lastSeenAt <= WEBSITE_ACTIVE_WINDOW_MS;
 }
 
 function parseAttachmentFiles(value: unknown): DirectMessageAttachmentFileInput[] {

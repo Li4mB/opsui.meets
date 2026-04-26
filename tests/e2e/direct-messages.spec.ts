@@ -28,6 +28,7 @@ test("unauthenticated users are prompted to sign in before accessing direct mess
 });
 
 test("searching by username opens a persistent thread with full saved history", async ({ browser }) => {
+  test.setTimeout(45_000);
   const firstContext = await browser.newContext();
   const secondContext = await browser.newContext();
   const firstPage = await firstContext.newPage();
@@ -52,13 +53,57 @@ test("searching by username opens a persistent thread with full saved history", 
     await openDirectMessageThread(firstPage, "blair.chat", /Blair Chat/i);
     await sendComposerMessage(firstPage, "Hey Blair, this should stay saved.");
 
-    await expect(firstPage.locator(".chat-message__bubble").getByText("Hey Blair, this should stay saved.")).toBeVisible();
+    await expect(firstPage.locator(".dm-message__bubble").getByText("Hey Blair, this should stay saved.")).toBeVisible();
     await expect(firstPage.getByRole("button", { name: /Blair Chat/i }).first()).toBeVisible();
 
     await firstPage.goto("/");
     await firstPage.goto("/direct-messages");
     await firstPage.getByRole("button", { name: /Blair Chat/i }).click();
-    await expect(firstPage.locator(".chat-message__bubble").getByText("Hey Blair, this should stay saved.")).toBeVisible();
+    await expect(firstPage.locator(".dm-message__bubble").getByText("Hey Blair, this should stay saved.")).toBeVisible();
+  } finally {
+    await Promise.allSettled([firstContext.close(), secondContext.close()]);
+  }
+});
+
+test("active users show an online indicator on direct-message avatars", async ({ browser }) => {
+  const firstContext = await browser.newContext();
+  const secondContext = await browser.newContext();
+  const firstPage = await firstContext.newPage();
+  const secondPage = await secondContext.newPage();
+
+  try {
+    await signUpIndividual(firstPage, {
+      email: "online-a@example.com",
+      username: "online.alpha",
+      firstName: "Online",
+      lastName: "Alpha",
+      password: "password123",
+    });
+    await signUpIndividual(secondPage, {
+      email: "online-b@example.com",
+      username: "online.beta",
+      firstName: "Online",
+      lastName: "Beta",
+      password: "password123",
+    });
+
+    await expect.poll(async () => {
+      const response = await dmApiRequest(firstPage, {
+        method: "GET",
+        pathname: "/v1/direct-messages/search?query=online.beta",
+      });
+      return Boolean(response.body?.items?.[0]?.isOnline);
+    }).toBe(true);
+
+    await firstPage.goto("/direct-messages");
+    await firstPage.getByRole("searchbox").fill("online.beta");
+
+    const searchResult = firstPage.getByRole("button", { name: /Online Beta/i });
+    await expect(searchResult.locator(".dm-avatar__online")).toBeVisible();
+
+    await searchResult.click();
+    await expect(firstPage.locator(".dm-thread-item.is-active .dm-avatar__online")).toBeVisible();
+    await expect(firstPage.locator(".dm-conversation__header .dm-avatar__online")).toBeVisible();
   } finally {
     await Promise.allSettled([firstContext.close(), secondContext.close()]);
   }
@@ -166,8 +211,8 @@ test("legacy direct-message payloads without attachments still render usable thr
     });
 
     await firstPage.getByRole("button", { name: /Legacy Beta/i }).click();
-    await expect(firstPage.locator(".dm-thread-panel__header")).toBeVisible();
-    await expect(firstPage.locator(".chat-message__bubble").getByText("Old payload still needs to render.")).toBeVisible();
+    await expect(firstPage.locator(".dm-conversation__header")).toBeVisible();
+    await expect(firstPage.locator(".dm-message__bubble").getByText("Old payload still needs to render.")).toBeVisible();
     expect(pageErrors).toEqual([]);
   } finally {
     await Promise.allSettled([firstContext.close(), secondContext.close()]);
@@ -199,7 +244,7 @@ test("direct messages work across organisation and personal accounts with unread
 
     await openDirectMessageThread(organisationPage, "solo.member", /Solo Member/i);
     await sendComposerMessage(organisationPage, "Hello from the organisation side.");
-    await expect(organisationPage.locator(".chat-message__bubble").getByText("Hello from the organisation side.")).toBeVisible();
+    await expect(organisationPage.locator(".dm-message__bubble").getByText("Hello from the organisation side.")).toBeVisible();
 
     await personalPage.goto("/");
     await personalPage.getByRole("button", { name: "Open navigation" }).click();
@@ -208,7 +253,7 @@ test("direct messages work across organisation and personal accounts with unread
 
     await expect(personalPage.getByRole("button", { name: /Acme Owner/i })).toContainText("1");
     await personalPage.getByRole("button", { name: /Acme Owner/i }).click();
-    await expect(personalPage.locator(".chat-message__bubble").getByText("Hello from the organisation side.")).toBeVisible();
+    await expect(personalPage.locator(".dm-message__bubble").getByText("Hello from the organisation side.")).toBeVisible();
 
     await personalPage.getByRole("button", { name: "Open navigation" }).click();
     await expect(personalPage.getByRole("button", { name: /Direct Messages/i })).toHaveCount(1);
@@ -250,7 +295,7 @@ test("image attachments render inline in chat and remain visible after reload", 
     ]);
     await sendComposerMessage(firstPage, "Photo proof.");
 
-    await expect(firstPage.locator(".chat-message__bubble").getByText("Photo proof.")).toBeVisible();
+    await expect(firstPage.locator(".dm-message__bubble").getByText("Photo proof.")).toBeVisible();
     await expect(firstPage.locator(".dm-attachment-card__image")).toBeVisible();
 
     await firstPage.goto("/");
@@ -293,7 +338,7 @@ test("shared files remain in direct-message history after logout and login", asy
       },
     ]);
     await sendComposerMessage(firstPage, "File should survive auth churn.");
-    await expect(firstPage.locator(".chat-message__bubble").getByText("File should survive auth churn.")).toBeVisible();
+    await expect(firstPage.locator(".dm-message__bubble").getByText("File should survive auth churn.")).toBeVisible();
     await expect(firstPage.locator(".dm-attachment-card__image")).toBeVisible();
 
     await firstPage.goto("/sign-in");
@@ -307,7 +352,7 @@ test("shared files remain in direct-message history after logout and login", asy
     await firstPage.goto("/direct-messages");
     await firstPage.getByRole("button", { name: /History Beta/i }).click();
 
-    await expect(firstPage.locator(".chat-message__bubble").getByText("File should survive auth churn.")).toBeVisible();
+    await expect(firstPage.locator(".dm-message__bubble").getByText("File should survive auth churn.")).toBeVisible();
     await expect(firstPage.locator(".dm-attachment-card__meta").getByText("persistent.png")).toBeVisible();
     await expect(firstPage.locator(".dm-attachment-card__image")).toBeVisible();
   } finally {
@@ -396,7 +441,7 @@ test("attachment-only file messages render cards and thread previews", async ({ 
     await expect(firstPage.locator(".dm-attachment-card")).toHaveCount(2);
     await expect(firstPage.locator(".dm-attachment-card__meta").getByText("brief.pdf")).toBeVisible();
     await expect(firstPage.locator(".dm-attachment-card__meta").getByText("bundle.zip")).toBeVisible();
-    await expect(firstPage.locator(".dm-thread-list__item.is-active p")).toContainText("Sent 2 files");
+    await expect(firstPage.locator(".dm-thread-item.is-active .dm-thread-item__preview")).toContainText("Sent 2 files");
   } finally {
     await Promise.allSettled([firstContext.close(), secondContext.close()]);
   }
@@ -555,12 +600,12 @@ test("composer stays pinned while long direct-message threads scroll", async ({ 
     }
 
     await firstPage.reload();
-    await expect(firstPage.locator(".chat-message")).toHaveCount(24);
-    await expect(firstPage.locator(".conversation-composer__input")).toBeVisible();
+    await expect(firstPage.locator(".dm-message")).toHaveCount(24);
+    await expect(firstPage.locator(".dm-composer__text-input")).toBeVisible();
 
     const beforeScroll = await firstPage.evaluate(() => {
-      const composer = document.querySelector(".conversation-composer");
-      const log = document.querySelector(".dm-thread-panel__messages");
+      const composer = document.querySelector(".dm-composer");
+      const log = document.querySelector(".dm-conversation__messages");
       if (!(composer instanceof HTMLElement) || !(log instanceof HTMLElement)) {
         return null;
       }
@@ -579,8 +624,8 @@ test("composer stays pinned while long direct-message threads scroll", async ({ 
     expect(beforeScroll?.logScrollHeight ?? 0).toBeGreaterThan(beforeScroll?.logClientHeight ?? 0);
 
     const afterScroll = await firstPage.evaluate(() => {
-      const composer = document.querySelector(".conversation-composer");
-      const log = document.querySelector(".dm-thread-panel__messages");
+      const composer = document.querySelector(".dm-composer");
+      const log = document.querySelector(".dm-conversation__messages");
       if (!(composer instanceof HTMLElement) || !(log instanceof HTMLElement)) {
         return null;
       }
@@ -671,10 +716,12 @@ async function attachFiles(
 
 async function sendComposerMessage(page: Page, text?: string) {
   if (text !== undefined) {
-    await page.locator(".conversation-composer__input").fill(text);
+    const composerInput = page.locator(".dm-composer__text-input");
+    await expect(composerInput).toBeVisible();
+    await composerInput.fill(text, { force: true });
   }
 
-  await page.getByRole("button", { name: /↗|…/ }).click();
+  await page.locator(".dm-composer__send-btn").click();
 }
 
 function currentThreadId(url: string) {

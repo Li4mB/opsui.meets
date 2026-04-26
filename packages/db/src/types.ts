@@ -3,6 +3,7 @@ import type {
   MeetingDetail,
   MeetingPostSummary,
   MeetingSummary,
+  ProfileVisuals,
   RoomSummary,
   SessionActor,
   WorkspaceKind,
@@ -46,6 +47,8 @@ export interface UserRecord {
   displayName: string;
   firstName: string;
   lastName: string;
+  profileVisuals?: ProfileVisuals;
+  websiteLastSeenAt?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -28,7 +28,10 @@ export function MeetingControlButton(props: MeetingControlButtonProps) {
       type={props.type ?? "button"}
     >
       <span className="meeting-control-button__icon">{props.icon}</span>
-      <span className="meeting-control-button__label">{props.label}</span>
+      {props.active ? <span aria-hidden="true" className="meeting-control-button__indicator" /> : null}
+      <span aria-hidden="true" className="meeting-control-button__label" hidden>
+        {props.label}
+      </span>
     </button>
   );
 }

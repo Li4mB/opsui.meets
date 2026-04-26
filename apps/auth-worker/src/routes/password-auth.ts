@@ -1,4 +1,10 @@
-import type { OrganisationMember, OrganisationProfile, SessionActor, WorkspacePlanTier } from "@opsui/shared-types";
+import {
+  DEFAULT_PROFILE_VISUALS,
+  type OrganisationMember,
+  type OrganisationProfile,
+  type SessionActor,
+  type WorkspacePlanTier,
+} from "@opsui/shared-types";
 import {
   normalizeEmail,
   normalizeOrganizationCode,
@@ -584,6 +590,7 @@ function createUserRecord(
     firstName: input.firstName,
     lastName: input.lastName,
     displayName: `${input.firstName} ${input.lastName}`.trim(),
+    profileVisuals: DEFAULT_PROFILE_VISUALS,
     createdAt: timestamp,
     updatedAt: timestamp,
   };

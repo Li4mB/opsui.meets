@@ -173,39 +173,18 @@ export function LeaveCallIcon() {
   return (
     <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">
       <path
-        d="M4.5 14C6.6 12.2 9.2 11.2 12 11.2C14.8 11.2 17.4 12.2 19.5 14"
+        d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15"
         stroke="currentColor"
         strokeLinecap="round"
         strokeLinejoin="round"
-        strokeWidth="1.8"
+        strokeWidth="1.6"
       />
       <path
-        d="M5.3 13.6L3.7 18.2"
+        d="M12 9L9 12M9 12L12 15M9 12H21"
         stroke="currentColor"
         strokeLinecap="round"
         strokeLinejoin="round"
-        strokeWidth="1.8"
-      />
-      <path
-        d="M20.3 18.2L18.7 13.6"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.8"
-      />
-      <path
-        d="M8.5 15.2L7.8 19"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.8"
-      />
-      <path
-        d="M16.2 19L15.5 15.2"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.8"
+        strokeWidth="1.6"
       />
     </svg>
   );
@@ -306,32 +285,51 @@ export function RefreshIcon() {
 export function PresentScreenIcon() {
   return (
     <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">
-      <rect
-        height="10.5"
-        rx="2.4"
-        stroke="currentColor"
-        strokeWidth="1.8"
-        width="13.5"
-        x="3.5"
-        y="5"
-      />
       <path
-        d="M17 9L20.5 6.8V13.2L17 11"
+        d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25"
         stroke="currentColor"
+        strokeLinecap="round"
         strokeLinejoin="round"
-        strokeWidth="1.8"
+        strokeWidth="1.6"
       />
+      <rect
+        height="14.25"
+        rx="2.25"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        width="18"
+        x="3"
+        y="3"
+      />
+    </svg>
+  );
+}
+
+export function PresentScreenOffIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">
       <path
-        d="M9 18.5H13"
+        d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25"
         stroke="currentColor"
         strokeLinecap="round"
-        strokeWidth="1.8"
+        strokeLinejoin="round"
+        strokeWidth="1.6"
+      />
+      <rect
+        height="14.25"
+        rx="2.25"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        width="18"
+        x="3"
+        y="3"
       />
       <path
-        d="M11 15.5V18.5"
+        d="M4 4L20 20"
         stroke="currentColor"
         strokeLinecap="round"
-        strokeWidth="1.8"
+        strokeLinejoin="round"
+        strokeWidth="1.6"
       />
     </svg>
   );

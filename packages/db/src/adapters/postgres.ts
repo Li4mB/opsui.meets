@@ -34,6 +34,7 @@ interface PostgresRepositoryContextOptions {
 type MutationName =
   | "workspaces.create"
   | "users.create"
+  | "users.update"
   | "workspaceMemberships.create"
   | "passwordCredentials.upsert"
   | "externalAuthIdentities.create"
@@ -126,6 +127,7 @@ export async function createPostgresRepositoryContext(
   const rawMutations: Record<MutationName, MutationFn> = {
     "workspaces.create": workspaces.create.bind(workspaces),
     "users.create": users.create.bind(users),
+    "users.update": users.update.bind(users),
     "workspaceMemberships.create": workspaceMemberships.create.bind(workspaceMemberships),
     "passwordCredentials.upsert": passwordCredentials.upsert.bind(passwordCredentials),
     "externalAuthIdentities.create": externalAuthIdentities.create.bind(externalAuthIdentities),
@@ -162,6 +164,9 @@ export async function createPostgresRepositoryContext(
     dirty = true;
   });
   users.create = trackMutation("users.create", rawMutations["users.create"], mutationLog, () => {
+    dirty = true;
+  });
+  users.update = trackMutation("users.update", rawMutations["users.update"], mutationLog, () => {
     dirty = true;
   });
   workspaceMemberships.create = trackMutation(

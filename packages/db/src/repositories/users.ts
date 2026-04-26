@@ -32,4 +32,14 @@ export class UsersRepository {
       this.getStore().users.find((user) => user.usernameNormalized === normalizedUsername) ?? null
     );
   }
+
+  update(userId: string, patch: Partial<Omit<UserRecord, "id" | "createdAt">>): UserRecord | null {
+    const user = this.getById(userId);
+    if (!user) {
+      return null;
+    }
+
+    Object.assign(user, patch);
+    return user;
+  }
 }

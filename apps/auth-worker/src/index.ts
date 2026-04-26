@@ -11,6 +11,7 @@ import {
   signUpIndividual,
   signUpOrganisation,
 } from "./routes/password-auth";
+import { getMyProfile, postPresenceHeartbeat, updateMyProfile } from "./routes/profile";
 import { issueMockSession } from "./routes/session";
 import { getSessionInfo } from "./routes/session-info";
 import { getSentryOptions } from "./lib/sentry";
@@ -159,6 +160,21 @@ export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
 
     if (request.method === "GET" && url.pathname === "/v1/organisation/me") {
       response = await getOrganisationProfile(request, env);
+      return withCors(response, request);
+    }
+
+    if (request.method === "GET" && url.pathname === "/v1/profile/me") {
+      response = await getMyProfile(request, env);
+      return withCors(response, request);
+    }
+
+    if (request.method === "PATCH" && url.pathname === "/v1/profile/me") {
+      response = await updateMyProfile(request, env);
+      return withCors(response, request);
+    }
+
+    if (request.method === "POST" && url.pathname === "/v1/presence/heartbeat") {
+      response = await postPresenceHeartbeat(request, env);
       return withCors(response, request);
     }
 

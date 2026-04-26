@@ -1,4 +1,10 @@
-import type { AuthCapabilities, OrganisationProfile, SessionInfo } from "@opsui/shared-types";
+import {
+  DEFAULT_PROFILE_VISUALS,
+  type AuthCapabilities,
+  type OrganisationProfile,
+  type ProfileVisuals,
+  type SessionInfo,
+} from "@opsui/shared-types";
 import { API_BASE_URL, AUTH_BASE_URL } from "./config";
 
 export interface JoinTokenResponse {
@@ -18,6 +24,7 @@ const FALLBACK_SESSION: SessionInfo = {
     workspaceKind: "personal",
     planTier: "standard",
     userId: "guest_anonymous",
+    profileVisuals: DEFAULT_PROFILE_VISUALS,
   },
 };
 
@@ -257,6 +264,78 @@ export async function getOrganisationProfile(forceRefresh = false): Promise<Orga
   }
 }
 
+export async function getMyProfile(forceRefresh = false): Promise<{ profileVisuals: ProfileVisuals } | null> {
+  if (forceRefresh) {
+    sessionCache = null;
+  }
+
+  try {
+    const response = await fetch(`${AUTH_BASE_URL}/v1/profile/me`, {
+      cache: "no-store",
+      credentials: "include",
+    });
+    if (!response.ok) {
+      return null;
+    }
+
+    return (await response.json()) as { profileVisuals: ProfileVisuals };
+  } catch {
+    return null;
+  }
+}
+
+export async function updateMyProfileVisuals(profileVisuals: ProfileVisuals): Promise<AuthMutationResult> {
+  try {
+    const response = await fetch(`${AUTH_BASE_URL}/v1/profile/me`, {
+      method: "PATCH",
+      credentials: "include",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ profileVisuals }),
+    });
+
+    const payload = (await response.json().catch(() => null)) as
+      | {
+          ok?: boolean;
+          error?: string;
+          message?: string;
+        }
+      | null;
+
+    if (!response.ok || payload?.ok !== true) {
+      return {
+        ok: false,
+        error: payload?.error ?? "request_failed",
+        message: payload?.message ?? "That request could not be completed.",
+      };
+    }
+
+    sessionCache = null;
+    return { ok: true };
+  } catch {
+    return {
+      ok: false,
+      error: "request_failed",
+      message: "That request could not be completed.",
+    };
+  }
+}
+
+export async function sendPresenceHeartbeat(): Promise<boolean> {
+  try {
+    const response = await fetch(`${AUTH_BASE_URL}/v1/presence/heartbeat`, {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+    });
+
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export function startLogin(redirectTo = "/"): void {
   if (typeof window === "undefined") {
     return;
@@ -353,6 +432,7 @@ function createLocalDevSession(input?: { email?: string; userId?: string }): Ses
       username,
       firstName,
       lastName: "User",
+      profileVisuals: DEFAULT_PROFILE_VISUALS,
       workspaceRole: "owner",
       membershipSource: "mock",
     },

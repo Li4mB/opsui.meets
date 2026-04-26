@@ -19,7 +19,7 @@ import {
   MicrophoneIcon,
   MicrophoneOffIcon,
   PresentScreenIcon,
-  RefreshIcon,
+  PresentScreenOffIcon,
   VideoCameraIcon,
   VideoCameraOffIcon,
 } from "./MeetingRoomIcons";
@@ -28,6 +28,15 @@ import type { ParticipantMediaIndicators } from "./MeetingParticipantsPanel";
 type MediaStatus = "idle" | "connecting" | "connected" | "warning" | "error";
 type MediaActionKind = "audio" | "video" | "screenshare";
 type MediaClient = Awaited<ReturnType<ReturnType<typeof useRealtimeKitClient>[1]>> | undefined;
+export type MediaConnectionPhase =
+  | "idle"
+  | "requesting-session"
+  | "starting-client"
+  | "joining-room"
+  | "requesting-device-access"
+  | "connected"
+  | "warning"
+  | "error";
 type ScreenshareConfiguration = {
   displaySurface?: "browser" | "monitor" | "window";
   frameRate: {
@@ -56,6 +65,7 @@ interface MeetingMediaStageProps {
   immersiveSoloMode?: boolean;
   meetingActive: boolean;
   meetingId: string | null;
+  onConnectionPhaseChange?: (phase: MediaConnectionPhase) => void;
   onLeave?: () => void;
   onLiveMediaStateChange?: (state: Record<string, ParticipantMediaIndicators>) => void;
   onLiveParticipantCountChange?: (count: number | null) => void;
@@ -91,6 +101,7 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
   const [client, initClient] = useRealtimeKitClient({ resetOnLeave: true });
   const [mediaStatus, setMediaStatus] = useState<MediaStatus>("idle");
   const [mediaMessage, setMediaMessage] = useState<string | null>(null);
+  const [connectionPhase, setConnectionPhase] = useState<MediaConnectionPhase>("idle");
   const [retryNonce, setRetryNonce] = useState(0);
   const clientRef = useRef<MediaClient>(undefined);
   const connectionAttemptRef = useRef(0);
@@ -107,6 +118,10 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
   useEffect(() => {
     clientRef.current = client;
   }, [client]);
+
+  useEffect(() => {
+    props.onConnectionPhaseChange?.(connectionPhase);
+  }, [connectionPhase, props.onConnectionPhaseChange]);
 
   useEffect(() => {
     return () => {
@@ -129,6 +144,7 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
       recoverableFailureRef.current = false;
       setMediaStatus("idle");
       setMediaMessage(null);
+      setConnectionPhase("idle");
       void leaveMediaClient(clientRef.current);
       return;
     }
@@ -162,6 +178,7 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
     void (async () => {
       setMediaStatus("connecting");
       setMediaMessage("Requesting live media session...");
+      setConnectionPhase("requesting-session");
       await leaveMediaClient(clientRef.current);
 
       const session = await createMediaSession(
@@ -178,11 +195,13 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
       if (!session) {
         setMediaStatus("error");
         setMediaMessage("Live media could not be started for this participant.");
+        setConnectionPhase("error");
         return;
       }
 
       let nextClient: MediaClient;
       try {
+        setConnectionPhase("starting-client");
         setMediaMessage("Starting live media client...");
         nextClient = await withTimeout(
           initClient({
@@ -221,6 +240,7 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
             setMediaMessage,
             setMediaStatus,
           });
+          setConnectionPhase(recovery.phase);
           recoverableFailureRef.current = recovery.recoverable;
         }
         return;
@@ -229,6 +249,7 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
       if (!nextClient) {
         setMediaStatus("error");
         setMediaMessage("Live media client could not be created.");
+        setConnectionPhase("error");
         return;
       }
 
@@ -239,6 +260,7 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
 
       try {
         nextClient.self.setName(props.participantDisplayName);
+        setConnectionPhase("joining-room");
         setMediaMessage("Joining live media room...");
         await joinMediaRoomWithProgress(nextClient, {
           hardTimeoutMs: MEDIA_JOIN_HARD_TIMEOUT_MS,
@@ -249,11 +271,13 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
 
             setMediaStatus("warning");
             setMediaMessage("Joining live media room is taking longer than usual. Keeping the connection attempt alive...");
+            setConnectionPhase("warning");
           },
           softTimeoutMs: MEDIA_JOIN_SOFT_TIMEOUT_MS,
         });
 
         setMediaMessage("Enabling camera and microphone...");
+        setConnectionPhase("requesting-device-access");
         const [audioResult, videoResult] = await Promise.allSettled([
           nextClient.self.enableAudio(),
           nextClient.self.enableVideo(),
@@ -268,6 +292,7 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
         recoverableFailureRef.current = false;
         setMediaStatus("connected");
         setMediaMessage(getMediaReadyMessage(audioResult, videoResult));
+        setConnectionPhase("connected");
       } catch (error) {
         await leaveMediaClient(nextClient);
         if (cancelled) {
@@ -294,6 +319,7 @@ export function MeetingMediaStage(props: MeetingMediaStageProps) {
           setMediaMessage,
           setMediaStatus,
         });
+        setConnectionPhase(recovery.phase);
         recoverableFailureRef.current = recovery.recoverable;
       }
     })();
@@ -707,7 +733,7 @@ function MediaToolbar(props: {
         </p>
       ))}
       <div className="meeting-control-dock">
-        <div className="meeting-control-dock__cluster">
+        <div className="meeting-control-dock__row meeting-control-dock__row--media">
           <MeetingControlButton
             active={Boolean(props.self?.audioEnabled)}
             disabled={!props.onToggleAudio}
@@ -729,32 +755,33 @@ function MediaToolbar(props: {
           <MeetingControlButton
             active={props.screenShareActive}
             disabled={props.screenShareDisabled}
-            icon={<PresentScreenIcon />}
+            icon={props.screenShareActive ? <PresentScreenIcon /> : <PresentScreenOffIcon />}
             label={props.screenShareActive ? "Sharing" : "Share Screen"}
             onClick={() => {
               props.onShareScreen?.();
             }}
             title={props.screenShareTitle}
           />
-          {props.mediaStatus === "error" ? (
-            <MeetingControlButton
-              icon={<RefreshIcon />}
-              label="Retry"
-              onClick={props.onRetry}
-            />
-          ) : null}
         </div>
-        <div className="meeting-control-dock__cluster meeting-control-dock__cluster--secondary">
-          {props.extraControls}
-          {props.onLeave ? (
-            <MeetingControlButton
-              danger
-              icon={<LeaveCallIcon />}
-              label="Leave"
-              onClick={props.onLeave}
-            />
-          ) : null}
-        </div>
+        {props.extraControls || props.onLeave ? (
+          <span aria-hidden="true" className="meeting-control-dock__separator meeting-control-dock__separator--group" />
+        ) : null}
+        {props.extraControls || props.onLeave ? (
+          <div className="meeting-control-dock__row meeting-control-dock__row--secondary">
+            {props.extraControls}
+            {props.onLeave && props.extraControls ? (
+              <span aria-hidden="true" className="meeting-control-dock__separator meeting-control-dock__separator--inline" />
+            ) : null}
+            {props.onLeave ? (
+              <MeetingControlButton
+                danger
+                icon={<LeaveCallIcon />}
+                label="Leave"
+                onClick={props.onLeave}
+              />
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -1048,19 +1075,19 @@ function handleMediaConnectionFailure(
     setMediaMessage(message: string): void;
     setMediaStatus(status: MediaStatus): void;
   },
-): { recoverable: boolean } {
+): { phase: MediaConnectionPhase; recoverable: boolean } {
   const recoverable = isRecoverableMediaConnectionError(error);
 
   if (recoverable && input.attemptNumber < MAX_MEDIA_CONNECTION_ATTEMPTS) {
     input.setMediaStatus("warning");
     input.setMediaMessage("Live media connection was interrupted. Retrying...");
     input.onRetry();
-    return { recoverable };
+    return { phase: "warning", recoverable };
   }
 
   input.setMediaStatus("error");
   input.setMediaMessage(toMediaErrorMessage(error));
-  return { recoverable };
+  return { phase: "error", recoverable };
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

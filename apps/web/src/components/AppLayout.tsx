@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import type { FocusEvent, PointerEvent as ReactPointerEvent, PropsWithChildren } from "react";
-import type { SessionInfo } from "@opsui/shared-types";
+import type {
+  CSSProperties,
+  FocusEvent,
+  PointerEvent as ReactPointerEvent,
+  PropsWithChildren,
+} from "react";
+import { DEFAULT_PROFILE_VISUALS, type ProfileVisualAsset, type SessionInfo } from "@opsui/shared-types";
 import { getSessionDisplayName, logout, shouldUseRedirectLogout, startLogout } from "../lib/auth";
 import { AnimatedBackground } from "./AnimatedBackground";
 import { Modal } from "./Modal";
@@ -9,6 +14,7 @@ interface AppLayoutProps extends PropsWithChildren {
   currentMeetingCode: string | null;
   currentPath: string;
   directMessagesUnreadCount: number;
+  isContentObscured?: boolean;
   isSidebarOpen: boolean;
   session: SessionInfo | null;
   onCloseSidebar(): void;
@@ -40,6 +46,7 @@ export function AppLayout(props: AppLayoutProps) {
   const username = props.session?.actor.username?.trim();
   const profileLabel = username ? `@${username}` : displayName;
   const profileInitials = getProfileInitials(username ?? displayName);
+  const avatarVisual = props.session?.actor.profileVisuals?.avatar ?? DEFAULT_PROFILE_VISUALS.avatar;
 
   const navigationItems: NavigationItem[] = [
     {
@@ -228,7 +235,7 @@ export function AppLayout(props: AppLayoutProps) {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${props.isContentObscured ? " app-shell--content-obscured" : ""}`}>
       <AnimatedBackground />
 
       <header className="topbar topbar--dark">
@@ -289,8 +296,20 @@ export function AppLayout(props: AppLayoutProps) {
                 }}
                 type="button"
               >
-                <span aria-hidden="true" className="topbar-profile__avatar">
-                  {profileInitials}
+                <span
+                  aria-hidden="true"
+                  className={`topbar-profile__avatar topbar-profile__avatar--${avatarVisual.mode}`}
+                  style={{ "--profile-avatar-color": avatarVisual.color } as CSSProperties}
+                >
+                  {avatarVisual.mode === "image" && avatarVisual.imageDataUrl ? (
+                    <img
+                      alt=""
+                      src={avatarVisual.imageDataUrl}
+                      style={{ transform: `scale(${getVisualScale(avatarVisual)})` }}
+                    />
+                  ) : (
+                    profileInitials
+                  )}
                 </span>
                 <span className="topbar-profile__name">{profileLabel}</span>
               </button>
@@ -476,4 +495,8 @@ function getProfileInitials(value: string): string {
     .join("");
 
   return initials || "U";
+}
+
+function getVisualScale(visual: ProfileVisualAsset): number {
+  return 1 + (Math.min(100, Math.max(0, visual.zoom)) / 100) * 1.5;
 }

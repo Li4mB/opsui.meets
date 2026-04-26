@@ -44,6 +44,7 @@ export interface UsersRepositoryContract {
   getByEmail(email: string): UserRecord | null;
   getByUsername(username: string): UserRecord | null;
   getByNormalizedUsername(usernameNormalized: string): UserRecord | null;
+  update(userId: string, patch: Partial<Omit<UserRecord, "id" | "createdAt">>): UserRecord | null;
 }
 
 export interface WorkspaceMembershipsRepositoryContract {

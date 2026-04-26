@@ -1,6 +1,8 @@
 import { devices, expect, test, type Browser, type Page } from "@playwright/test";
 
 const FIXTURE_RESET_URL = "http://127.0.0.1:9877/__reset";
+const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 test.beforeEach(async ({ request }) => {
   const response = await request.post(FIXTURE_RESET_URL);
@@ -28,7 +30,7 @@ test("individual signup creates a signed-in personal account without My Organisa
   await expect(page.getByRole("main").getByText("casey.lane")).toHaveCount(0);
 });
 
-test("signed-in topbar shows profile menu with blank profile and appearance routes", async ({ page }) => {
+test("signed-in topbar shows profile menu with profile and appearance routes", async ({ page }) => {
   await signInThroughUi(page, "liam@example.com");
   await page.goto("/");
 
@@ -46,12 +48,93 @@ test("signed-in topbar shows profile menu with blank profile and appearance rout
 
   await page.getByRole("menuitem", { name: "My profile" }).click();
   await expect(page).toHaveURL("/my-profile");
-  await expect(page.getByRole("heading", { name: "My profile" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Liam User" })).toBeVisible();
+  await expect(page.getByTestId("profile-avatar-edit")).toBeVisible();
+  await expect(page.getByTestId("profile-banner-edit")).toBeVisible();
 
   await page.getByRole("button", { name: /@liam/i }).hover();
   await page.getByRole("menuitem", { name: "Appearance" }).click();
   await expect(page).toHaveURL("/appearance");
   await expect(page.getByRole("heading", { name: "Appearance" })).toBeVisible();
+});
+
+test("my profile visual editor persists colors and uploaded images", async ({ page }) => {
+  await page.goto("/sign-up");
+  await fillIdentityFields(page, {
+    email: "riley.profile@example.com",
+    username: "riley.profile",
+    firstName: "Riley",
+    lastName: "Profile",
+    password: "password123",
+  });
+  await page.getByRole("button", { name: "Create Account" }).click();
+  await expect(page).toHaveURL("/");
+
+  await page.goto("/my-profile");
+  await expect(page.getByRole("heading", { name: "Riley Profile" })).toBeVisible();
+  await expect(page.getByRole("main").getByText("@riley.profile", { exact: true })).toBeVisible();
+  await expect(page.getByRole("main").getByText("Riley Profile's Workspace", { exact: true })).toBeVisible();
+
+  await page.getByTestId("profile-avatar-edit").hover();
+  await expect(page.locator(".my-profile-avatar__overlay")).toHaveCSS("opacity", "1");
+  await page.getByTestId("profile-avatar-edit").click();
+  await page.getByRole("dialog").getByRole("button", { name: "Steel blue" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByTestId("profile-avatar-surface")).toHaveCSS("background-color", "rgb(61, 126, 170)");
+  await expect(page.locator(".topbar-profile__avatar")).toHaveCSS("background-color", "rgb(61, 126, 170)");
+
+  await page.reload();
+  await expect(page.getByTestId("profile-avatar-surface")).toHaveCSS("background-color", "rgb(61, 126, 170)");
+  await expect(page.locator(".topbar-profile__avatar")).toHaveCSS("background-color", "rgb(61, 126, 170)");
+
+  await page.getByTestId("profile-banner-edit").click();
+  await page.getByRole("dialog").getByRole("button", { name: "Muted teal" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByTestId("profile-banner-surface")).toHaveCSS("background-color", "rgb(90, 122, 110)");
+
+  await page.reload();
+  await expect(page.getByTestId("profile-banner-surface")).toHaveCSS("background-color", "rgb(90, 122, 110)");
+
+  await page.getByTestId("profile-avatar-edit").click();
+  await page.getByTestId("profile-visual-file-input").setInputFiles({
+    name: "avatar.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(TINY_PNG_BASE64, "base64"),
+  });
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "Crop profile picture" })).toBeVisible();
+  await expect(page.getByTestId("profile-visual-zoom")).toHaveValue("0");
+  await page.getByTestId("profile-visual-zoom").fill("35");
+  await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByTestId("profile-avatar-image")).toBeVisible();
+
+  await page.getByTestId("profile-banner-edit").click();
+  await page.getByTestId("profile-visual-file-input").setInputFiles({
+    name: "banner.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(TINY_PNG_BASE64, "base64"),
+  });
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "Crop banner" })).toBeVisible();
+  await expect(page.getByTestId("profile-visual-zoom")).toHaveValue("0");
+  await page.getByRole("dialog").getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByTestId("profile-banner-image")).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByTestId("profile-avatar-image")).toBeVisible();
+  await expect(page.getByTestId("profile-banner-image")).toBeVisible();
+
+  await page.getByTestId("profile-avatar-edit").click();
+  await page.getByTestId("profile-visual-file-input").setInputFiles({
+    name: "avatar.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("not an image"),
+  });
+  await expect(page.getByText("Choose an image file.")).toBeVisible();
+  await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByTestId("profile-avatar-image")).toBeVisible();
 });
 
 test("profile menu sign out requires confirmation", async ({ page }) => {

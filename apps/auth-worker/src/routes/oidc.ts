@@ -1,4 +1,4 @@
-import { LIVE_ROLES, type LiveRole } from "@opsui/shared-types";
+import { DEFAULT_PROFILE_VISUALS, LIVE_ROLES, type LiveRole } from "@opsui/shared-types";
 import { recordAuthMetric } from "../lib/analytics";
 import { normalizeEmail, prettifyEmailLocalPart, validateUsername } from "../lib/account-identity";
 import { getAuthDataStatus } from "../lib/data-status";
@@ -554,6 +554,7 @@ export async function completeOidcAccount(request: Request, env: Env): Promise<R
     firstName: pending.firstName,
     lastName: pending.lastName,
     displayName: `${pending.firstName} ${pending.lastName}`.trim() || pending.firstName || usernameResult.value.username,
+    profileVisuals: DEFAULT_PROFILE_VISUALS,
     createdAt: timestamp,
     updatedAt: timestamp,
   };

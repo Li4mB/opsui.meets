@@ -1,4 +1,4 @@
-import type { SessionActor } from "@opsui/shared-types";
+import { DEFAULT_PROFILE_VISUALS, type SessionActor } from "@opsui/shared-types";
 import { recordAuthMetric } from "../lib/analytics";
 import { json } from "../lib/http";
 import {
@@ -57,6 +57,7 @@ export async function issueMockSession(request: Request, env: Env): Promise<Resp
           .toLowerCase(),
         firstName: prettifyEmailLocalPart(requestBody?.email ?? directoryMembership.email ?? "member"),
         lastName: "User",
+        profileVisuals: DEFAULT_PROFILE_VISUALS,
         workspaceRole: directoryMembership.workspaceRole,
         membershipSource: directoryMembership.membershipSource,
       }

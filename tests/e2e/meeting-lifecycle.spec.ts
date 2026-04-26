@@ -102,6 +102,58 @@ test("explicit leave only dispatches one leave request", async ({ page }) => {
   await expect.poll(() => leaveRequests.length).toBe(1);
 });
 
+test("meeting entry loader drops back to room UI when media bootstrap fails", async ({ page }) => {
+  await signInThroughUi(page, "liam@example.com");
+
+  await page.route("**/v1/meetings/*/media-session", async (route) => {
+    await route.fulfill({
+      body: JSON.stringify({ error: "media unavailable" }),
+      contentType: "application/json",
+      status: 500,
+    });
+  });
+
+  await page.goto("/ops-signin");
+  await expect(page.locator(".meeting-entry-loader")).toBeVisible();
+  await expect(page.locator(".meeting-entry-loader")).toHaveCount(0, { timeout: 25_000 });
+  await expect(page.locator(".meeting-stage-runtime")).toBeVisible({ timeout: 25_000 });
+  await expect(page.locator(".meeting-control-surface__message")).toContainText(
+    "Live media could not be started for this participant.",
+  );
+  await expect(page.getByRole("button", { name: "Leave" })).toBeVisible();
+});
+
+test("meeting entry loader cancel returns home and sends one leave request after join bootstrap starts", async ({ page }) => {
+  await signInThroughUi(page, "liam@example.com");
+
+  let mediaSessionRequested = false;
+  await page.route("**/v1/meetings/*/media-session", async (route) => {
+    mediaSessionRequested = true;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 1_000);
+    });
+    await route.continue();
+  });
+
+  const leaveRequests: string[] = [];
+  await page.route("**/v1/meetings/*/participants/*/leave", async (route) => {
+    leaveRequests.push(route.request().url());
+    await route.fulfill({
+      body: JSON.stringify({ ok: true }),
+      contentType: "application/json",
+      status: 200,
+    });
+  });
+
+  await page.goto("/ops-signin");
+  await expect(page.locator(".meeting-entry-loader")).toBeVisible();
+  await expect.poll(() => mediaSessionRequested).toBe(true);
+  await page.getByRole("button", { name: "Cancel" }).click();
+
+  await expect(page).toHaveURL("/");
+  await expect.poll(() => leaveRequests.length).toBe(1);
+});
+
 test("repeated leave-and-join cycles across different meetings stay usable", async ({ page }) => {
   await signInThroughUi(page, "liam@example.com");
 
@@ -205,6 +257,7 @@ async function openInfoDrawer(page: Page) {
 }
 
 async function expectDirectJoin(page: Page, _title: string) {
+  await page.locator(".meeting-entry-loader").waitFor({ state: "detached", timeout: 25_000 }).catch(() => {});
   await expect(page.locator('[role="dialog"]')).toHaveCount(0, { timeout: 25_000 });
   await expect(page.locator(".meeting-stage-runtime")).toBeVisible({ timeout: 25_000 });
   await expect(page.locator(".meeting-control-dock")).toBeVisible({ timeout: 25_000 });

@@ -1,5 +1,5 @@
 import type { RequestRepositoryContext, UserRecord, WorkspaceMembershipRecord, WorkspaceRecord } from "@opsui/db";
-import type { SessionActor } from "@opsui/shared-types";
+import { DEFAULT_PROFILE_VISUALS, type SessionActor } from "@opsui/shared-types";
 import type { Env } from "../types";
 
 export function createFallbackActor(
@@ -12,13 +12,14 @@ export function createFallbackActor(
     workspaceKind: "personal",
     planTier: "standard",
     userId: "guest_anonymous",
+    profileVisuals: DEFAULT_PROFILE_VISUALS,
     ...(overrides ?? {}),
   };
 }
 
 export function buildSessionActorFromRecords(input: {
   workspace: WorkspaceRecord;
-  user: Pick<UserRecord, "id" | "email" | "username" | "firstName" | "lastName">;
+  user: Pick<UserRecord, "id" | "email" | "username" | "firstName" | "lastName" | "profileVisuals">;
   membership: Pick<WorkspaceMembershipRecord, "workspaceRole" | "membershipSource">;
 }): SessionActor {
   return {
@@ -31,6 +32,7 @@ export function buildSessionActorFromRecords(input: {
     username: input.user.username,
     firstName: input.user.firstName,
     lastName: input.user.lastName,
+    profileVisuals: input.user.profileVisuals ?? DEFAULT_PROFILE_VISUALS,
     organizationCode: input.workspace.organizationCode ?? undefined,
     workspaceRole: input.membership.workspaceRole,
     membershipSource: input.membership.membershipSource,
@@ -52,6 +54,7 @@ export function hydrateSessionActor(
         workspaceKind: defaultWorkspace.workspaceKind,
         planTier: defaultWorkspace.planTier,
         userId: "guest_anonymous",
+        profileVisuals: DEFAULT_PROFILE_VISUALS,
         organizationCode: defaultWorkspace.organizationCode ?? undefined,
       };
     }
@@ -77,6 +80,7 @@ export function hydrateSessionActor(
     username: user?.username ?? actor.username,
     firstName: user?.firstName ?? actor.firstName,
     lastName: user?.lastName ?? actor.lastName,
+    profileVisuals: user?.profileVisuals ?? actor.profileVisuals ?? DEFAULT_PROFILE_VISUALS,
     workspaceRole: membership?.workspaceRole ?? actor.workspaceRole,
     membershipSource: membership?.membershipSource ?? actor.membershipSource,
   };

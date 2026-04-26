@@ -1,9 +1,13 @@
+import type { ProfileVisualAsset } from "./auth";
+
 export interface DirectMessageSearchResult {
   userId: string;
   username: string;
   firstName: string;
   lastName: string;
   displayName: string;
+  avatarVisual?: ProfileVisualAsset;
+  isOnline?: boolean;
 }
 
 export interface DirectMessageThreadSummary {

@@ -8,6 +8,29 @@ const APP_ORIGIN = process.env.E2E_APP_ORIGIN ?? "http://127.0.0.1:4173";
 const SESSION_COOKIE_NAME = "opsui_meets_e2e_auth";
 const OIDC_PENDING_COOKIE_NAME = "opsui_meets_e2e_oidc_pending";
 const SESSION_MAX_AGE_SECONDS = 400 * 24 * 60 * 60;
+const PROFILE_VISUAL_COLOR_VALUES = new Set([
+  "#4A5568",
+  "#3D7EAA",
+  "#5A7A6E",
+  "#7B6F8A",
+  "#8A7060",
+  "#2C2C2C",
+]);
+const DEFAULT_PROFILE_VISUALS = {
+  avatar: {
+    mode: "color",
+    color: "#4A5568",
+    zoom: 0,
+  },
+  banner: {
+    mode: "color",
+    color: "#2C2C2C",
+    zoom: 0,
+  },
+};
+const MAX_PROFILE_IMAGE_DATA_URL_LENGTH = 7_000_000;
+const PROFILE_IMAGE_DATA_URL_PATTERN = /^data:image\/(?:png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/;
+const WEBSITE_ACTIVE_WINDOW_MS = 75_000;
 
 let state = createInitialState();
 
@@ -906,6 +929,92 @@ const authServer = http.createServer(async (request, response) => {
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/v1/presence/heartbeat") {
+    const session = getCurrentSession(request);
+    if (!session.authenticated) {
+      sendJson(request, response, 401, {
+        error: "authentication_required",
+        message: "Sign in to update presence.",
+      });
+      return;
+    }
+
+    const user = state.users.get(session.actor.userId) ?? null;
+    if (!user) {
+      sendJson(request, response, 404, {
+        error: "profile_not_found",
+        message: "Profile was not found.",
+      });
+      return;
+    }
+
+    user.websiteLastSeenAt = new Date().toISOString();
+    sendJson(request, response, 200, { ok: true });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/v1/profile/me") {
+    const session = getCurrentSession(request);
+    if (!session.authenticated) {
+      sendJson(request, response, 401, {
+        error: "authentication_required",
+        message: "Sign in to view your profile.",
+      });
+      return;
+    }
+
+    const user = state.users.get(session.actor.userId) ?? null;
+    if (!user) {
+      sendJson(request, response, 404, {
+        error: "profile_not_found",
+        message: "Profile was not found.",
+      });
+      return;
+    }
+
+    user.profileVisuals = normalizeProfileVisuals(user.profileVisuals);
+    sendJson(request, response, 200, {
+      profileVisuals: user.profileVisuals,
+    });
+    return;
+  }
+
+  if (request.method === "PATCH" && url.pathname === "/v1/profile/me") {
+    const session = getCurrentSession(request);
+    if (!session.authenticated) {
+      sendJson(request, response, 401, {
+        error: "authentication_required",
+        message: "Sign in to update your profile.",
+      });
+      return;
+    }
+
+    const user = state.users.get(session.actor.userId) ?? null;
+    if (!user) {
+      sendJson(request, response, 404, {
+        error: "profile_not_found",
+        message: "Profile was not found.",
+      });
+      return;
+    }
+
+    const body = await readJsonBody(request);
+    const parsed = parseProfileVisuals(body?.profileVisuals);
+    if (!parsed.ok) {
+      sendJson(request, response, 400, parsed.error);
+      return;
+    }
+
+    user.profileVisuals = parsed.profileVisuals;
+    user.updatedAt = new Date().toISOString();
+    session.actor.profileVisuals = user.profileVisuals;
+    sendJson(request, response, 200, {
+      ok: true,
+      profileVisuals: user.profileVisuals,
+    });
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/v1/login/password") {
     const body = await readJsonBody(request);
     const email = normalizeEmail(body?.email);
@@ -1729,7 +1838,16 @@ function getCurrentSession(request) {
     return createGuestSession();
   }
 
-  return state.authSessions.get(token) ?? createGuestSession();
+  const session = state.authSessions.get(token) ?? createGuestSession();
+  if (session.authenticated) {
+    const user = state.users.get(session.actor.userId) ?? null;
+    if (user) {
+      user.profileVisuals = normalizeProfileVisuals(user.profileVisuals);
+      session.actor.profileVisuals = user.profileVisuals;
+    }
+  }
+
+  return session;
 }
 
 function createGuestSession() {
@@ -1740,6 +1858,7 @@ function createGuestSession() {
       workspaceName: "My Workspace",
       workspaceKind: "personal",
       planTier: "standard",
+      profileVisuals: DEFAULT_PROFILE_VISUALS,
     },
     authenticated: false,
     provider: "anonymous",
@@ -1759,6 +1878,7 @@ function createUserSession(email) {
     firstName: toDisplayNamePart(localPart),
     lastName: "User",
     displayName: `${toDisplayNamePart(localPart)} User`,
+    profileVisuals: DEFAULT_PROFILE_VISUALS,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -1793,6 +1913,7 @@ function createUserSessionFromRecords(user, workspace, membership, provider) {
       username: user.username,
       firstName: user.firstName,
       lastName: user.lastName,
+      profileVisuals: normalizeProfileVisuals(user.profileVisuals),
       membershipSource: membership.membershipSource,
       organizationCode: workspace.organizationCode ?? undefined,
       planTier: workspace.planTier,
@@ -1885,8 +2006,148 @@ function createUser(input) {
     firstName: input.firstName,
     lastName: input.lastName,
     displayName: `${input.firstName} ${input.lastName}`.trim(),
+    profileVisuals: normalizeProfileVisuals(input.profileVisuals),
+    websiteLastSeenAt: input.websiteLastSeenAt,
     createdAt: timestamp,
     updatedAt: timestamp,
+  };
+}
+
+function parseProfileVisuals(value) {
+  if (!value || typeof value !== "object") {
+    return {
+      ok: false,
+      error: {
+        error: "profile_visuals_required",
+        message: "Profile visuals are required.",
+      },
+    };
+  }
+
+  const avatar = parseProfileVisual(value.avatar, DEFAULT_PROFILE_VISUALS.avatar);
+  if (!avatar.ok) {
+    return avatar;
+  }
+
+  const banner = parseProfileVisual(value.banner, DEFAULT_PROFILE_VISUALS.banner);
+  if (!banner.ok) {
+    return banner;
+  }
+
+  return {
+    ok: true,
+    profileVisuals: {
+      avatar: avatar.visual,
+      banner: banner.visual,
+    },
+  };
+}
+
+function parseProfileVisual(value, fallback) {
+  if (!value || typeof value !== "object") {
+    return {
+      ok: false,
+      error: {
+        error: "profile_visual_invalid",
+        message: "Profile visual payload is invalid.",
+      },
+    };
+  }
+
+  const color = typeof value.color === "string" ? value.color.trim().toUpperCase() : "";
+  if (!PROFILE_VISUAL_COLOR_VALUES.has(color)) {
+    return {
+      ok: false,
+      error: {
+        error: "profile_color_invalid",
+        message: "Choose one of the available profile colours.",
+      },
+    };
+  }
+
+  const zoom = Number(value.zoom);
+  if (!Number.isFinite(zoom) || zoom < 0 || zoom > 100) {
+    return {
+      ok: false,
+      error: {
+        error: "profile_zoom_invalid",
+        message: "Profile image zoom must be between 0 and 100.",
+      },
+    };
+  }
+
+  if (value.mode === "color") {
+    return {
+      ok: true,
+      visual: {
+        mode: "color",
+        color,
+        zoom: Math.round(zoom),
+      },
+    };
+  }
+
+  const imageDataUrl = typeof value.imageDataUrl === "string" ? value.imageDataUrl.trim() : "";
+  if (
+    value.mode !== "image" ||
+    !imageDataUrl ||
+    imageDataUrl.length > MAX_PROFILE_IMAGE_DATA_URL_LENGTH ||
+    !PROFILE_IMAGE_DATA_URL_PATTERN.test(imageDataUrl)
+  ) {
+    return {
+      ok: false,
+      error: {
+        error: "profile_image_invalid",
+        message: "Choose a supported image file under 5 MB.",
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    visual: {
+      mode: "image",
+      color: color || fallback.color,
+      imageDataUrl,
+      zoom: Math.round(zoom),
+    },
+  };
+}
+
+function normalizeProfileVisuals(value) {
+  return {
+    avatar: normalizeProfileVisual(value?.avatar, DEFAULT_PROFILE_VISUALS.avatar),
+    banner: normalizeProfileVisual(value?.banner, DEFAULT_PROFILE_VISUALS.banner),
+  };
+}
+
+function normalizeProfileVisual(value, fallback) {
+  if (!value || typeof value !== "object") {
+    return { ...fallback };
+  }
+
+  const color = PROFILE_VISUAL_COLOR_VALUES.has(value.color) ? value.color : fallback.color;
+  const zoom = Number.isFinite(Number(value.zoom))
+    ? Math.min(100, Math.max(0, Math.round(Number(value.zoom))))
+    : fallback.zoom;
+  if (
+    value.mode === "image" &&
+    typeof value.imageDataUrl === "string" &&
+    value.imageDataUrl.length <= MAX_PROFILE_IMAGE_DATA_URL_LENGTH &&
+    PROFILE_IMAGE_DATA_URL_PATTERN.test(value.imageDataUrl)
+  ) {
+    return {
+      mode: "image",
+      color,
+      imageDataUrl: value.imageDataUrl,
+      zoom,
+    };
+  }
+
+  return {
+    mode: "color",
+    color,
+    zoom,
   };
 }
 
@@ -2037,6 +2298,8 @@ function toDirectMessageSearchResult(user) {
     firstName: user.firstName,
     lastName: user.lastName,
     displayName: user.displayName,
+    avatarVisual: user.profileVisuals?.avatar,
+    isOnline: isFixtureUserOnline(user),
   };
 }
 
@@ -2134,6 +2397,15 @@ function createDirectMessagePreview(text) {
   }
 
   return `${text.slice(0, 119)}…`;
+}
+
+function isFixtureUserOnline(user) {
+  const lastSeenAt = Date.parse(user?.websiteLastSeenAt ?? "");
+  if (!Number.isFinite(lastSeenAt)) {
+    return false;
+  }
+
+  return Date.now() - lastSeenAt <= WEBSITE_ACTIVE_WINDOW_MS;
 }
 
 function createDirectMessagePreviewFromContent(text, attachments) {
@@ -2366,7 +2638,7 @@ function writeCorsHeaders(request, response) {
     "Access-Control-Allow-Headers",
     "content-type, idempotency-key, x-idempotency-key, x-user-id, x-user-email, x-workspace-id, x-workspace-role, x-session-type",
   );
-  response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, OPTIONS");
   response.setHeader("Access-Control-Max-Age", "86400");
 }
 
