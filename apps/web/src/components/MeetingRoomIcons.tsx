@@ -108,6 +108,133 @@ export function PenToolIcon() {
   );
 }
 
+export function TextToolIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">
+      <rect
+        height="14"
+        rx="2.6"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        width="16"
+        x="4"
+        y="5"
+      />
+      <path
+        d="M8.2 9H15.8"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M12 9V15"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M9.7 15H14.3"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
+export function ClearWhiteboardIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">
+      <path
+        d="M5.5 7.5H18.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M9 7.5V5.8C9 4.8 9.8 4 10.8 4H13.2C14.2 4 15 4.8 15 5.8V7.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M7.2 7.5L8 18.3C8.1 19.4 9 20.2 10.1 20.2H13.9C15 20.2 15.9 19.4 16 18.3L16.8 7.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M10.2 10.3V16.2"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M13.8 10.3V16.2"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
+export function UndoIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">
+      <path
+        d="M9.5 8L5.5 12L9.5 16"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M6.2 12H13.2C16.5 12 19.2 14.7 19.2 18"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M18.8 18H16"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
+export function RedoIcon() {
+  return (
+    <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">
+      <path
+        d="M14.5 8L18.5 12L14.5 16"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M17.8 12H10.8C7.5 12 4.8 14.7 4.8 18"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+      <path
+        d="M5.2 18H8"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
 export function ApplicationWindowIcon() {
   return (
     <svg aria-hidden="true" fill="none" height="18" viewBox="0 0 24 24" width="18">

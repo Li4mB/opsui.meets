@@ -4,7 +4,10 @@ import type {
   RealtimeRoomSnapshot,
   RealtimeRoomStatePatch,
   RoomEvent,
+  WhiteboardHistoryAction,
   WhiteboardStroke,
+  WhiteboardTextBox,
+  WhiteboardTextBoxHistoryAction,
 } from "@opsui/shared-types";
 
 interface Env {}
@@ -32,7 +35,12 @@ type ClientMessage =
   | { type: "room.lock"; payload: { participantId: string } }
   | { type: "room.unlock"; payload: { participantId: string } }
   | { type: "recording.state"; payload: { participantId: string; state: RealtimeRoomSnapshot["recordingState"] } }
-  | { type: "whiteboard.stroke.upsert"; payload: { stroke: WhiteboardStroke } };
+  | { type: "whiteboard.stroke.upsert"; payload: { stroke: WhiteboardStroke } }
+  | { type: "whiteboard.textbox.upsert"; payload: { textBox: WhiteboardTextBox } }
+  | { type: "whiteboard.textbox.commit"; payload: { action: WhiteboardTextBoxHistoryAction } }
+  | { type: "whiteboard.clear" }
+  | { type: "whiteboard.undo" }
+  | { type: "whiteboard.redo" };
 
 interface ConnectionAttachment {
   participantId?: string;
@@ -217,34 +225,173 @@ export class RoomCoordinator {
     }
 
     if (parsed.type === "whiteboard.stroke.upsert") {
-      const sender = this.getAttachment(ws);
-      if (!sender?.participantId) {
-        ws.send(JSON.stringify({ type: "error", payload: { reason: "missing_sender_identity" } }));
+      const senderParticipantId = this.requireSenderParticipantId(ws);
+      if (!senderParticipantId) {
         return;
       }
 
-      const stroke = sanitizeWhiteboardStroke(parsed.payload.stroke, sender.participantId);
+      const stroke = sanitizeWhiteboardStroke(parsed.payload.stroke, senderParticipantId);
       if (!stroke) {
         ws.send(JSON.stringify({ type: "error", payload: { reason: "invalid_whiteboard_stroke" } }));
         return;
       }
 
-      const nextStrokes = this.snapshot.whiteboard.strokes.filter((entry) => entry.strokeId !== stroke.strokeId);
-      nextStrokes.push(stroke);
-      this.snapshot.whiteboard = {
-        strokes: nextStrokes.slice(-MAX_WHITEBOARD_STROKES),
-        updatedAt: stroke.updatedAt,
-      };
+      const existingStroke = this.snapshot.whiteboard.strokes.find(
+        (entry) => entry.strokeId === stroke.strokeId,
+      );
+      const completedForFirstTime = Boolean(stroke.completedAt && !existingStroke?.completedAt);
+      const nextStroke = {
+        ...stroke,
+        removedAt: existingStroke?.removedAt ?? null,
+      } satisfies WhiteboardStroke;
 
+      this.snapshot.whiteboard = upsertWhiteboardStroke(this.snapshot.whiteboard, nextStroke);
+
+      if (completedForFirstTime) {
+        this.snapshot.whiteboard = commitWhiteboardAction(
+          this.snapshot.whiteboard,
+          {
+            occurredAt: stroke.completedAt ?? stroke.updatedAt,
+            participantId: senderParticipantId,
+            strokeId: stroke.strokeId,
+            type: "stroke",
+          },
+          stroke.updatedAt,
+        );
+      }
+
+      this.snapshot.whiteboard = pruneWhiteboardState(this.snapshot.whiteboard);
       await this.ctx.storage.put("snapshot", this.snapshot);
       this.broadcast({
         type: "whiteboard.stroke.upsert",
-        payload: { stroke },
+        payload: { stroke: nextStroke },
       });
       this.broadcast({
         type: "room.snapshot",
         payload: this.snapshot,
       });
+      return;
+    }
+
+    if (parsed.type === "whiteboard.textbox.upsert") {
+      const senderParticipantId = this.requireSenderParticipantId(ws);
+      if (!senderParticipantId) {
+        return;
+      }
+
+      const existingTextBox = this.snapshot.whiteboard.textBoxes.find(
+        (entry) => entry.textBoxId === parsed.payload.textBox.textBoxId,
+      );
+      const textBox = sanitizeWhiteboardTextBox(
+        parsed.payload.textBox,
+        existingTextBox?.participantId ?? senderParticipantId,
+      );
+      if (!textBox) {
+        ws.send(JSON.stringify({ type: "error", payload: { reason: "invalid_whiteboard_textbox" } }));
+        return;
+      }
+
+      const nextTextBox = {
+        ...textBox,
+        removedAt: textBox.removedAt ?? existingTextBox?.removedAt ?? null,
+      } satisfies WhiteboardTextBox;
+
+      this.snapshot.whiteboard = upsertWhiteboardTextBox(this.snapshot.whiteboard, nextTextBox);
+      this.snapshot.whiteboard = pruneWhiteboardState(this.snapshot.whiteboard);
+      await this.ctx.storage.put("snapshot", this.snapshot);
+      this.broadcast({
+        type: "whiteboard.textbox.upsert",
+        payload: { textBox: nextTextBox },
+      });
+      this.broadcast({
+        type: "room.snapshot",
+        payload: this.snapshot,
+      });
+      return;
+    }
+
+    if (parsed.type === "whiteboard.textbox.commit") {
+      const senderParticipantId = this.requireSenderParticipantId(ws);
+      if (!senderParticipantId) {
+        return;
+      }
+
+      const action = sanitizeWhiteboardTextBoxHistoryAction(parsed.payload.action, senderParticipantId);
+      if (!action) {
+        ws.send(JSON.stringify({ type: "error", payload: { reason: "invalid_whiteboard_textbox_action" } }));
+        return;
+      }
+
+      const nextWhiteboard = commitWhiteboardTextBoxAction(this.snapshot.whiteboard, action);
+      if (nextWhiteboard === this.snapshot.whiteboard) {
+        return;
+      }
+
+      this.snapshot.whiteboard = nextWhiteboard;
+      await this.ctx.storage.put("snapshot", this.snapshot);
+      this.broadcast({
+        type: "room.snapshot",
+        payload: this.snapshot,
+      });
+      return;
+    }
+
+    if (parsed.type === "whiteboard.clear") {
+      const senderParticipantId = this.requireSenderParticipantId(ws);
+      if (!senderParticipantId) {
+        return;
+      }
+
+      const nextWhiteboard = clearWhiteboard(this.snapshot.whiteboard, senderParticipantId);
+      if (nextWhiteboard === this.snapshot.whiteboard) {
+        return;
+      }
+
+      this.snapshot.whiteboard = nextWhiteboard;
+      await this.ctx.storage.put("snapshot", this.snapshot);
+      this.broadcast({
+        type: "room.snapshot",
+        payload: this.snapshot,
+      });
+      return;
+    }
+
+    if (parsed.type === "whiteboard.undo") {
+      if (!this.requireSenderParticipantId(ws)) {
+        return;
+      }
+
+      const nextWhiteboard = undoWhiteboard(this.snapshot.whiteboard);
+      if (nextWhiteboard === this.snapshot.whiteboard) {
+        return;
+      }
+
+      this.snapshot.whiteboard = nextWhiteboard;
+      await this.ctx.storage.put("snapshot", this.snapshot);
+      this.broadcast({
+        type: "room.snapshot",
+        payload: this.snapshot,
+      });
+      return;
+    }
+
+    if (parsed.type === "whiteboard.redo") {
+      if (!this.requireSenderParticipantId(ws)) {
+        return;
+      }
+
+      const nextWhiteboard = redoWhiteboard(this.snapshot.whiteboard);
+      if (nextWhiteboard === this.snapshot.whiteboard) {
+        return;
+      }
+
+      this.snapshot.whiteboard = nextWhiteboard;
+      await this.ctx.storage.put("snapshot", this.snapshot);
+      this.broadcast({
+        type: "room.snapshot",
+        payload: this.snapshot,
+      });
+      return;
     }
   }
 
@@ -363,6 +510,16 @@ export class RoomCoordinator {
     return delivered;
   }
 
+  private requireSenderParticipantId(ws: WebSocket): string | null {
+    const participantId = this.getAttachment(ws)?.participantId;
+    if (participantId) {
+      return participantId;
+    }
+
+    ws.send(JSON.stringify({ type: "error", payload: { reason: "missing_sender_identity" } }));
+    return null;
+  }
+
   private getAttachment(ws: WebSocket): ConnectionAttachment | null {
     return (ws.deserializeAttachment() as ConnectionAttachment | null) ?? null;
   }
@@ -380,10 +537,7 @@ function createSnapshot(): RealtimeRoomSnapshot {
     mutedAllAt: null,
     endedAt: null,
     lastEventNumber: 0,
-    whiteboard: {
-      strokes: [],
-      updatedAt: null,
-    },
+    whiteboard: createEmptyWhiteboardState(),
   };
 }
 
@@ -392,15 +546,16 @@ function unique(values: string[]): string[] {
 }
 
 const MAX_WHITEBOARD_POINTS_PER_STROKE = 1_200;
-const MAX_WHITEBOARD_STROKES = 500;
+const MAX_WHITEBOARD_HISTORY_ACTIONS = 200;
+const MAX_WHITEBOARD_TEXT_LENGTH = 4_000;
+const DEFAULT_WHITEBOARD_TEXTBOX_COLOR = "#0f172a";
+const DEFAULT_WHITEBOARD_TEXTBOX_FONT_SIZE = 24;
+const MIN_WHITEBOARD_TEXTBOX_DIMENSION = 0.01;
 
 function normalizeSnapshot(snapshot: RealtimeRoomSnapshot): RealtimeRoomSnapshot {
   return {
     ...snapshot,
-    whiteboard: snapshot.whiteboard ?? {
-      strokes: [],
-      updatedAt: null,
-    },
+    whiteboard: normalizeWhiteboardState(snapshot.whiteboard),
   };
 }
 
@@ -426,13 +581,708 @@ function sanitizeWhiteboardStroke(stroke: WhiteboardStroke, participantId: strin
   return {
     strokeId: stroke.strokeId.slice(0, 96),
     participantId,
-    color: isValidHexColor(stroke.color) ? stroke.color : "#f8fafc",
+    color: isValidHexColor(stroke.color) ? stroke.color : "#0f172a",
     thickness: clamp(stroke.thickness, 1, 24),
     mode: stroke.mode === "smooth" ? "smooth" : "direct",
     points,
     updatedAt: new Date().toISOString(),
     completedAt: stroke.completedAt ? new Date().toISOString() : null,
+    removedAt: null,
   };
+}
+
+function createEmptyWhiteboardState(): RealtimeRoomSnapshot["whiteboard"] {
+  return {
+    strokes: [],
+    textBoxes: [],
+    undoStack: [],
+    redoStack: [],
+    updatedAt: null,
+  };
+}
+
+function normalizeWhiteboardState(
+  state: RealtimeRoomSnapshot["whiteboard"] | null | undefined,
+): RealtimeRoomSnapshot["whiteboard"] {
+  if (!state) {
+    return createEmptyWhiteboardState();
+  }
+
+  return pruneWhiteboardState({
+    strokes: Array.isArray(state.strokes)
+      ? state.strokes
+          .map(normalizeStoredWhiteboardStroke)
+          .filter((stroke): stroke is WhiteboardStroke => Boolean(stroke))
+      : [],
+    textBoxes: Array.isArray(state.textBoxes)
+      ? state.textBoxes
+          .map(normalizeStoredWhiteboardTextBox)
+          .filter((textBox): textBox is WhiteboardTextBox => Boolean(textBox))
+      : [],
+    undoStack: Array.isArray(state.undoStack)
+      ? state.undoStack
+          .map(normalizeWhiteboardHistoryAction)
+          .filter((action): action is WhiteboardHistoryAction => Boolean(action))
+          .slice(-MAX_WHITEBOARD_HISTORY_ACTIONS)
+      : [],
+    redoStack: Array.isArray(state.redoStack)
+      ? state.redoStack
+          .map(normalizeWhiteboardHistoryAction)
+          .filter((action): action is WhiteboardHistoryAction => Boolean(action))
+          .slice(-MAX_WHITEBOARD_HISTORY_ACTIONS)
+      : [],
+    updatedAt: typeof state.updatedAt === "string" ? state.updatedAt : null,
+  });
+}
+
+function normalizeStoredWhiteboardStroke(stroke: WhiteboardStroke): WhiteboardStroke | null {
+  if (!stroke || typeof stroke.strokeId !== "string" || !stroke.strokeId.trim()) {
+    return null;
+  }
+
+  const points = Array.isArray(stroke.points)
+    ? stroke.points
+        .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+        .map((point) => ({
+          x: clamp(point.x, 0, 1),
+          y: clamp(point.y, 0, 1),
+        }))
+        .slice(0, MAX_WHITEBOARD_POINTS_PER_STROKE)
+    : [];
+
+  if (!points.length) {
+    return null;
+  }
+
+  return {
+    strokeId: stroke.strokeId.slice(0, 96),
+    participantId: typeof stroke.participantId === "string" ? stroke.participantId.slice(0, 96) : "unknown",
+    color: isValidHexColor(stroke.color) ? stroke.color : "#0f172a",
+    thickness: clamp(stroke.thickness, 1, 24),
+    mode: stroke.mode === "smooth" ? "smooth" : "direct",
+    points,
+    updatedAt: typeof stroke.updatedAt === "string" ? stroke.updatedAt : new Date().toISOString(),
+    completedAt: stroke.completedAt ? String(stroke.completedAt) : null,
+    removedAt: stroke.removedAt ? String(stroke.removedAt) : null,
+  };
+}
+
+function sanitizeWhiteboardTextBox(textBox: WhiteboardTextBox, participantId: string): WhiteboardTextBox | null {
+  if (!textBox || typeof textBox.textBoxId !== "string" || !textBox.textBoxId.trim()) {
+    return null;
+  }
+
+  const x = clamp(textBox.x, 0, 1);
+  const y = clamp(textBox.y, 0, 1);
+  const maxWidth = 1 - x;
+  const maxHeight = 1 - y;
+  const width = clampWhiteboardTextBoxDimension(textBox.width, maxWidth);
+  const height = clampWhiteboardTextBoxDimension(textBox.height, maxHeight);
+
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  return {
+    textBoxId: textBox.textBoxId.slice(0, 96),
+    participantId,
+    x,
+    y,
+    width,
+    height,
+    text: sanitizeWhiteboardText(textBox.text),
+    fontSize: clamp(textBox.fontSize, 12, 96),
+    color: isValidHexColor(textBox.color) ? textBox.color : DEFAULT_WHITEBOARD_TEXTBOX_COLOR,
+    updatedAt: new Date().toISOString(),
+    removedAt: textBox.removedAt ? new Date().toISOString() : null,
+  };
+}
+
+function normalizeStoredWhiteboardTextBox(textBox: WhiteboardTextBox): WhiteboardTextBox | null {
+  if (!textBox || typeof textBox.textBoxId !== "string" || !textBox.textBoxId.trim()) {
+    return null;
+  }
+
+  const x = clamp(textBox.x, 0, 1);
+  const y = clamp(textBox.y, 0, 1);
+  const maxWidth = 1 - x;
+  const maxHeight = 1 - y;
+  const width = clampWhiteboardTextBoxDimension(textBox.width, maxWidth);
+  const height = clampWhiteboardTextBoxDimension(textBox.height, maxHeight);
+
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  return {
+    textBoxId: textBox.textBoxId.slice(0, 96),
+    participantId: typeof textBox.participantId === "string" ? textBox.participantId.slice(0, 96) : "unknown",
+    x,
+    y,
+    width,
+    height,
+    text: sanitizeWhiteboardText(textBox.text),
+    fontSize: clamp(textBox.fontSize, 12, 96),
+    color: isValidHexColor(textBox.color) ? textBox.color : DEFAULT_WHITEBOARD_TEXTBOX_COLOR,
+    updatedAt: typeof textBox.updatedAt === "string" ? textBox.updatedAt : new Date().toISOString(),
+    removedAt: textBox.removedAt ? String(textBox.removedAt) : null,
+  };
+}
+
+function normalizeWhiteboardHistoryAction(action: WhiteboardHistoryAction): WhiteboardHistoryAction | null {
+  if (!action || typeof action !== "object" || typeof action.type !== "string") {
+    return null;
+  }
+
+  if (action.type === "stroke") {
+    if (typeof action.strokeId !== "string" || !action.strokeId.trim()) {
+      return null;
+    }
+
+    return {
+      occurredAt: typeof action.occurredAt === "string" ? action.occurredAt : new Date().toISOString(),
+      participantId:
+        typeof action.participantId === "string" && action.participantId.trim()
+          ? action.participantId.slice(0, 96)
+          : "unknown",
+      strokeId: action.strokeId.slice(0, 96),
+      type: "stroke",
+    };
+  }
+
+  if (action.type === "clear") {
+    const strokeIds = Array.isArray(action.strokeIds)
+      ? action.strokeIds
+          .filter((strokeId) => typeof strokeId === "string" && strokeId.trim())
+          .map((strokeId) => strokeId.slice(0, 96))
+      : [];
+    const textBoxIds = Array.isArray(action.textBoxIds)
+      ? action.textBoxIds
+          .filter((textBoxId) => typeof textBoxId === "string" && textBoxId.trim())
+          .map((textBoxId) => textBoxId.slice(0, 96))
+      : [];
+
+    if (!strokeIds.length && !textBoxIds.length) {
+      return null;
+    }
+
+    return {
+      occurredAt: typeof action.occurredAt === "string" ? action.occurredAt : new Date().toISOString(),
+      participantId:
+        typeof action.participantId === "string" && action.participantId.trim()
+          ? action.participantId.slice(0, 96)
+          : "unknown",
+      strokeIds,
+      textBoxIds,
+      type: "clear",
+    };
+  }
+
+  if (action.type === "textbox.create" || action.type === "textbox.delete") {
+    const textBox = normalizeStoredWhiteboardTextBox(action.textBox);
+    if (!textBox) {
+      return null;
+    }
+
+    return {
+      occurredAt: typeof action.occurredAt === "string" ? action.occurredAt : new Date().toISOString(),
+      participantId:
+        typeof action.participantId === "string" && action.participantId.trim()
+          ? action.participantId.slice(0, 96)
+          : "unknown",
+      textBox: {
+        ...textBox,
+        removedAt: null,
+      },
+      type: action.type,
+    };
+  }
+
+  if (action.type === "textbox.update") {
+    const before = normalizeStoredWhiteboardTextBox(action.before);
+    const after = normalizeStoredWhiteboardTextBox(action.after);
+    if (!before || !after || before.textBoxId !== after.textBoxId) {
+      return null;
+    }
+
+    return {
+      occurredAt: typeof action.occurredAt === "string" ? action.occurredAt : new Date().toISOString(),
+      participantId:
+        typeof action.participantId === "string" && action.participantId.trim()
+          ? action.participantId.slice(0, 96)
+          : "unknown",
+      before: {
+        ...before,
+        removedAt: null,
+      },
+      after: {
+        ...after,
+        removedAt: null,
+      },
+      type: "textbox.update",
+    };
+  }
+
+  return null;
+}
+
+function sanitizeWhiteboardTextBoxHistoryAction(
+  action: WhiteboardTextBoxHistoryAction,
+  participantId: string,
+): WhiteboardTextBoxHistoryAction | null {
+  if (!action || typeof action !== "object" || typeof action.type !== "string") {
+    return null;
+  }
+
+  if (action.type === "textbox.create" || action.type === "textbox.delete") {
+    const textBox = sanitizeWhiteboardTextBox(
+      action.textBox,
+      getWhiteboardTextBoxParticipantId(action.textBox, participantId),
+    );
+    if (!textBox) {
+      return null;
+    }
+
+    return {
+      occurredAt: new Date().toISOString(),
+      participantId,
+      textBox: {
+        ...textBox,
+        removedAt: null,
+      },
+      type: action.type,
+    };
+  }
+
+  if (action.type === "textbox.update") {
+    const before = sanitizeWhiteboardTextBox(
+      action.before,
+      getWhiteboardTextBoxParticipantId(action.before, participantId),
+    );
+    const after = sanitizeWhiteboardTextBox(
+      action.after,
+      getWhiteboardTextBoxParticipantId(action.after, participantId),
+    );
+    if (!before || !after || before.textBoxId !== after.textBoxId) {
+      return null;
+    }
+
+    return {
+      occurredAt: new Date().toISOString(),
+      participantId,
+      before: {
+        ...before,
+        removedAt: null,
+      },
+      after: {
+        ...after,
+        removedAt: null,
+      },
+      type: "textbox.update",
+    };
+  }
+
+  return null;
+}
+
+function upsertWhiteboardStroke(
+  state: RealtimeRoomSnapshot["whiteboard"],
+  stroke: WhiteboardStroke,
+): RealtimeRoomSnapshot["whiteboard"] {
+  const nextStrokes = state.strokes.filter((entry) => entry.strokeId !== stroke.strokeId);
+  nextStrokes.push(stroke);
+  return {
+    ...state,
+    strokes: nextStrokes,
+    updatedAt: stroke.updatedAt,
+  };
+}
+
+function upsertWhiteboardTextBox(
+  state: RealtimeRoomSnapshot["whiteboard"],
+  textBox: WhiteboardTextBox,
+): RealtimeRoomSnapshot["whiteboard"] {
+  const nextTextBoxes = state.textBoxes.filter((entry) => entry.textBoxId !== textBox.textBoxId);
+  nextTextBoxes.push(textBox);
+  return {
+    ...state,
+    textBoxes: nextTextBoxes,
+    updatedAt: textBox.updatedAt,
+  };
+}
+
+function commitWhiteboardTextBoxAction(
+  state: RealtimeRoomSnapshot["whiteboard"],
+  action: WhiteboardTextBoxHistoryAction,
+): RealtimeRoomSnapshot["whiteboard"] {
+  if (action.type === "textbox.create") {
+    const nextTextBox = {
+      ...action.textBox,
+      removedAt: null,
+      updatedAt: action.occurredAt,
+    } satisfies WhiteboardTextBox;
+
+    return pruneWhiteboardState(
+      commitWhiteboardAction(
+        upsertWhiteboardTextBox(state, nextTextBox),
+        {
+          ...action,
+          textBox: nextTextBox,
+        },
+        action.occurredAt,
+      ),
+    );
+  }
+
+  if (action.type === "textbox.update") {
+    if (isSameWhiteboardTextBoxSnapshot(action.before, action.after)) {
+      return state;
+    }
+
+    const nextTextBox = {
+      ...action.after,
+      removedAt: null,
+      updatedAt: action.occurredAt,
+    } satisfies WhiteboardTextBox;
+
+    return pruneWhiteboardState(
+      commitWhiteboardAction(
+        upsertWhiteboardTextBox(state, nextTextBox),
+        {
+          ...action,
+          before: {
+            ...action.before,
+            removedAt: null,
+          },
+          after: nextTextBox,
+        },
+        action.occurredAt,
+      ),
+    );
+  }
+
+  const existingTextBox = state.textBoxes.find((entry) => entry.textBoxId === action.textBox.textBoxId);
+  if (existingTextBox?.removedAt) {
+    return state;
+  }
+
+  const hiddenTextBox = {
+    ...action.textBox,
+    removedAt: action.occurredAt,
+    updatedAt: action.occurredAt,
+  } satisfies WhiteboardTextBox;
+
+  return pruneWhiteboardState(
+    commitWhiteboardAction(
+      upsertWhiteboardTextBox(state, hiddenTextBox),
+      {
+        ...action,
+        textBox: {
+          ...action.textBox,
+          removedAt: null,
+        },
+      },
+      action.occurredAt,
+    ),
+  );
+}
+
+function clearWhiteboard(
+  state: RealtimeRoomSnapshot["whiteboard"],
+  participantId: string,
+): RealtimeRoomSnapshot["whiteboard"] {
+  const strokeIds = state.strokes
+    .filter((stroke) => !stroke.removedAt)
+    .map((stroke) => stroke.strokeId);
+  const textBoxIds = state.textBoxes
+    .filter((textBox) => !textBox.removedAt)
+    .map((textBox) => textBox.textBoxId);
+
+  if (!strokeIds.length && !textBoxIds.length) {
+    return state;
+  }
+
+  const occurredAt = new Date().toISOString();
+  return pruneWhiteboardState(
+    commitWhiteboardAction(
+      {
+        ...state,
+        strokes: setStrokeVisibility(state.strokes, new Set(strokeIds), false, occurredAt),
+        textBoxes: setTextBoxVisibility(state.textBoxes, new Set(textBoxIds), false, occurredAt),
+        updatedAt: occurredAt,
+      },
+      {
+        occurredAt,
+        participantId,
+        strokeIds,
+        textBoxIds,
+        type: "clear",
+      },
+      occurredAt,
+    ),
+  );
+}
+
+function undoWhiteboard(state: RealtimeRoomSnapshot["whiteboard"]): RealtimeRoomSnapshot["whiteboard"] {
+  const action = state.undoStack.at(-1);
+  if (!action) {
+    return state;
+  }
+
+  const occurredAt = new Date().toISOString();
+  return pruneWhiteboardState({
+    ...applyWhiteboardHistoryAction(state, action, occurredAt, "undo"),
+    redoStack: [...state.redoStack, action].slice(-MAX_WHITEBOARD_HISTORY_ACTIONS),
+    undoStack: state.undoStack.slice(0, -1),
+    updatedAt: occurredAt,
+  });
+}
+
+function redoWhiteboard(state: RealtimeRoomSnapshot["whiteboard"]): RealtimeRoomSnapshot["whiteboard"] {
+  const action = state.redoStack.at(-1);
+  if (!action) {
+    return state;
+  }
+
+  const occurredAt = new Date().toISOString();
+  return pruneWhiteboardState({
+    ...applyWhiteboardHistoryAction(state, action, occurredAt, "redo"),
+    redoStack: state.redoStack.slice(0, -1),
+    undoStack: [...state.undoStack, action].slice(-MAX_WHITEBOARD_HISTORY_ACTIONS),
+    updatedAt: occurredAt,
+  });
+}
+
+function commitWhiteboardAction(
+  state: RealtimeRoomSnapshot["whiteboard"],
+  action: WhiteboardHistoryAction,
+  updatedAt: string,
+): RealtimeRoomSnapshot["whiteboard"] {
+  return {
+    ...state,
+    undoStack: [...state.undoStack, action].slice(-MAX_WHITEBOARD_HISTORY_ACTIONS),
+    redoStack: [],
+    updatedAt,
+  };
+}
+
+function applyWhiteboardHistoryAction(
+  state: RealtimeRoomSnapshot["whiteboard"],
+  action: WhiteboardHistoryAction,
+  occurredAt: string,
+  direction: "undo" | "redo",
+): RealtimeRoomSnapshot["whiteboard"] {
+  if (action.type === "stroke") {
+    return {
+      ...state,
+      strokes: setStrokeVisibility(
+        state.strokes,
+        new Set([action.strokeId]),
+        direction === "redo",
+        occurredAt,
+      ),
+    };
+  }
+
+  if (action.type === "clear") {
+    return {
+      ...state,
+      strokes: setStrokeVisibility(
+        state.strokes,
+        new Set(action.strokeIds),
+        direction === "undo",
+        occurredAt,
+      ),
+      textBoxes: setTextBoxVisibility(
+        state.textBoxes,
+        new Set(action.textBoxIds),
+        direction === "undo",
+        occurredAt,
+      ),
+    };
+  }
+
+  if (action.type === "textbox.create") {
+    if (direction === "undo") {
+      return {
+        ...state,
+        textBoxes: setTextBoxVisibility(
+          state.textBoxes,
+          new Set([action.textBox.textBoxId]),
+          false,
+          occurredAt,
+        ),
+      };
+    }
+
+    return {
+      ...state,
+      textBoxes: upsertWhiteboardTextBoxEntry(state.textBoxes, {
+        ...action.textBox,
+        removedAt: null,
+        updatedAt: occurredAt,
+      }),
+    };
+  }
+
+  if (action.type === "textbox.update") {
+    const nextTextBox = direction === "undo" ? action.before : action.after;
+    return {
+      ...state,
+      textBoxes: upsertWhiteboardTextBoxEntry(state.textBoxes, {
+        ...nextTextBox,
+        removedAt: null,
+        updatedAt: occurredAt,
+      }),
+    };
+  }
+
+  if (direction === "undo") {
+    return {
+      ...state,
+      textBoxes: upsertWhiteboardTextBoxEntry(state.textBoxes, {
+        ...action.textBox,
+        removedAt: null,
+        updatedAt: occurredAt,
+      }),
+    };
+  }
+
+  return {
+    ...state,
+    textBoxes: setTextBoxVisibility(
+      upsertWhiteboardTextBoxEntry(state.textBoxes, {
+        ...action.textBox,
+        removedAt: null,
+        updatedAt: occurredAt,
+      }),
+      new Set([action.textBox.textBoxId]),
+      false,
+      occurredAt,
+    ),
+  };
+}
+
+function setStrokeVisibility(
+  strokes: WhiteboardStroke[],
+  strokeIds: ReadonlySet<string>,
+  visible: boolean,
+  occurredAt: string,
+): WhiteboardStroke[] {
+  return strokes.map((stroke) => {
+    if (!strokeIds.has(stroke.strokeId)) {
+      return stroke;
+    }
+
+    return {
+      ...stroke,
+      removedAt: visible ? null : occurredAt,
+      updatedAt: occurredAt,
+    };
+  });
+}
+
+function setTextBoxVisibility(
+  textBoxes: WhiteboardTextBox[],
+  textBoxIds: ReadonlySet<string>,
+  visible: boolean,
+  occurredAt: string,
+): WhiteboardTextBox[] {
+  return textBoxes.map((textBox) => {
+    if (!textBoxIds.has(textBox.textBoxId)) {
+      return textBox;
+    }
+
+    return {
+      ...textBox,
+      removedAt: visible ? null : occurredAt,
+      updatedAt: occurredAt,
+    };
+  });
+}
+
+function pruneWhiteboardState(
+  state: RealtimeRoomSnapshot["whiteboard"],
+): RealtimeRoomSnapshot["whiteboard"] {
+  const referencedStrokeIds = new Set<string>();
+  const referencedTextBoxIds = new Set<string>();
+  for (const action of [...state.undoStack, ...state.redoStack]) {
+    if (action.type === "stroke") {
+      referencedStrokeIds.add(action.strokeId);
+      continue;
+    }
+
+    if (action.type === "clear") {
+      for (const strokeId of action.strokeIds) {
+        referencedStrokeIds.add(strokeId);
+      }
+      for (const textBoxId of action.textBoxIds) {
+        referencedTextBoxIds.add(textBoxId);
+      }
+      continue;
+    }
+
+    if (action.type === "textbox.update") {
+      referencedTextBoxIds.add(action.before.textBoxId);
+      continue;
+    }
+
+    referencedTextBoxIds.add(action.textBox.textBoxId);
+  }
+
+  return {
+    ...state,
+    strokes: state.strokes.filter(
+      (stroke) => !stroke.removedAt || referencedStrokeIds.has(stroke.strokeId),
+    ),
+    textBoxes: state.textBoxes.filter(
+      (textBox) => !textBox.removedAt || referencedTextBoxIds.has(textBox.textBoxId),
+    ),
+  };
+}
+
+function upsertWhiteboardTextBoxEntry(
+  textBoxes: WhiteboardTextBox[],
+  textBox: WhiteboardTextBox,
+): WhiteboardTextBox[] {
+  const nextTextBoxes = textBoxes.filter((entry) => entry.textBoxId !== textBox.textBoxId);
+  nextTextBoxes.push(textBox);
+  return nextTextBoxes;
+}
+
+function getWhiteboardTextBoxParticipantId(
+  textBox: WhiteboardTextBox | null | undefined,
+  fallbackParticipantId: string,
+): string {
+  return typeof textBox?.participantId === "string" && textBox.participantId.trim()
+    ? textBox.participantId.slice(0, 96)
+    : fallbackParticipantId;
+}
+
+function sanitizeWhiteboardText(value: unknown): string {
+  return typeof value === "string" ? value.slice(0, MAX_WHITEBOARD_TEXT_LENGTH) : "";
+}
+
+function clampWhiteboardTextBoxDimension(value: number, max: number): number {
+  if (!Number.isFinite(value) || max <= 0) {
+    return 0;
+  }
+
+  return clamp(value, Math.min(MIN_WHITEBOARD_TEXTBOX_DIMENSION, max), max);
+}
+
+function isSameWhiteboardTextBoxSnapshot(first: WhiteboardTextBox, second: WhiteboardTextBox): boolean {
+  return (
+    first.textBoxId === second.textBoxId &&
+    first.participantId === second.participantId &&
+    first.x === second.x &&
+    first.y === second.y &&
+    first.width === second.width &&
+    first.height === second.height &&
+    first.text === second.text &&
+    first.fontSize === second.fontSize &&
+    first.color === second.color
+  );
 }
 
 function isValidHexColor(value: string): boolean {

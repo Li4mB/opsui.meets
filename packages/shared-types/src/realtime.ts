@@ -28,10 +28,65 @@ export interface WhiteboardStroke {
   points: WhiteboardPoint[];
   updatedAt: string;
   completedAt?: string | null;
+  removedAt?: string | null;
 }
+
+export interface WhiteboardTextBox {
+  textBoxId: string;
+  participantId: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  text: string;
+  fontSize: number;
+  color: string;
+  updatedAt: string;
+  removedAt?: string | null;
+}
+
+export type WhiteboardTextBoxHistoryAction =
+  | {
+      type: "textbox.create";
+      occurredAt: string;
+      participantId: string;
+      textBox: WhiteboardTextBox;
+    }
+  | {
+      type: "textbox.update";
+      occurredAt: string;
+      participantId: string;
+      before: WhiteboardTextBox;
+      after: WhiteboardTextBox;
+    }
+  | {
+      type: "textbox.delete";
+      occurredAt: string;
+      participantId: string;
+      textBox: WhiteboardTextBox;
+    };
+
+export type WhiteboardHistoryAction =
+  | {
+      type: "stroke";
+      occurredAt: string;
+      participantId: string;
+      strokeId: string;
+    }
+  | {
+      type: "clear";
+      occurredAt: string;
+      participantId: string;
+      strokeIds: string[];
+      textBoxIds: string[];
+    }
+  | WhiteboardTextBoxHistoryAction;
 
 export interface RealtimeWhiteboardState {
   strokes: WhiteboardStroke[];
+  textBoxes: WhiteboardTextBox[];
+  undoStack: WhiteboardHistoryAction[];
+  redoStack: WhiteboardHistoryAction[];
   updatedAt: string | null;
 }
 

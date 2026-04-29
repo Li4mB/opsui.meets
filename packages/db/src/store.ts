@@ -26,6 +26,7 @@ export interface StoredParticipantState extends ParticipantState {
   reconnectingSinceAt?: string;
   reconnectingToPresence?: Exclude<ParticipantState["presence"], "left" | "reconnecting">;
   sessionLastSeenAt?: string;
+  sessionTerminationReason?: "ended" | "expired" | "manual_leave" | "removed";
 }
 
 export interface MemoryStore {

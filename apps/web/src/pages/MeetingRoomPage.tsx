@@ -7,7 +7,10 @@ import type {
   RealtimeWhiteboardState,
   RoomEvent,
   SessionInfo,
+  WhiteboardHistoryAction,
   WhiteboardStroke,
+  WhiteboardTextBox,
+  WhiteboardTextBoxHistoryAction,
 } from "@opsui/shared-types";
 import { MeetingConversationPanel } from "../components/MeetingConversationPanel";
 import { MeetingControlButton } from "../components/MeetingControlButton";
@@ -68,6 +71,8 @@ const REALTIME_PING_INTERVAL_MS = 20_000;
 const REALTIME_RECONNECT_MAX_DELAY_MS = 10_000;
 const ROOM_REFRESH_DEBOUNCE_MS = 250;
 const ROOM_REFRESH_WARNING_GRACE_MS = 15_000;
+const MEETING_SESSION_RECOVERY_MAX_ATTEMPTS = 6;
+const MEETING_SESSION_RECOVERY_RETRY_MS = 3_000;
 const MEETING_SERVICE_RECONNECTING_MESSAGE = "Connection to meeting services was interrupted. Reconnecting...";
 const MEETING_SERVICE_RETRYING_MESSAGE =
   "Connection to meeting services was interrupted. Retrying in the background.";
@@ -78,6 +83,10 @@ function clearMeetingServiceInterruption(message: string | null): string | null 
   }
 
   return message;
+}
+
+function clearMeetingRefreshRetryMessage(message: string | null): string | null {
+  return message === MEETING_SERVICE_RETRYING_MESSAGE ? null : message;
 }
 
 export function MeetingRoomPage(props: MeetingRoomPageProps) {
@@ -117,6 +126,10 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const roomRefreshQueuedRef = useRef(false);
   const roomRefreshTimeoutRef = useRef<number | null>(null);
   const lastSuccessfulRoomRefreshAtRef = useRef(0);
+  const meetingSessionRecoveryAttemptRef = useRef(0);
+  const meetingSessionRecoveryInFlightRef = useRef(false);
+  const meetingSessionRecoveryTimeoutRef = useRef<number | null>(null);
+  const meetingSessionRecoveryActiveRef = useRef(false);
   const realtimeHelloKeyRef = useRef<string | null>(null);
   const realtimeSocketRef = useRef<WebSocket | null>(null);
   const sessionRef = useRef(props.session);
@@ -134,12 +147,25 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       if (roomRefreshTimeoutRef.current) {
         window.clearTimeout(roomRefreshTimeoutRef.current);
       }
+      if (meetingSessionRecoveryTimeoutRef.current) {
+        window.clearTimeout(meetingSessionRecoveryTimeoutRef.current);
+      }
     };
   }, []);
 
   function isActiveMeetingScope(scopeId: number): boolean {
     return meetingScopeRef.current === scopeId;
   }
+
+  const clearMeetingSessionRecovery = useEffectEvent(() => {
+    meetingSessionRecoveryActiveRef.current = false;
+    meetingSessionRecoveryAttemptRef.current = 0;
+    meetingSessionRecoveryInFlightRef.current = false;
+    if (meetingSessionRecoveryTimeoutRef.current) {
+      window.clearTimeout(meetingSessionRecoveryTimeoutRef.current);
+      meetingSessionRecoveryTimeoutRef.current = null;
+    }
+  });
 
   const leaveActiveMeetingSession = useEffectEvent((options?: { rotateJoinSession?: boolean }) => {
     if (options?.rotateJoinSession) {
@@ -165,6 +191,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     roomRefreshPromiseRef.current = null;
     roomRefreshQueuedRef.current = false;
     lastSuccessfulRoomRefreshAtRef.current = 0;
+    clearMeetingSessionRecovery();
 
     if (roomRefreshTimeoutRef.current) {
       window.clearTimeout(roomRefreshTimeoutRef.current);
@@ -187,6 +214,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     setLiveMediaByParticipantId({});
     setRealtimeSnapshot(null);
     setGuestModalOpen(false);
+    clearMeetingSessionRecovery();
     activeMeetingSessionRef.current = null;
     autoJoinKeyRef.current = null;
     lastLeaveRequestKeyRef.current = null;
@@ -226,7 +254,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
         return;
       }
 
-      setServiceMessage(null);
+      setServiceMessage(clearMeetingRefreshRetryMessage);
       setLoadState({
         data: nextData,
         status: "ready",
@@ -353,34 +381,143 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     (props.session?.authenticated ? getSessionDisplayName(props.session) : guestDisplayName.trim() || "Guest User");
   const participantRole = currentParticipant?.role ?? props.session?.actor.workspaceRole ?? "participant";
 
+  const concludeMeetingSessionLoss = useEffectEvent((message: string) => {
+    clearMeetingSessionRecovery();
+    activeMeetingSessionRef.current = null;
+    realtimeHelloKeyRef.current = null;
+    setActiveMeetingTool(null);
+    setParticipantId(null);
+    setJoinState("idle");
+    setJoinMessage(message);
+    setServiceMessage(null);
+  });
+
+  const syncRecoveredParticipant = useEffectEvent((participant: ParticipantState) => {
+    setLoadState((current) => {
+      if (current.status !== "ready") {
+        return current;
+      }
+
+      return {
+        status: "ready",
+        data: {
+          ...current.data,
+          participants: upsertParticipantState(current.data.participants, participant),
+        },
+      };
+    });
+  });
+
+  const attemptMeetingSessionRecovery = useEffectEvent(async (scopeId = meetingScopeRef.current) => {
+    if (
+      meetingSessionRecoveryInFlightRef.current ||
+      !meeting?.id ||
+      !participantId ||
+      (joinState !== "direct" && joinState !== "lobby")
+    ) {
+      return false;
+    }
+
+    meetingSessionRecoveryActiveRef.current = true;
+    meetingSessionRecoveryInFlightRef.current = true;
+    meetingSessionRecoveryAttemptRef.current += 1;
+
+    const participant = await touchMeetingParticipantSession(meeting.id, participantId);
+    meetingSessionRecoveryInFlightRef.current = false;
+
+    if (!isActiveMeetingScope(scopeId) || !meetingSessionRecoveryActiveRef.current) {
+      return false;
+    }
+
+    if (participant && participant.presence !== "left") {
+      syncRecoveredParticipant(participant);
+      if (joinState === "lobby" && participant.presence === "active") {
+        setJoinState("direct");
+        setJoinMessage("You were admitted to the room.");
+      }
+      clearMeetingSessionRecovery();
+      setServiceMessage(clearMeetingServiceInterruption);
+      scheduleRoomRefresh({ immediate: true, scopeId });
+      return true;
+    }
+
+    if (meetingSessionRecoveryAttemptRef.current >= MEETING_SESSION_RECOVERY_MAX_ATTEMPTS) {
+      concludeMeetingSessionLoss("Meeting connection expired. Join again to continue.");
+      return false;
+    }
+
+    if (!meetingSessionRecoveryTimeoutRef.current) {
+      meetingSessionRecoveryTimeoutRef.current = window.setTimeout(() => {
+        meetingSessionRecoveryTimeoutRef.current = null;
+        void attemptMeetingSessionRecovery(scopeId);
+      }, MEETING_SESSION_RECOVERY_RETRY_MS);
+    }
+
+    return false;
+  });
+
+  const beginMeetingSessionRecovery = useEffectEvent((options?: { immediate?: boolean }) => {
+    if (!meeting?.id || !participantId || (joinState !== "direct" && joinState !== "lobby")) {
+      return;
+    }
+
+    meetingSessionRecoveryActiveRef.current = true;
+    setServiceMessage((current) =>
+      current === MEETING_SERVICE_RETRYING_MESSAGE ? MEETING_SERVICE_RECONNECTING_MESSAGE : current ?? MEETING_SERVICE_RECONNECTING_MESSAGE,
+    );
+
+    if (options?.immediate) {
+      if (meetingSessionRecoveryTimeoutRef.current) {
+        window.clearTimeout(meetingSessionRecoveryTimeoutRef.current);
+        meetingSessionRecoveryTimeoutRef.current = null;
+      }
+      void attemptMeetingSessionRecovery();
+      return;
+    }
+
+    if (meetingSessionRecoveryInFlightRef.current || meetingSessionRecoveryTimeoutRef.current) {
+      return;
+    }
+
+    meetingSessionRecoveryTimeoutRef.current = window.setTimeout(() => {
+      meetingSessionRecoveryTimeoutRef.current = null;
+      void attemptMeetingSessionRecovery();
+    }, MEETING_SESSION_RECOVERY_RETRY_MS);
+  });
+
   useEffect(() => {
     if (suppressGuestPromptRef.current) {
       return;
     }
 
-    if (!participantId || !currentParticipant) {
+    if (!participantId) {
+      clearMeetingSessionRecovery();
+      return;
+    }
+
+    if (!currentParticipant) {
+      beginMeetingSessionRecovery({ immediate: true });
       return;
     }
 
     if (currentParticipant.presence === "left") {
-      setParticipantId(null);
-      setJoinState("idle");
-      setJoinMessage("You are no longer in this meeting.");
+      beginMeetingSessionRecovery({ immediate: true });
       return;
     }
 
     if (currentParticipant.presence === "reconnecting") {
-      setServiceMessage((current) => current ?? MEETING_SERVICE_RECONNECTING_MESSAGE);
+      beginMeetingSessionRecovery({ immediate: true });
       return;
     }
 
+    clearMeetingSessionRecovery();
     setServiceMessage(clearMeetingServiceInterruption);
 
     if (joinState === "lobby" && currentParticipant.presence === "active") {
       setJoinState("direct");
       setJoinMessage("You were admitted to the room.");
     }
-  }, [currentParticipant, joinState, participantId]);
+  }, [beginMeetingSessionRecovery, clearMeetingSessionRecovery, currentParticipant, joinState, participantId]);
 
   useEffect(() => {
     if (!meeting?.id || !participantId) {
@@ -400,23 +537,28 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     }
 
     const participant = await touchMeetingParticipantSession(meeting.id, participantId);
-    if (!isActiveMeetingScope(scopeId) || !participant) {
+    if (!isActiveMeetingScope(scopeId)) {
       return;
     }
 
+    if (!participant) {
+      beginMeetingSessionRecovery();
+      return;
+    }
+
+    syncRecoveredParticipant(participant);
+
     if (participant.presence === "left") {
-      setParticipantId(null);
-      setJoinState("idle");
-      setJoinMessage("Meeting connection expired. Rejoining...");
-      setServiceMessage(null);
+      beginMeetingSessionRecovery({ immediate: true });
       return;
     }
 
     if (participant.presence === "reconnecting") {
-      setServiceMessage(MEETING_SERVICE_RECONNECTING_MESSAGE);
+      beginMeetingSessionRecovery({ immediate: true });
       return;
     }
 
+    clearMeetingSessionRecovery();
     setServiceMessage(clearMeetingServiceInterruption);
   });
 
@@ -464,6 +606,75 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
         payload: { stroke },
       }),
     );
+    return true;
+  });
+
+  const sendWhiteboardTextBoxUpsert = useEffectEvent((textBox: WhiteboardTextBox): boolean => {
+    const socket = realtimeSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || joinState !== "direct" || !participantId) {
+      return false;
+    }
+
+    socket.send(
+      JSON.stringify({
+        type: "whiteboard.textbox.upsert",
+        payload: { textBox },
+      }),
+    );
+    return true;
+  });
+
+  const sendWhiteboardTextBoxCommit = useEffectEvent((action: WhiteboardTextBoxHistoryAction): boolean => {
+    const socket = realtimeSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN || joinState !== "direct" || !participantId) {
+      return false;
+    }
+
+    socket.send(
+      JSON.stringify({
+        type: "whiteboard.textbox.commit",
+        payload: { action },
+      }),
+    );
+    return true;
+  });
+
+  const sendWhiteboardCommand = useEffectEvent(
+    (type: "whiteboard.clear" | "whiteboard.undo" | "whiteboard.redo"): boolean => {
+      const socket = realtimeSocketRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN || joinState !== "direct" || !participantId) {
+        return false;
+      }
+
+      socket.send(JSON.stringify({ type }));
+      return true;
+    },
+  );
+
+  const sendWhiteboardClear = useEffectEvent((): boolean => {
+    if (!participantId || !sendWhiteboardCommand("whiteboard.clear")) {
+      return false;
+    }
+
+    setRealtimeSnapshot((current) => clearRealtimeWhiteboard(current, participantId));
+    return true;
+  });
+
+  const sendWhiteboardUndo = useEffectEvent((): boolean => {
+    if (!sendWhiteboardCommand("whiteboard.undo")) {
+      return false;
+    }
+
+    setRealtimeSnapshot((current) => undoRealtimeWhiteboard(current));
+    return true;
+  });
+
+  const sendWhiteboardRedo = useEffectEvent((): boolean => {
+    if (!sendWhiteboardCommand("whiteboard.redo")) {
+      return false;
+    }
+
+    setRealtimeSnapshot((current) => redoRealtimeWhiteboard(current));
     return true;
   });
 
@@ -564,6 +775,11 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
 
         if (message.type === "whiteboard.stroke.upsert") {
           setRealtimeSnapshot((current) => upsertRealtimeWhiteboardStroke(current, message.payload.stroke));
+          return;
+        }
+
+        if (message.type === "whiteboard.textbox.upsert") {
+          setRealtimeSnapshot((current) => upsertRealtimeWhiteboardTextBox(current, message.payload.textBox));
           return;
         }
 
@@ -702,11 +918,13 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     }
 
     if (!result) {
+      clearMeetingSessionRecovery();
       setJoinState("error");
       setJoinMessage("We could not join this meeting.");
       return;
     }
 
+    clearMeetingSessionRecovery();
     setParticipantId(result.participantId ?? null);
     setGuestModalOpen(false);
     setJoinState(result.joinState);
@@ -997,7 +1215,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
         ["owner", "host", "co_host", "moderator", "presenter"].includes(currentParticipant.role),
     ) ||
     Boolean(meeting?.hostUserId && meeting.hostUserId === props.session?.actor.userId);
-  const shouldConnectMedia = joinState === "direct" && Boolean(currentParticipant && participantId);
+  const shouldConnectMedia = joinState === "direct" && Boolean(participantId);
   const chatDisabledReason = getChatDisabledReason({
     canManageMeeting,
     currentParticipant,
@@ -1050,6 +1268,11 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const isParticipantsOpen = activeDrawer === "participants";
   const isWhiteboardOpen = activeMeetingTool === "whiteboard";
   const whiteboardState = realtimeSnapshot?.whiteboard ?? createEmptyWhiteboardState();
+  const canClearWhiteboard =
+    whiteboardState.strokes.some((stroke) => !stroke.removedAt) ||
+    whiteboardState.textBoxes.some((textBox) => !textBox.removedAt);
+  const canUndoWhiteboard = whiteboardState.undoStack.length > 0;
+  const canRedoWhiteboard = whiteboardState.redoStack.length > 0;
   const whiteboardCollaboratorReady = realtimeSocketStatus === "connected" && Boolean(REALTIME_BASE_URL);
   const whiteboardDisabledReason =
     joinState !== "direct" || !participantId || !currentParticipant
@@ -1206,11 +1429,20 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
                 toolStage={
                   isWhiteboardOpen ? (
                     <MeetingWhiteboardStage
+                      canClear={canClearWhiteboard}
+                      canRedo={canRedoWhiteboard}
+                      canUndo={canUndoWhiteboard}
                       disabledReason={whiteboardDisabledReason}
+                      onClear={sendWhiteboardClear}
                       onClose={closeActiveTool}
+                      onRedo={sendWhiteboardRedo}
                       onStrokeUpsert={sendWhiteboardStroke}
+                      onTextBoxCommit={sendWhiteboardTextBoxCommit}
+                      onTextBoxUpsert={sendWhiteboardTextBoxUpsert}
+                      onUndo={sendWhiteboardUndo}
                       participantId={participantId}
                       strokes={whiteboardState.strokes}
+                      textBoxes={whiteboardState.textBoxes}
                     />
                   ) : null
                 }
@@ -1402,6 +1634,7 @@ type RealtimeClientMessage =
   | { type: "pong" }
   | { type: "room.snapshot"; payload: RealtimeRoomSnapshot }
   | { type: "whiteboard.stroke.upsert"; payload: { stroke: WhiteboardStroke } }
+  | { type: "whiteboard.textbox.upsert"; payload: { textBox: WhiteboardTextBox } }
   | { type: "other" };
 
 function parseRealtimeMessage(raw: string): RealtimeClientMessage | null {
@@ -1417,6 +1650,10 @@ function parseRealtimeMessage(raw: string): RealtimeClientMessage | null {
 
     if (parsed.type === "whiteboard.stroke.upsert" && isWhiteboardStrokePayload(parsed.payload)) {
       return { type: "whiteboard.stroke.upsert", payload: parsed.payload };
+    }
+
+    if (parsed.type === "whiteboard.textbox.upsert" && isWhiteboardTextBoxPayload(parsed.payload)) {
+      return { type: "whiteboard.textbox.upsert", payload: parsed.payload };
     }
 
     return typeof parsed.type === "string" ? { type: "other" } : null;
@@ -1439,20 +1676,145 @@ function isWhiteboardStrokePayload(value: unknown): value is { stroke: Whiteboar
   );
 }
 
+function isWhiteboardTextBoxPayload(value: unknown): value is { textBox: WhiteboardTextBox } {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      "textBox" in value &&
+      value.textBox &&
+      typeof value.textBox === "object",
+  );
+}
+
 function upsertRealtimeWhiteboardStroke(
   snapshot: RealtimeRoomSnapshot | null,
   stroke: WhiteboardStroke,
 ): RealtimeRoomSnapshot {
   const baseSnapshot = snapshot ?? createEmptyRealtimeSnapshot();
+  const existingStroke = baseSnapshot.whiteboard.strokes.find((entry) => entry.strokeId === stroke.strokeId);
   const nextStrokes = baseSnapshot.whiteboard.strokes.filter((entry) => entry.strokeId !== stroke.strokeId);
-  nextStrokes.push(stroke);
+  nextStrokes.push({
+    ...stroke,
+    removedAt: stroke.removedAt ?? existingStroke?.removedAt ?? null,
+  });
 
   return {
     ...baseSnapshot,
     whiteboard: {
+      ...baseSnapshot.whiteboard,
       strokes: nextStrokes,
       updatedAt: stroke.updatedAt,
     },
+  };
+}
+
+function upsertRealtimeWhiteboardTextBox(
+  snapshot: RealtimeRoomSnapshot | null,
+  textBox: WhiteboardTextBox,
+): RealtimeRoomSnapshot {
+  const baseSnapshot = snapshot ?? createEmptyRealtimeSnapshot();
+  const existingTextBox = baseSnapshot.whiteboard.textBoxes.find((entry) => entry.textBoxId === textBox.textBoxId);
+  const nextTextBoxes = baseSnapshot.whiteboard.textBoxes.filter((entry) => entry.textBoxId !== textBox.textBoxId);
+  nextTextBoxes.push({
+    ...textBox,
+    removedAt: textBox.removedAt ?? existingTextBox?.removedAt ?? null,
+  });
+
+  return {
+    ...baseSnapshot,
+    whiteboard: {
+      ...baseSnapshot.whiteboard,
+      textBoxes: nextTextBoxes,
+      updatedAt: textBox.updatedAt,
+    },
+  };
+}
+
+function clearRealtimeWhiteboard(
+  snapshot: RealtimeRoomSnapshot | null,
+  participantId: string,
+): RealtimeRoomSnapshot {
+  const baseSnapshot = snapshot ?? createEmptyRealtimeSnapshot();
+  const strokeIds = baseSnapshot.whiteboard.strokes
+    .filter((stroke) => !stroke.removedAt)
+    .map((stroke) => stroke.strokeId);
+  const textBoxIds = baseSnapshot.whiteboard.textBoxes
+    .filter((textBox) => !textBox.removedAt)
+    .map((textBox) => textBox.textBoxId);
+
+  if (!strokeIds.length && !textBoxIds.length) {
+    return baseSnapshot;
+  }
+
+  const occurredAt = new Date().toISOString();
+  return {
+    ...baseSnapshot,
+    whiteboard: pruneRealtimeWhiteboardState(
+      commitRealtimeWhiteboardAction(
+        {
+          ...baseSnapshot.whiteboard,
+          strokes: setRealtimeWhiteboardStrokeVisibility(
+            baseSnapshot.whiteboard.strokes,
+            new Set(strokeIds),
+            false,
+            occurredAt,
+          ),
+          textBoxes: setRealtimeWhiteboardTextBoxVisibility(
+            baseSnapshot.whiteboard.textBoxes,
+            new Set(textBoxIds),
+            false,
+            occurredAt,
+          ),
+          updatedAt: occurredAt,
+        },
+        {
+          occurredAt,
+          participantId,
+          strokeIds,
+          textBoxIds,
+          type: "clear",
+        },
+        occurredAt,
+      ),
+    ),
+  };
+}
+
+function undoRealtimeWhiteboard(snapshot: RealtimeRoomSnapshot | null): RealtimeRoomSnapshot {
+  const baseSnapshot = snapshot ?? createEmptyRealtimeSnapshot();
+  const action = baseSnapshot.whiteboard.undoStack.at(-1);
+  if (!action) {
+    return baseSnapshot;
+  }
+
+  const occurredAt = new Date().toISOString();
+  return {
+    ...baseSnapshot,
+    whiteboard: pruneRealtimeWhiteboardState({
+      ...applyRealtimeWhiteboardHistoryAction(baseSnapshot.whiteboard, action, occurredAt, "undo"),
+      redoStack: [...baseSnapshot.whiteboard.redoStack, action].slice(-MAX_WHITEBOARD_HISTORY_ACTIONS),
+      undoStack: baseSnapshot.whiteboard.undoStack.slice(0, -1),
+      updatedAt: occurredAt,
+    }),
+  };
+}
+
+function redoRealtimeWhiteboard(snapshot: RealtimeRoomSnapshot | null): RealtimeRoomSnapshot {
+  const baseSnapshot = snapshot ?? createEmptyRealtimeSnapshot();
+  const action = baseSnapshot.whiteboard.redoStack.at(-1);
+  if (!action) {
+    return baseSnapshot;
+  }
+
+  const occurredAt = new Date().toISOString();
+  return {
+    ...baseSnapshot,
+    whiteboard: pruneRealtimeWhiteboardState({
+      ...applyRealtimeWhiteboardHistoryAction(baseSnapshot.whiteboard, action, occurredAt, "redo"),
+      redoStack: baseSnapshot.whiteboard.redoStack.slice(0, -1),
+      undoStack: [...baseSnapshot.whiteboard.undoStack, action].slice(-MAX_WHITEBOARD_HISTORY_ACTIONS),
+      updatedAt: occurredAt,
+    }),
   };
 }
 
@@ -1475,8 +1837,217 @@ function createEmptyRealtimeSnapshot(): RealtimeRoomSnapshot {
 function createEmptyWhiteboardState(): RealtimeWhiteboardState {
   return {
     strokes: [],
+    textBoxes: [],
+    undoStack: [],
+    redoStack: [],
     updatedAt: null,
   };
+}
+
+const MAX_WHITEBOARD_HISTORY_ACTIONS = 200;
+
+function commitRealtimeWhiteboardAction(
+  state: RealtimeWhiteboardState,
+  action: WhiteboardHistoryAction,
+  updatedAt: string,
+): RealtimeWhiteboardState {
+  return {
+    ...state,
+    undoStack: [...state.undoStack, action].slice(-MAX_WHITEBOARD_HISTORY_ACTIONS),
+    redoStack: [],
+    updatedAt,
+  };
+}
+
+function applyRealtimeWhiteboardHistoryAction(
+  state: RealtimeWhiteboardState,
+  action: WhiteboardHistoryAction,
+  occurredAt: string,
+  direction: "undo" | "redo",
+): RealtimeWhiteboardState {
+  if (action.type === "stroke") {
+    return {
+      ...state,
+      strokes: setRealtimeWhiteboardStrokeVisibility(
+        state.strokes,
+        new Set([action.strokeId]),
+        direction === "redo",
+        occurredAt,
+      ),
+    };
+  }
+
+  if (action.type === "clear") {
+    return {
+      ...state,
+      strokes: setRealtimeWhiteboardStrokeVisibility(
+        state.strokes,
+        new Set(action.strokeIds),
+        direction === "undo",
+        occurredAt,
+      ),
+      textBoxes: setRealtimeWhiteboardTextBoxVisibility(
+        state.textBoxes,
+        new Set(action.textBoxIds),
+        direction === "undo",
+        occurredAt,
+      ),
+    };
+  }
+
+  if (action.type === "textbox.create") {
+    if (direction === "undo") {
+      return {
+        ...state,
+        textBoxes: setRealtimeWhiteboardTextBoxVisibility(
+          state.textBoxes,
+          new Set([action.textBox.textBoxId]),
+          false,
+          occurredAt,
+        ),
+      };
+    }
+
+    return {
+      ...state,
+      textBoxes: upsertRealtimeWhiteboardTextBoxEntry(state.textBoxes, {
+        ...action.textBox,
+        removedAt: null,
+        updatedAt: occurredAt,
+      }),
+    };
+  }
+
+  if (action.type === "textbox.update") {
+    const nextTextBox = direction === "undo" ? action.before : action.after;
+    return {
+      ...state,
+      textBoxes: upsertRealtimeWhiteboardTextBoxEntry(state.textBoxes, {
+        ...nextTextBox,
+        removedAt: null,
+        updatedAt: occurredAt,
+      }),
+    };
+  }
+
+  if (direction === "undo") {
+    return {
+      ...state,
+      textBoxes: upsertRealtimeWhiteboardTextBoxEntry(state.textBoxes, {
+        ...action.textBox,
+        removedAt: null,
+        updatedAt: occurredAt,
+      }),
+    };
+  }
+
+  return {
+    ...state,
+    textBoxes: setRealtimeWhiteboardTextBoxVisibility(
+      upsertRealtimeWhiteboardTextBoxEntry(state.textBoxes, {
+        ...action.textBox,
+        removedAt: null,
+        updatedAt: occurredAt,
+      }),
+      new Set([action.textBox.textBoxId]),
+      false,
+      occurredAt,
+    ),
+  };
+}
+
+function setRealtimeWhiteboardStrokeVisibility(
+  strokes: WhiteboardStroke[],
+  strokeIds: ReadonlySet<string>,
+  visible: boolean,
+  occurredAt: string,
+): WhiteboardStroke[] {
+  return strokes.map((stroke) => {
+    if (!strokeIds.has(stroke.strokeId)) {
+      return stroke;
+    }
+
+    return {
+      ...stroke,
+      removedAt: visible ? null : occurredAt,
+      updatedAt: occurredAt,
+    };
+  });
+}
+
+function setRealtimeWhiteboardTextBoxVisibility(
+  textBoxes: WhiteboardTextBox[],
+  textBoxIds: ReadonlySet<string>,
+  visible: boolean,
+  occurredAt: string,
+): WhiteboardTextBox[] {
+  return textBoxes.map((textBox) => {
+    if (!textBoxIds.has(textBox.textBoxId)) {
+      return textBox;
+    }
+
+    return {
+      ...textBox,
+      removedAt: visible ? null : occurredAt,
+      updatedAt: occurredAt,
+    };
+  });
+}
+
+function pruneRealtimeWhiteboardState(state: RealtimeWhiteboardState): RealtimeWhiteboardState {
+  const referencedStrokeIds = new Set<string>();
+  const referencedTextBoxIds = new Set<string>();
+  for (const action of [...state.undoStack, ...state.redoStack]) {
+    if (action.type === "stroke") {
+      referencedStrokeIds.add(action.strokeId);
+      continue;
+    }
+
+    if (action.type === "clear") {
+      for (const strokeId of action.strokeIds) {
+        referencedStrokeIds.add(strokeId);
+      }
+      for (const textBoxId of action.textBoxIds) {
+        referencedTextBoxIds.add(textBoxId);
+      }
+      continue;
+    }
+
+    if (action.type === "textbox.update") {
+      referencedTextBoxIds.add(action.before.textBoxId);
+      continue;
+    }
+
+    referencedTextBoxIds.add(action.textBox.textBoxId);
+  }
+
+  return {
+    ...state,
+    strokes: state.strokes.filter(
+      (stroke) => !stroke.removedAt || referencedStrokeIds.has(stroke.strokeId),
+    ),
+    textBoxes: state.textBoxes.filter(
+      (textBox) => !textBox.removedAt || referencedTextBoxIds.has(textBox.textBoxId),
+    ),
+  };
+}
+
+function upsertRealtimeWhiteboardTextBoxEntry(
+  textBoxes: WhiteboardTextBox[],
+  textBox: WhiteboardTextBox,
+): WhiteboardTextBox[] {
+  const nextTextBoxes = textBoxes.filter((entry) => entry.textBoxId !== textBox.textBoxId);
+  nextTextBoxes.push(textBox);
+  return nextTextBoxes;
+}
+
+function upsertParticipantState(
+  participants: ParticipantState[],
+  participant: ParticipantState,
+): ParticipantState[] {
+  const nextParticipants = participants.filter((entry) => entry.participantId !== participant.participantId);
+  nextParticipants.push(participant);
+  return nextParticipants;
 }
 
 function getChatDisabledReason(input: {

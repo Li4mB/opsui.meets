@@ -3376,15 +3376,15 @@ button {
 
 .meeting-whiteboard {
   position: relative;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: block;
   height: 100%;
   min-height: 0;
   color: #0f172a;
 }
 
 .meeting-whiteboard__topbar {
-  position: relative;
+  position: absolute;
+  inset: 0 0 auto 0;
   z-index: 6;
   display: flex;
   align-items: flex-start;
@@ -3395,7 +3395,7 @@ button {
 }
 
 .meeting-whiteboard__toolset,
-.meeting-whiteboard__close {
+.meeting-whiteboard__actions {
   pointer-events: auto;
 }
 
@@ -3403,7 +3403,7 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  max-width: calc(100% - 58px);
+  max-width: calc(100% - 72px);
   padding: 8px;
   border: 1px solid rgba(15, 23, 42, 0.1);
   border-radius: 18px;
@@ -3414,7 +3414,7 @@ button {
 
 .meeting-whiteboard__tool-pill,
 .meeting-whiteboard__thickness-button,
-.meeting-whiteboard__close {
+.meeting-whiteboard__action-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3427,6 +3427,16 @@ button {
 }
 
 .meeting-whiteboard__tool-pill {
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.meeting-whiteboard__actions {
+  display: inline-grid;
+  gap: 10px;
+}
+
+.meeting-whiteboard__tool-pill {
   gap: 8px;
   padding: 0 12px;
 }
@@ -3434,6 +3444,14 @@ button {
 .meeting-whiteboard__tool-pill--active {
   background: rgba(14, 165, 233, 0.14);
   color: #075985;
+}
+
+.meeting-whiteboard__hint {
+  color: rgba(15, 23, 42, 0.62);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .meeting-whiteboard__swatches {
@@ -3561,7 +3579,51 @@ button {
   height: 32px;
 }
 
-.meeting-whiteboard__close {
+.meeting-whiteboard__text-options {
+  position: absolute;
+  left: 50%;
+  top: 14px;
+  z-index: 7;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 18px;
+  background: rgba(248, 250, 252, 0.88);
+  box-shadow: 0 14px 40px rgba(15, 23, 42, 0.14);
+  backdrop-filter: blur(18px);
+  transform: translateX(-50%);
+}
+
+.meeting-whiteboard__text-size {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #0f172a;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.meeting-whiteboard__text-size span {
+  color: rgba(15, 23, 42, 0.58);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.meeting-whiteboard__text-size input {
+  width: 72px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.74);
+  color: #0f172a;
+  font: inherit;
+}
+
+.meeting-whiteboard__action-button {
   width: 42px;
   padding: 0;
   border: 1px solid rgba(15, 23, 42, 0.08);
@@ -3569,12 +3631,38 @@ button {
   box-shadow: 0 14px 36px rgba(15, 23, 42, 0.12);
   cursor: pointer;
   backdrop-filter: blur(18px);
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease;
+}
+
+.meeting-whiteboard__action-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(15, 23, 42, 0.18);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 18px 38px rgba(15, 23, 42, 0.16);
+}
+
+.meeting-whiteboard__action-button:disabled {
+  cursor: not-allowed;
+  color: rgba(15, 23, 42, 0.28);
+  background: rgba(226, 232, 240, 0.72);
+  box-shadow: none;
+  opacity: 0.78;
+}
+
+.meeting-whiteboard__action-button--close {
+  color: #0f172a;
 }
 
 .meeting-whiteboard__canvas-shell {
-  position: relative;
+  position: absolute;
+  inset: 0;
   min-height: 0;
-  margin-top: -70px;
 }
 
 .meeting-whiteboard__canvas {
@@ -3582,7 +3670,92 @@ button {
   width: 100%;
   height: 100%;
   touch-action: none;
+}
+
+.meeting-whiteboard__canvas--pen {
   cursor: crosshair;
+}
+
+.meeting-whiteboard__canvas--text {
+  cursor: text;
+}
+
+.meeting-whiteboard__text-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.meeting-whiteboard__text-layer.is-active {
+  pointer-events: auto;
+}
+
+.meeting-whiteboard__textbox {
+  position: absolute;
+  display: block;
+  padding: 6px;
+  border: 2px solid transparent;
+  border-radius: 18px;
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.meeting-whiteboard__textbox.is-selected {
+  border-color: rgba(14, 165, 233, 0.56);
+  background: rgba(125, 211, 252, 0.08);
+  box-shadow: 0 12px 28px rgba(14, 165, 233, 0.12);
+}
+
+.meeting-whiteboard__textbox.is-editing {
+  border-color: rgba(14, 165, 233, 0.82);
+}
+
+.meeting-whiteboard__textbox-content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.46);
+  overflow: hidden;
+}
+
+.meeting-whiteboard__textbox-button,
+.meeting-whiteboard__textbox-editor {
+  width: 100%;
+  height: 100%;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  font-family: "Manrope", "Segoe UI", sans-serif;
+  line-height: 1.2;
+  outline: none;
+  overflow-wrap: anywhere;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.meeting-whiteboard__textbox-button {
+  cursor: text;
+}
+
+.meeting-whiteboard__textbox-editor {
+  display: block;
+  resize: none;
+  overflow: hidden;
+}
+
+.meeting-whiteboard__textbox-resize {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgba(15, 23, 42, 0.16);
+  border-radius: 999px;
+  background: #f8fafc;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.16);
+  cursor: nwse-resize;
 }
 
 .meeting-whiteboard__disabled {
@@ -4003,12 +4176,26 @@ button {
   .meeting-whiteboard__toolset {
     flex-wrap: wrap;
     gap: 8px;
-    max-width: calc(100% - 52px);
+    max-width: calc(100% - 60px);
     padding: 7px;
   }
 
+  .meeting-whiteboard__actions {
+    gap: 8px;
+  }
+
+  .meeting-whiteboard__action-button {
+    width: 40px;
+    min-height: 40px;
+    border-radius: 11px;
+  }
+
   .meeting-whiteboard__canvas-shell {
-    margin-top: -62px;
+    inset: 0;
+  }
+
+  .meeting-whiteboard__text-options {
+    top: 66px;
   }
 
   .meeting-tool-stage__pip {
@@ -4112,7 +4299,7 @@ button {
     display: grid;
     grid-template-columns: auto 1fr;
     align-items: center;
-    width: calc(100vw - 110px);
+    width: calc(100vw - 122px);
   }
 
   .meeting-whiteboard__swatches {
@@ -4146,6 +4333,23 @@ button {
 
   .meeting-whiteboard__thickness-popover.is-open {
     transform: translateY(0);
+  }
+
+  .meeting-whiteboard__actions {
+    gap: 7px;
+  }
+
+  .meeting-whiteboard__text-options {
+    width: min(300px, calc(100vw - 124px));
+    padding: 10px;
+    gap: 10px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .meeting-whiteboard__text-size {
+    width: 100%;
+    justify-content: center;
   }
 
   .meeting-tool-stage__pip {

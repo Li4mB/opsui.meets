@@ -40,6 +40,7 @@ export class ParticipantsRepository {
       existing.role = input.role ?? existing.role;
       existing.sessionLastSeenAt = new Date().toISOString();
       clearReconnectLease(existing);
+      clearSessionTermination(existing);
       existing.joinedAt =
         input.presence === "active" ? existing.joinedAt ?? new Date().toISOString() : existing.joinedAt;
       return toPublicParticipant(existing);
@@ -72,7 +73,7 @@ export class ParticipantsRepository {
       (item) => item.meetingInstanceId === meetingInstanceId && item.participantId === participantId,
     );
 
-    if (!participant || participant.presence === "left") {
+    if (!participant) {
       return null;
     }
 
@@ -80,11 +81,18 @@ export class ParticipantsRepository {
       return null;
     }
 
+    const recoverableExpiredSession =
+      participant.presence === "left" && participant.sessionTerminationReason === "expired";
+    if (participant.presence === "left" && !recoverableExpiredSession) {
+      return null;
+    }
+
     participant.sessionLastSeenAt = new Date().toISOString();
-    if (participant.presence === "reconnecting") {
+    if (participant.presence === "reconnecting" || recoverableExpiredSession) {
       participant.presence = participant.reconnectingToPresence ?? "active";
       clearReconnectLease(participant);
     }
+    clearSessionTermination(participant);
     return toPublicParticipant(participant);
   }
 
@@ -132,6 +140,7 @@ export class ParticipantsRepository {
         participant.audio = "muted";
         participant.video = "off";
         participant.handRaised = false;
+        participant.sessionTerminationReason = "expired";
         clearReconnectLease(participant);
         expired.push({
           action: "expired",
@@ -164,6 +173,7 @@ export class ParticipantsRepository {
     participant.presence = "active";
     participant.sessionLastSeenAt = new Date().toISOString();
     clearReconnectLease(participant);
+    clearSessionTermination(participant);
     participant.joinedAt = participant.joinedAt ?? new Date().toISOString();
     return participant ? toPublicParticipant(participant) : null;
   }
@@ -180,6 +190,7 @@ export class ParticipantsRepository {
     participant.presence = "left";
     participant.sessionLastSeenAt = new Date().toISOString();
     clearReconnectLease(participant);
+    participant.sessionTerminationReason = "manual_leave";
     participant.audio = "muted";
     participant.video = "off";
     participant.handRaised = false;
@@ -198,6 +209,7 @@ export class ParticipantsRepository {
     participant.presence = "left";
     participant.sessionLastSeenAt = new Date().toISOString();
     clearReconnectLease(participant);
+    participant.sessionTerminationReason = "removed";
     participant.audio = "blocked";
     participant.video = "blocked";
     participant.handRaised = false;
@@ -228,6 +240,7 @@ export class ParticipantsRepository {
       participant.presence = "left";
       participant.sessionLastSeenAt = new Date().toISOString();
       clearReconnectLease(participant);
+      participant.sessionTerminationReason = "ended";
       participant.audio = "blocked";
       participant.video = "blocked";
       participant.handRaised = false;
@@ -243,6 +256,7 @@ function toPublicParticipant(participant: StoredParticipantState): ParticipantSt
     reconnectingSinceAt: _reconnectingSinceAt,
     reconnectingToPresence: _reconnectingToPresence,
     sessionLastSeenAt: _sessionLastSeenAt,
+    sessionTerminationReason: _sessionTerminationReason,
     ...publicParticipant
   } = participant;
   return publicParticipant;
@@ -251,6 +265,10 @@ function toPublicParticipant(participant: StoredParticipantState): ParticipantSt
 function clearReconnectLease(participant: StoredParticipantState): void {
   participant.reconnectingSinceAt = undefined;
   participant.reconnectingToPresence = undefined;
+}
+
+function clearSessionTermination(participant: StoredParticipantState): void {
+  participant.sessionTerminationReason = undefined;
 }
 
 function toReconnectTargetPresence(
