@@ -119,6 +119,43 @@ export async function openDirectMessageThread(
   }
 }
 
+export async function createDirectMessageGroupThread(
+  memberUserIds: string[],
+): Promise<{ ok: true; thread: DirectMessageThreadDetail } | { ok: false; message: string }> {
+  try {
+    const headers = await getActorHeaders(
+      {
+        "Idempotency-Key": createIdempotencyKey("dm-group-create"),
+      },
+      { includeJsonContentType: true },
+    );
+    const response = await fetch(`${API_BASE_URL}/v1/direct-messages/threads`, {
+      method: "POST",
+      credentials: "include",
+      headers,
+      body: JSON.stringify({ memberUserIds }),
+    });
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+      return {
+        ok: false,
+        message: payload?.message ?? "We could not create that group chat.",
+      };
+    }
+
+    return {
+      ok: true,
+      thread: (await response.json()) as DirectMessageThreadDetail,
+    };
+  } catch {
+    return {
+      ok: false,
+      message: "We could not create that group chat.",
+    };
+  }
+}
+
 export async function getDirectMessageThread(threadId: string): Promise<DirectMessageThreadDetail | null> {
   try {
     const headers = await getActorHeaders();

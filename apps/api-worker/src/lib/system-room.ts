@@ -3,6 +3,7 @@ import type { MeetingPostSummary, RoomPolicy, RoomSummary } from "@opsui/shared-
 
 const SYSTEM_ACTOR_ID = "system_opsui_demo";
 const DEMO_ROOM_SLUG = "opsui-demo";
+const TEST_ROOM_SLUG = "test";
 
 interface SystemRoomDefinition {
   id: string;
@@ -17,6 +18,12 @@ const SYSTEM_ROOMS: Record<string, SystemRoomDefinition> = {
     name: "OpsUI Demo",
     roomType: "persistent",
     slug: DEMO_ROOM_SLUG,
+  },
+  [TEST_ROOM_SLUG]: {
+    id: "room_opsui_test",
+    name: "OpsUI Test",
+    roomType: "persistent",
+    slug: TEST_ROOM_SLUG,
   },
 };
 
@@ -34,7 +41,7 @@ export function ensureSystemRoom(
       name: definition.name,
       slug: definition.slug,
       roomType: definition.roomType,
-      policy: buildSystemRoomPolicy(repositories),
+      policy: buildSystemRoomPolicy(repositories, definition),
       templateId: null,
       isPersistent: true,
       createdBy: SYSTEM_ACTOR_ID,
@@ -75,26 +82,41 @@ export function pickMeetingForRoom(meetings: MeetingRecord[], roomId: string): M
   return candidates[0] ?? null;
 }
 
-function buildSystemRoomPolicy(repositories: RequestRepositoryContext): RoomPolicy {
+function buildSystemRoomPolicy(
+  repositories: RequestRepositoryContext,
+  definition: SystemRoomDefinition,
+): RoomPolicy {
   const workspacePolicy = repositories.policies.getWorkspacePolicy("workspace_local");
-  if (workspacePolicy) {
+  const basePolicy: RoomPolicy = workspacePolicy
+    ? {
+        ...workspacePolicy.defaultRoomPolicy,
+        allowGuestJoin: workspacePolicy.guestJoinMode !== "disabled",
+      }
+    : {
+        lobbyEnabled: true,
+        allowGuestJoin: true,
+        joinBeforeHost: false,
+        mutedOnEntry: true,
+        cameraOffOnEntry: false,
+        lockAfterStart: false,
+        chatMode: "open",
+        screenShareMode: "presenters",
+        recordingMode: "manual",
+      };
+
+  if (definition.slug === TEST_ROOM_SLUG) {
     return {
-      ...workspacePolicy.defaultRoomPolicy,
-      allowGuestJoin: workspacePolicy.guestJoinMode !== "disabled",
+      ...basePolicy,
+      lobbyEnabled: false,
+      allowGuestJoin: true,
+      joinBeforeHost: true,
+      mutedOnEntry: true,
+      cameraOffOnEntry: true,
+      screenShareMode: "everyone",
     };
   }
 
-  return {
-    lobbyEnabled: true,
-    allowGuestJoin: true,
-    joinBeforeHost: false,
-    mutedOnEntry: true,
-    cameraOffOnEntry: false,
-    lockAfterStart: false,
-    chatMode: "open",
-    screenShareMode: "presenters",
-    recordingMode: "manual",
-  };
+  return basePolicy;
 }
 
 function createSystemMeeting(

@@ -155,6 +155,34 @@ const apiServer = http.createServer(async (request, response) => {
     }
 
     const body = await readJsonBody(request);
+    const memberUserIds = Array.isArray(body?.memberUserIds)
+      ? [...new Set(body.memberUserIds
+        .filter((entry) => typeof entry === "string" && entry.trim())
+        .map((entry) => entry.trim()))]
+      : [];
+    if (memberUserIds.length) {
+      const targetUserIds = memberUserIds.filter((userId) => userId !== session.actor.userId);
+      if (targetUserIds.length < 2) {
+        sendJson(request, response, 400, {
+          error: "group_members_required",
+          message: "Choose at least two people for a group chat.",
+        });
+        return;
+      }
+
+      if (targetUserIds.some((userId) => !state.users.has(userId))) {
+        sendJson(request, response, 404, {
+          error: "user_not_found",
+          message: "One or more selected people could not be found.",
+        });
+        return;
+      }
+
+      const thread = createFixtureGroupDirectMessageThread(session.actor.userId, targetUserIds);
+      sendJson(request, response, 201, toDirectMessageThreadDetail(thread, session.actor.userId));
+      return;
+    }
+
     const username = typeof body?.username === "string" ? body.username.trim().toLowerCase() : "";
     const target = findUserByNormalizedUsername(username);
     if (!target) {
@@ -653,6 +681,7 @@ const apiServer = http.createServer(async (request, response) => {
       return;
     }
 
+    const guestUsesLobby = sessionType !== "user" && room.policy.lobbyEnabled;
     const participant = findParticipantByJoinSession(meeting.id, clientSessionId) ?? createParticipant({
       displayName,
       joinSessionId: clientSessionId,
@@ -660,7 +689,7 @@ const apiServer = http.createServer(async (request, response) => {
       role: sessionType === "user" ? "owner" : "participant",
     });
     participant.displayName = displayName;
-    participant.presence = sessionType === "user" ? "active" : "lobby";
+    participant.presence = guestUsesLobby ? "lobby" : "active";
     participant.reconnectingSinceAt = null;
     participant.reconnectingToPresence = null;
     participant.sessionLastSeenAt = new Date().toISOString();
@@ -670,9 +699,11 @@ const apiServer = http.createServer(async (request, response) => {
       state.participants.get(meeting.id)?.push(participant);
     }
 
-    if (sessionType === "user") {
+    if (!guestUsesLobby) {
       meeting.status = "live";
-      meeting.hostUserId = String(request.headers["x-user-id"] ?? participant.participantId);
+      if (sessionType === "user") {
+        meeting.hostUserId = String(request.headers["x-user-id"] ?? participant.participantId);
+      }
       addEvent(meeting.id, "participant.join", { displayName });
     } else {
       addEvent(meeting.id, "lobby.updated", { displayName });
@@ -680,7 +711,7 @@ const apiServer = http.createServer(async (request, response) => {
 
     sendJson(request, response, 200, {
       displayName,
-      joinState: sessionType === "user" ? "direct" : "lobby",
+      joinState: guestUsesLobby ? "lobby" : "direct",
       meetingInstanceId: meeting.id,
       participantId: participant.participantId,
       roomId: room.id,
@@ -1573,6 +1604,21 @@ function createInitialState() {
     title: "OpsUI Demo Meeting",
   });
   seedRoom(nextState, {
+    isPersistent: true,
+    name: "OpsUI Test",
+    policy: {
+      ...createDefaultPolicy(),
+      cameraOffOnEntry: true,
+      joinBeforeHost: true,
+      lobbyEnabled: false,
+      mutedOnEntry: true,
+      screenShareMode: "everyone",
+    },
+    roomType: "persistent",
+    slug: "test",
+    title: "OpsUI Test Meeting",
+  });
+  seedRoom(nextState, {
     name: "Auto Join Room",
     slug: "ops-signin",
     title: "Auto Join Room",
@@ -1591,7 +1637,7 @@ function seedRoom(nextState, input) {
     id: `room_${nextState.nextRoomNumber++}`,
     workspaceId: "workspace_local",
     name: input.name,
-    policy: createDefaultPolicy(),
+    policy: input.policy ?? createDefaultPolicy(),
     roomType: input.roomType ?? "instant",
     slug: input.slug,
   };
@@ -2256,6 +2302,31 @@ function getOrCreateFixtureDirectMessageThread(firstUserId, secondUserId) {
   return thread;
 }
 
+function createFixtureGroupDirectMessageThread(currentUserId, targetUserIds) {
+  const now = new Date().toISOString();
+  const thread = {
+    id: `dm_thread_${state.nextDirectMessageThreadNumber++}`,
+    threadKind: "group",
+    participantKey: `group:${randomUUID()}`,
+    createdAt: now,
+    updatedAt: now,
+    lastMessageAt: null,
+    lastMessagePreview: null,
+  };
+  state.directMessageThreads.set(thread.id, thread);
+  for (const userId of [currentUserId, ...targetUserIds]) {
+    state.directMessageThreadMembers.push({
+      threadId: thread.id,
+      userId,
+      joinedAt: now,
+      lastReadAt: null,
+      lastReadMessageId: null,
+    });
+  }
+
+  return thread;
+}
+
 function buildFixtureDirectMessageParticipantKey(firstUserId, secondUserId) {
   return [firstUserId, secondUserId].sort((left, right) => left.localeCompare(right)).join(":");
 }
@@ -2304,6 +2375,18 @@ function toDirectMessageSearchResult(user) {
 }
 
 function toDirectMessageThreadSummary(thread, currentUserId) {
+  if (thread.threadKind === "group") {
+    return {
+      id: thread.id,
+      threadKind: "group",
+      group: toDirectMessageGroupInfo(thread.id, currentUserId),
+      lastMessagePreview: thread.lastMessagePreview,
+      lastMessageAt: thread.lastMessageAt,
+      unreadCount: getDirectMessageUnreadCount(thread.id, currentUserId),
+      updatedAt: thread.updatedAt,
+    };
+  }
+
   return {
     id: thread.id,
     threadKind: "direct",
@@ -2312,6 +2395,25 @@ function toDirectMessageThreadSummary(thread, currentUserId) {
     lastMessageAt: thread.lastMessageAt,
     unreadCount: getDirectMessageUnreadCount(thread.id, currentUserId),
     updatedAt: thread.updatedAt,
+  };
+}
+
+function toDirectMessageGroupInfo(threadId, currentUserId) {
+  const memberUsers = state.directMessageThreadMembers
+    .filter((member) => member.threadId === threadId)
+    .map((member) => state.users.get(member.userId))
+    .filter(Boolean);
+  const otherMembers = memberUsers
+    .filter((user) => user.id !== currentUserId)
+    .map((user) => toDirectMessageSearchResult(user));
+  const displayName = otherMembers.length
+    ? otherMembers.map((member) => member.displayName).join(", ")
+    : "Group chat";
+
+  return {
+    displayName,
+    memberCount: memberUsers.length,
+    members: otherMembers,
   };
 }
 

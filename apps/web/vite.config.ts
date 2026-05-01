@@ -8,5 +8,37 @@ const repoRoot = path.resolve(projectDir, "../..");
 
 export default defineConfig({
   envDir: repoRoot,
+  build: {
+    chunkSizeWarningLimit: 650,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) {
+            return undefined;
+          }
+
+          if (id.includes("@cloudflare/realtimekit")) {
+            return "realtime";
+          }
+
+          if (id.includes("@sentry")) {
+            return "sentry";
+          }
+
+          if (
+            id.includes("react-dom") ||
+            id.includes(`${path.sep}react${path.sep}`) ||
+            id.includes("/react/") ||
+            id.includes("\\react\\") ||
+            id.includes("scheduler")
+          ) {
+            return "react-vendor";
+          }
+
+          return "vendor";
+        },
+      },
+    },
+  },
   plugins: [react()],
 });

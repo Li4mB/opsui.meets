@@ -10,19 +10,37 @@ export interface DirectMessageSearchResult {
   isOnline?: boolean;
 }
 
-export interface DirectMessageThreadSummary {
+export interface DirectMessageGroupInfo {
+  displayName: string;
+  memberCount: number;
+  members: DirectMessageSearchResult[];
+}
+
+interface DirectMessageThreadBase {
   id: string;
-  threadKind: "direct";
-  participant: DirectMessageSearchResult;
   lastMessagePreview: string | null;
   lastMessageAt: string | null;
   unreadCount: number;
   updatedAt: string;
 }
 
-export interface DirectMessageThreadDetail extends DirectMessageThreadSummary {
-  createdAt: string;
+export interface DirectMessageDirectThreadSummary extends DirectMessageThreadBase {
+  threadKind: "direct";
+  participant: DirectMessageSearchResult;
 }
+
+export interface DirectMessageGroupThreadSummary extends DirectMessageThreadBase {
+  threadKind: "group";
+  group: DirectMessageGroupInfo;
+}
+
+export type DirectMessageThreadSummary =
+  | DirectMessageDirectThreadSummary
+  | DirectMessageGroupThreadSummary;
+
+export type DirectMessageThreadDetail = DirectMessageThreadSummary & {
+  createdAt: string;
+};
 
 export type DirectMessageAttachmentKind = "image" | "video" | "file";
 

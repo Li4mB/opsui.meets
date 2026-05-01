@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import type {
   AuthCapabilities,
   ChatMessageEventPayload,
@@ -16,7 +16,7 @@ import { MeetingConversationPanel } from "../components/MeetingConversationPanel
 import { MeetingControlButton } from "../components/MeetingControlButton";
 import { MeetingInfoPanel } from "../components/MeetingInfoPanel";
 import { MeetingJoinLoader } from "../components/MeetingJoinLoader";
-import { MeetingMediaStage, type MediaConnectionPhase } from "../components/MeetingMediaStage";
+import { MeetingMediaStage, type MediaConnectionPhase, type StageViewMode } from "../components/MeetingMediaStage";
 import { MeetingToolsLauncher } from "../components/MeetingToolsLauncher";
 import { MeetingWhiteboardStage } from "../components/MeetingWhiteboardStage";
 import {
@@ -45,6 +45,12 @@ import { REALTIME_BASE_URL } from "../lib/config";
 import { rotateJoinSessionId } from "../lib/join-session";
 import { formatMeetingCodeLabel } from "../lib/meeting-code";
 import { getMeetingShareUrl, loadMeetingRoomData, type MeetingRoomData } from "../lib/meetings";
+import {
+  TEST_ROOM_DUMMY_USER_DEFAULT,
+  TEST_ROOM_DUMMY_USER_MAX,
+  createTestRoomDummyParticipants,
+  isTestRoomCode,
+} from "../lib/test-room";
 
 interface MeetingRoomPageProps {
   authCapabilities: AuthCapabilities | null;
@@ -73,16 +79,17 @@ const ROOM_REFRESH_DEBOUNCE_MS = 250;
 const ROOM_REFRESH_WARNING_GRACE_MS = 15_000;
 const MEETING_SESSION_RECOVERY_MAX_ATTEMPTS = 6;
 const MEETING_SESSION_RECOVERY_RETRY_MS = 3_000;
+const MEETING_SERVICE_WARNING_GRACE_MS = MEETING_SESSION_RECOVERY_RETRY_MS + 1_000;
 const MEETING_SERVICE_RECONNECTING_MESSAGE = "Connection to meeting services was interrupted. Reconnecting...";
 const MEETING_SERVICE_RETRYING_MESSAGE =
   "Connection to meeting services was interrupted. Retrying in the background.";
 
-function clearMeetingServiceInterruption(message: string | null): string | null {
-  if (message === MEETING_SERVICE_RECONNECTING_MESSAGE || message === MEETING_SERVICE_RETRYING_MESSAGE) {
-    return null;
-  }
+function isMeetingServiceInterruption(message: string | null): boolean {
+  return message === MEETING_SERVICE_RECONNECTING_MESSAGE || message === MEETING_SERVICE_RETRYING_MESSAGE;
+}
 
-  return message;
+function clearMeetingServiceReconnectingMessage(message: string | null): string | null {
+  return message === MEETING_SERVICE_RECONNECTING_MESSAGE ? null : message;
 }
 
 function clearMeetingRefreshRetryMessage(message: string | null): string | null {
@@ -96,6 +103,10 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const [mediaConnectionPhase, setMediaConnectionPhase] = useState<MediaConnectionPhase>("idle");
   const [guestDisplayName, setGuestDisplayName] = useState("");
   const [guestModalOpen, setGuestModalOpen] = useState(false);
+  const [testRoomSetupModalOpen, setTestRoomSetupModalOpen] = useState(false);
+  const [testRoomDummyUserInput, setTestRoomDummyUserInput] = useState(String(TEST_ROOM_DUMMY_USER_DEFAULT));
+  const [testRoomDummyUserCount, setTestRoomDummyUserCount] = useState<number | null>(null);
+  const [testRoomDummyUserError, setTestRoomDummyUserError] = useState<string | null>(null);
   const [joinMessage, setJoinMessage] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [serviceMessage, setServiceMessage] = useState<string | null>(null);
@@ -105,6 +116,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const [joinLoaderCycleKey, setJoinLoaderCycleKey] = useState(0);
   const [participantId, setParticipantId] = useState<string | null>(null);
   const [activeMeetingTool, setActiveMeetingTool] = useState<ActiveMeetingTool>(null);
+  const [stageViewMode, setStageViewMode] = useState<StageViewMode>("grid");
   const [isToolsLauncherOpen, setIsToolsLauncherOpen] = useState(false);
   const [liveStageParticipantCount, setLiveStageParticipantCount] = useState<number | null>(null);
   const [liveMediaByParticipantId, setLiveMediaByParticipantId] = useState<Record<string, ParticipantMediaIndicators>>(
@@ -122,6 +134,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const joinLoaderVisibleRef = useRef(true);
   const meetingScopeRef = useRef(0);
   const roomRefreshFailureCountRef = useRef(0);
+  const roomRefreshAbortControllerRef = useRef<AbortController | null>(null);
   const roomRefreshPromiseRef = useRef<Promise<void> | null>(null);
   const roomRefreshQueuedRef = useRef(false);
   const roomRefreshTimeoutRef = useRef<number | null>(null);
@@ -130,10 +143,18 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const meetingSessionRecoveryInFlightRef = useRef(false);
   const meetingSessionRecoveryTimeoutRef = useRef<number | null>(null);
   const meetingSessionRecoveryActiveRef = useRef(false);
+  const pendingServiceMessageRef = useRef<string | null>(null);
+  const pendingServiceMessageTimeoutRef = useRef<number | null>(null);
   const realtimeHelloKeyRef = useRef<string | null>(null);
   const realtimeSocketRef = useRef<WebSocket | null>(null);
+  const serviceMessageRef = useRef<string | null>(null);
   const sessionRef = useRef(props.session);
   const suppressGuestPromptRef = useRef(false);
+  const isTestRoom = isTestRoomCode(props.meetingCode);
+
+  useEffect(() => {
+    serviceMessageRef.current = serviceMessage;
+  }, [serviceMessage]);
 
   useEffect(() => {
     sessionRef.current = props.session;
@@ -147,8 +168,12 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       if (roomRefreshTimeoutRef.current) {
         window.clearTimeout(roomRefreshTimeoutRef.current);
       }
+      roomRefreshAbortControllerRef.current?.abort();
       if (meetingSessionRecoveryTimeoutRef.current) {
         window.clearTimeout(meetingSessionRecoveryTimeoutRef.current);
+      }
+      if (pendingServiceMessageTimeoutRef.current) {
+        window.clearTimeout(pendingServiceMessageTimeoutRef.current);
       }
     };
   }, []);
@@ -165,6 +190,81 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       window.clearTimeout(meetingSessionRecoveryTimeoutRef.current);
       meetingSessionRecoveryTimeoutRef.current = null;
     }
+  });
+
+  const setVisibleServiceMessage = useEffectEvent((message: string | null) => {
+    serviceMessageRef.current = message;
+    setServiceMessage(message);
+  });
+
+  const clearPendingServiceMessage = useEffectEvent((shouldClear?: (message: string) => boolean) => {
+    const pendingMessage = pendingServiceMessageRef.current;
+    if (!pendingMessage || (shouldClear && !shouldClear(pendingMessage))) {
+      return;
+    }
+
+    pendingServiceMessageRef.current = null;
+    if (pendingServiceMessageTimeoutRef.current) {
+      window.clearTimeout(pendingServiceMessageTimeoutRef.current);
+      pendingServiceMessageTimeoutRef.current = null;
+    }
+  });
+
+  const clearServiceMessage = useEffectEvent(() => {
+    clearPendingServiceMessage();
+    setVisibleServiceMessage(null);
+  });
+
+  const clearMeetingRefreshRetryServiceMessage = useEffectEvent(() => {
+    clearPendingServiceMessage((message) => message === MEETING_SERVICE_RETRYING_MESSAGE);
+    const currentMessage = serviceMessageRef.current;
+    const nextMessage = clearMeetingRefreshRetryMessage(currentMessage);
+    if (nextMessage !== currentMessage) {
+      setVisibleServiceMessage(nextMessage);
+    }
+  });
+
+  const clearMeetingServiceReconnectingServiceMessage = useEffectEvent(() => {
+    clearPendingServiceMessage((message) => message === MEETING_SERVICE_RECONNECTING_MESSAGE);
+    const currentMessage = serviceMessageRef.current;
+    const nextMessage = clearMeetingServiceReconnectingMessage(currentMessage);
+    if (nextMessage !== currentMessage) {
+      setVisibleServiceMessage(nextMessage);
+    }
+  });
+
+  const showMeetingServiceInterruption = useEffectEvent((message: string) => {
+    const currentMessage = serviceMessageRef.current;
+    if (currentMessage === message || pendingServiceMessageRef.current === message) {
+      return;
+    }
+
+    if (isMeetingServiceInterruption(currentMessage)) {
+      clearPendingServiceMessage();
+      setVisibleServiceMessage(message);
+      return;
+    }
+
+    pendingServiceMessageRef.current = message;
+    if (pendingServiceMessageTimeoutRef.current) {
+      return;
+    }
+
+    pendingServiceMessageTimeoutRef.current = window.setTimeout(() => {
+      pendingServiceMessageTimeoutRef.current = null;
+      const nextMessage = pendingServiceMessageRef.current;
+      pendingServiceMessageRef.current = null;
+      if (!nextMessage) {
+        return;
+      }
+
+      const latestMessage = serviceMessageRef.current;
+      if (latestMessage && !isMeetingServiceInterruption(latestMessage)) {
+        return;
+      }
+
+      setVisibleServiceMessage(nextMessage);
+    }, MEETING_SERVICE_WARNING_GRACE_MS);
   });
 
   const leaveActiveMeetingSession = useEffectEvent((options?: { rotateJoinSession?: boolean }) => {
@@ -188,6 +288,8 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const invalidateMeetingScope = useEffectEvent(() => {
     meetingScopeRef.current += 1;
     roomRefreshFailureCountRef.current = 0;
+    roomRefreshAbortControllerRef.current?.abort();
+    roomRefreshAbortControllerRef.current = null;
     roomRefreshPromiseRef.current = null;
     roomRefreshQueuedRef.current = false;
     lastSuccessfulRoomRefreshAtRef.current = 0;
@@ -205,15 +307,20 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     setMediaConnectionPhase("idle");
     setJoinMessage(null);
     setActionMessage(null);
-    setServiceMessage(null);
+    clearServiceMessage();
     setHasDirectJoinLoaderYielded(false);
     setParticipantId(null);
     setActiveMeetingTool(null);
+    setStageViewMode("grid");
     setIsToolsLauncherOpen(false);
     setLiveStageParticipantCount(null);
     setLiveMediaByParticipantId({});
     setRealtimeSnapshot(null);
     setGuestModalOpen(false);
+    setTestRoomSetupModalOpen(false);
+    setTestRoomDummyUserCount(null);
+    setTestRoomDummyUserInput(String(TEST_ROOM_DUMMY_USER_DEFAULT));
+    setTestRoomDummyUserError(null);
     clearMeetingSessionRecovery();
     activeMeetingSessionRef.current = null;
     autoJoinKeyRef.current = null;
@@ -234,8 +341,13 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   });
 
   const performRoomRefresh = useEffectEvent(async (scopeId = meetingScopeRef.current) => {
+    const refreshAbortController = new AbortController();
+    roomRefreshAbortControllerRef.current = refreshAbortController;
+
     try {
-      const nextData = await loadMeetingRoomData(props.meetingCode);
+      const nextData = await loadMeetingRoomData(props.meetingCode, {
+        signal: refreshAbortController.signal,
+      });
       if (!isActiveMeetingScope(scopeId)) {
         return;
       }
@@ -244,22 +356,21 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       lastSuccessfulRoomRefreshAtRef.current = Date.now();
 
       if (!nextData) {
-        setLoadState((current) => {
-          if (current.status === "ready") {
-            return current;
-          }
-
-          return { status: "not-found" };
-        });
+        clearMeetingRefreshRetryServiceMessage();
+        setLoadState({ status: "not-found" });
         return;
       }
 
-      setServiceMessage(clearMeetingRefreshRetryMessage);
+      clearMeetingRefreshRetryServiceMessage();
       setLoadState({
         data: nextData,
         status: "ready",
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+
       if (!isActiveMeetingScope(scopeId)) {
         return;
       }
@@ -279,7 +390,11 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
         roomRefreshFailureCountRef.current >= 2 ||
         Date.now() - lastSuccessfulRoomRefreshAtRef.current >= ROOM_REFRESH_WARNING_GRACE_MS
       ) {
-        setServiceMessage(MEETING_SERVICE_RETRYING_MESSAGE);
+        showMeetingServiceInterruption(MEETING_SERVICE_RETRYING_MESSAGE);
+      }
+    } finally {
+      if (roomRefreshAbortControllerRef.current === refreshAbortController) {
+        roomRefreshAbortControllerRef.current = null;
       }
     }
   });
@@ -352,7 +467,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     setActiveDrawer(null);
     setJoinMessage(null);
     setActionMessage(null);
-    setServiceMessage(null);
+    clearServiceMessage();
     setHasDirectJoinLoaderYielded(false);
     setIsJoinLoaderMounted(true);
     setParticipantId(null);
@@ -363,6 +478,10 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     setRealtimeSnapshot(null);
     realtimeHelloKeyRef.current = null;
     setGuestModalOpen(false);
+    setTestRoomSetupModalOpen(false);
+    setTestRoomDummyUserCount(null);
+    setTestRoomDummyUserInput(String(TEST_ROOM_DUMMY_USER_DEFAULT));
+    setTestRoomDummyUserError(null);
     setLoadState({ status: "loading" });
 
     void flushRoomRefresh(scopeId);
@@ -380,6 +499,29 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     currentParticipant?.displayName ??
     (props.session?.authenticated ? getSessionDisplayName(props.session) : guestDisplayName.trim() || "Guest User");
   const participantRole = currentParticipant?.role ?? props.session?.actor.workspaceRole ?? "participant";
+  const activeParticipants = useMemo(
+    () => participants.filter((entry) => isInMeetingPresence(entry.presence)),
+    [participants],
+  );
+  const testRoomDummyParticipants = useMemo(
+    () =>
+      isTestRoom && joinState === "direct" && meeting?.id && testRoomDummyUserCount
+        ? createTestRoomDummyParticipants({
+            count: testRoomDummyUserCount,
+            joinedAt: meeting.startsAt,
+            meetingInstanceId: meeting.id,
+          })
+        : [],
+    [isTestRoom, joinState, meeting?.id, meeting?.startsAt, testRoomDummyUserCount],
+  );
+  const visibleActiveParticipants = useMemo(
+    () => [...activeParticipants, ...testRoomDummyParticipants],
+    [activeParticipants, testRoomDummyParticipants],
+  );
+  const lobbyParticipants = useMemo(
+    () => participants.filter((entry) => entry.presence === "lobby"),
+    [participants],
+  );
 
   const concludeMeetingSessionLoss = useEffectEvent((message: string) => {
     clearMeetingSessionRecovery();
@@ -389,7 +531,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     setParticipantId(null);
     setJoinState("idle");
     setJoinMessage(message);
-    setServiceMessage(null);
+    clearServiceMessage();
   });
 
   const syncRecoveredParticipant = useEffectEvent((participant: ParticipantState) => {
@@ -436,7 +578,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
         setJoinMessage("You were admitted to the room.");
       }
       clearMeetingSessionRecovery();
-      setServiceMessage(clearMeetingServiceInterruption);
+      clearMeetingServiceReconnectingServiceMessage();
       scheduleRoomRefresh({ immediate: true, scopeId });
       return true;
     }
@@ -462,9 +604,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     }
 
     meetingSessionRecoveryActiveRef.current = true;
-    setServiceMessage((current) =>
-      current === MEETING_SERVICE_RETRYING_MESSAGE ? MEETING_SERVICE_RECONNECTING_MESSAGE : current ?? MEETING_SERVICE_RECONNECTING_MESSAGE,
-    );
+    showMeetingServiceInterruption(MEETING_SERVICE_RECONNECTING_MESSAGE);
 
     if (options?.immediate) {
       if (meetingSessionRecoveryTimeoutRef.current) {
@@ -511,7 +651,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     }
 
     clearMeetingSessionRecovery();
-    setServiceMessage(clearMeetingServiceInterruption);
+    clearMeetingServiceReconnectingServiceMessage();
 
     if (joinState === "lobby" && currentParticipant.presence === "active") {
       setJoinState("direct");
@@ -559,7 +699,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     }
 
     clearMeetingSessionRecovery();
-    setServiceMessage(clearMeetingServiceInterruption);
+    clearMeetingServiceReconnectingServiceMessage();
   });
 
   const sendRealtimeHello = useEffectEvent(() => {
@@ -687,6 +827,13 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       return;
     }
 
+    if (isTestRoom && testRoomDummyUserCount === null) {
+      if (joinState === "idle") {
+        setTestRoomSetupModalOpen(true);
+      }
+      return;
+    }
+
     if (!props.session.authenticated) {
       if (joinState === "idle") {
         setGuestDisplayName((current) => current || "Guest User");
@@ -703,7 +850,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     autoJoinKeyRef.current = autoJoinKey;
     const displayName = getSessionDisplayName(props.session);
     void submitJoin(displayName, props.session.sessionType);
-  }, [joinState, loadState, props.isAuthLoading, props.session]);
+  }, [isTestRoom, joinState, loadState, props.isAuthLoading, props.session, testRoomDummyUserCount]);
 
   useEffect(() => {
     if (!meeting?.id) {
@@ -857,6 +1004,10 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   }, [currentParticipant, joinState, meeting?.id, participantDisplayName, participantId, participantRole, sendRealtimeHello]);
 
   useEffect(() => {
+    if (REALTIME_BASE_URL) {
+      return;
+    }
+
     const resumeMeetingSession = () => {
       if (document.visibilityState === "hidden") {
         return;
@@ -1055,12 +1206,34 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     exitMeetingToHome();
   }
 
+  function submitTestRoomSetup() {
+    const requestedCount = Number(testRoomDummyUserInput);
+    if (!Number.isInteger(requestedCount) || requestedCount < 0 || requestedCount > TEST_ROOM_DUMMY_USER_MAX) {
+      setTestRoomDummyUserError(`Enter a whole number from 0 to ${TEST_ROOM_DUMMY_USER_MAX}.`);
+      return;
+    }
+
+    setTestRoomDummyUserError(null);
+    setTestRoomDummyUserCount(requestedCount);
+    setTestRoomSetupModalOpen(false);
+  }
+
   const directJoinLoaderIdentity = joinState === "direct" && participantId ? `${meeting?.id ?? "meeting"}:${participantId}` : null;
+  const testRoomSetupPending = isTestRoom && testRoomDummyUserCount === null;
+  const waitingForTestRoomSetup =
+    loadState.status === "ready" &&
+    Boolean(meeting) &&
+    testRoomSetupPending &&
+    !participantId &&
+    !joinMessage &&
+    joinState === "idle" &&
+    !testRoomSetupModalOpen;
   const waitingForGuestPrompt =
     loadState.status === "ready" &&
     Boolean(meeting) &&
     !props.isAuthLoading &&
     !props.session?.authenticated &&
+    !testRoomSetupPending &&
     !participantId &&
     !joinMessage &&
     joinState === "idle" &&
@@ -1070,6 +1243,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     Boolean(meeting) &&
     !props.isAuthLoading &&
     Boolean(props.session?.authenticated) &&
+    !testRoomSetupPending &&
     !participantId &&
     !joinMessage &&
     joinState === "idle";
@@ -1085,6 +1259,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const shouldShowMeetingJoinLoader =
     loadState.status === "loading" ||
     waitingForAuthResolution ||
+    waitingForTestRoomSetup ||
     waitingForGuestPrompt ||
     waitingForSignedInAutoJoin ||
     waitingForJoinSubmit ||
@@ -1206,8 +1381,6 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     );
   }
 
-  const activeParticipants = participants.filter((entry) => isInMeetingPresence(entry.presence));
-  const lobbyParticipants = participants.filter((entry) => entry.presence === "lobby");
   const canManageMeeting =
     Boolean(props.session?.authenticated) ||
     Boolean(
@@ -1280,7 +1453,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       : !whiteboardCollaboratorReady
         ? "Realtime whiteboard is reconnecting."
         : null;
-  const effectiveStageParticipantCount = liveStageParticipantCount ?? activeParticipants.length;
+  const effectiveStageParticipantCount = liveStageParticipantCount ?? visibleActiveParticipants.length;
   const immersiveSoloMode = joinState === "direct" && effectiveStageParticipantCount === 1;
   const shouldUseImmersiveStageSurface = immersiveSoloMode && !isWhiteboardOpen;
   const stageMessages = [
@@ -1297,7 +1470,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
 
   return (
     <>
-      <section className={`page page--room${guestModalOpen ? " page--obscured" : ""}`}>
+      <section className={`page page--room${guestModalOpen || testRoomSetupModalOpen ? " page--obscured" : ""}`}>
         {isJoinLoaderMounted ? (
           <MeetingJoinLoader
             active={shouldShowMeetingJoinLoader}
@@ -1342,7 +1515,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
             className={`meeting-room-drawer meeting-room-drawer--participants${isParticipantsOpen ? " is-open" : ""}`}
           >
             <MeetingParticipantsPanel
-              activeParticipants={activeParticipants}
+              activeParticipants={visibleActiveParticipants}
               canManageMeeting={canManageMeeting}
               currentParticipantId={participantId}
               lobbyParticipants={lobbyParticipants}
@@ -1425,7 +1598,9 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
                 participantRole={participantRole}
                 screenShareDisabledReason={screenShareDisabledReason}
                 stageMessages={stageMessages}
+                stageViewMode={stageViewMode}
                 shouldConnect={shouldConnectMedia}
+                syntheticParticipants={testRoomDummyParticipants}
                 toolStage={
                   isWhiteboardOpen ? (
                     <MeetingWhiteboardStage
@@ -1456,7 +1631,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
           >
             <MeetingInfoPanel
               actionMessage={actionMessage}
-              activeParticipants={activeParticipants}
+              activeParticipants={visibleActiveParticipants}
               canManageMeeting={canManageMeeting}
               identityLabel={identityLabel}
               isActionBusy={isActionBusy}
@@ -1511,6 +1686,9 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
               onStartMeetingNow={() => {
                 void handleStartMeetingNow();
               }}
+              onToggleStageView={() => {
+                setStageViewMode((current) => (current === "speaker" ? "grid" : "speaker"));
+              }}
               onToggleLock={() => {
                 if (!meeting) {
                   return;
@@ -1551,10 +1729,61 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
               serviceMessage={serviceMessage}
               sessionAuthenticated={Boolean(props.session?.authenticated)}
               showStartMeetingAction={!meeting && Boolean(props.session?.authenticated)}
+              stageViewMode={stageViewMode}
             />
           </aside>
         </div>
       </section>
+
+      <Modal
+        description="Choose how many local dummy users should appear with you in this room."
+        onClose={() => {
+          exitMeetingToHome();
+        }}
+        open={testRoomSetupModalOpen}
+        title="Set up test room"
+      >
+        <form
+          className="auth-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            submitTestRoomSetup();
+          }}
+        >
+          <label className="field">
+            <span className="field__label">Dummy users</span>
+            <input
+              autoFocus
+              className="field__input"
+              inputMode="numeric"
+              max={TEST_ROOM_DUMMY_USER_MAX}
+              min={0}
+              onChange={(event) => {
+                setTestRoomDummyUserInput(event.target.value);
+                setTestRoomDummyUserError(null);
+              }}
+              step={1}
+              type="number"
+              value={testRoomDummyUserInput}
+            />
+          </label>
+          {testRoomDummyUserError ? <p className="inline-feedback inline-feedback--error">{testRoomDummyUserError}</p> : null}
+          <div className="stack-actions stack-actions--inline">
+            <button className="button button--primary" type="submit">
+              Enter Test Room
+            </button>
+            <button
+              className="button button--ghost"
+              onClick={() => {
+                exitMeetingToHome();
+              }}
+              type="button"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       <Modal
         description="Enter the name other people should see before you join."

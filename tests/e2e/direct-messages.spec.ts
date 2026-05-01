@@ -65,6 +65,66 @@ test("searching by username opens a persistent thread with full saved history", 
   }
 });
 
+test("group chats can be created from existing chats and searched users", async ({ browser }) => {
+  test.setTimeout(60_000);
+  const firstContext = await browser.newContext();
+  const secondContext = await browser.newContext();
+  const thirdContext = await browser.newContext();
+  const firstPage = await firstContext.newPage();
+  const secondPage = await secondContext.newPage();
+  const thirdPage = await thirdContext.newPage();
+
+  try {
+    await signUpIndividual(firstPage, {
+      email: "group-owner@example.com",
+      username: "group.owner",
+      firstName: "Group",
+      lastName: "Owner",
+      password: "password123",
+    });
+    await signUpIndividual(secondPage, {
+      email: "group-blair@example.com",
+      username: "group.blair",
+      firstName: "Blair",
+      lastName: "Group",
+      password: "password123",
+    });
+    await signUpIndividual(thirdPage, {
+      email: "group-casey@example.com",
+      username: "group.casey",
+      firstName: "Casey",
+      lastName: "Group",
+      password: "password123",
+    });
+
+    await openDirectMessageThread(firstPage, "group.blair", /Blair Group/i);
+    await sendComposerMessage(firstPage, "Direct chat exists before creating the group.");
+
+    await firstPage.goto("/direct-messages");
+    await firstPage.getByRole("button", { name: "Create group chat" }).click();
+
+    const groupCreator = firstPage.locator(".dm-group-creator");
+    await expect(groupCreator.locator(".dm-group-candidate .dm-search-result__name").first()).toHaveText("Blair Group");
+    await groupCreator.getByRole("button", { name: /Blair Group/i }).click();
+    await groupCreator.getByRole("searchbox", { name: "Search people for group chat" }).fill("group.casey");
+    await groupCreator.getByRole("button", { name: /Casey Group/i }).click();
+    await groupCreator.getByRole("button", { name: "Create" }).click();
+
+    await expect(firstPage).toHaveURL(/\/direct-messages\/.+$/);
+    await expect(firstPage.locator(".dm-conversation__name")).toContainText("Blair Group");
+    await expect(firstPage.locator(".dm-conversation__name")).toContainText("Casey Group");
+    await expect(firstPage.locator(".dm-conversation__username")).toHaveText("3 members");
+    await sendComposerMessage(firstPage, "Hello group.");
+
+    await secondPage.goto("/direct-messages");
+    await expect(secondPage.getByRole("button", { name: /Group Owner, Casey Group/i })).toBeVisible();
+    await secondPage.getByRole("button", { name: /Group Owner, Casey Group/i }).click();
+    await expect(secondPage.locator(".dm-message__bubble").getByText("Hello group.")).toBeVisible();
+  } finally {
+    await Promise.allSettled([firstContext.close(), secondContext.close(), thirdContext.close()]);
+  }
+});
+
 test("active users show an online indicator on direct-message avatars", async ({ browser }) => {
   const firstContext = await browser.newContext();
   const secondContext = await browser.newContext();

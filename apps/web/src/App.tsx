@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { AuthCapabilities, SessionInfo } from "@opsui/shared-types";
 import { AppLayout } from "./components/AppLayout";
 import { MeetingJoinLoader } from "./components/MeetingJoinLoader";
@@ -8,16 +8,35 @@ import { loadDirectMessageThreads } from "./lib/direct-messages";
 import { formatMeetingCodeLabel, generateMeetingCode } from "./lib/meeting-code";
 import { useAppRoute } from "./lib/router";
 import { AccountPlaceholderPage } from "./pages/AccountPlaceholderPage";
-import { CompleteAccountPage } from "./pages/CompleteAccountPage";
-import { DirectMessagesPage } from "./pages/DirectMessagesPage";
 import { HomePage } from "./pages/HomePage";
-import { LegacyJoinPage } from "./pages/LegacyJoinPage";
-import { MeetingRoomPage } from "./pages/MeetingRoomPage";
-import { MeetingStageLabPage } from "./pages/MeetingStageLabPage";
-import { MyProfilePage } from "./pages/MyProfilePage";
-import { MyOrganisationPage } from "./pages/MyOrganisationPage";
-import { SignInPage } from "./pages/SignInPage";
-import { SignUpPage } from "./pages/SignUpPage";
+
+const CompleteAccountPage = lazy(() =>
+  import("./pages/CompleteAccountPage").then((module) => ({ default: module.CompleteAccountPage })),
+);
+const DirectMessagesPage = lazy(() =>
+  import("./pages/DirectMessagesPage").then((module) => ({ default: module.DirectMessagesPage })),
+);
+const LegacyJoinPage = lazy(() =>
+  import("./pages/LegacyJoinPage").then((module) => ({ default: module.LegacyJoinPage })),
+);
+const MeetingRoomPage = lazy(() =>
+  import("./pages/MeetingRoomPage").then((module) => ({ default: module.MeetingRoomPage })),
+);
+const MeetingStageLabPage = lazy(() =>
+  import("./pages/MeetingStageLabPage").then((module) => ({ default: module.MeetingStageLabPage })),
+);
+const MyOrganisationPage = lazy(() =>
+  import("./pages/MyOrganisationPage").then((module) => ({ default: module.MyOrganisationPage })),
+);
+const MyProfilePage = lazy(() =>
+  import("./pages/MyProfilePage").then((module) => ({ default: module.MyProfilePage })),
+);
+const SignInPage = lazy(() =>
+  import("./pages/SignInPage").then((module) => ({ default: module.SignInPage })),
+);
+const SignUpPage = lazy(() =>
+  import("./pages/SignUpPage").then((module) => ({ default: module.SignUpPage })),
+);
 
 export function App() {
   const { route, navigate } = useAppRoute();
@@ -232,111 +251,119 @@ export function App() {
           setSidebarOpen((current) => !current);
         }}
       >
-        {route.kind === "home" ? (
-          <HomePage
-            onNavigate={(pathname) => {
-              navigate(pathname);
-            }}
-            onStartMeeting={handleStartMeeting}
-            startMeetingError={startMeetingError}
-            startMeetingPending={Boolean(pendingMeetingLaunch)}
-          />
-        ) : null}
-        {route.kind === "sign-in" ? (
-          <SignInPage
-            authCapabilities={authCapabilities}
-            isAuthLoading={!session || !authCapabilities}
-            onNavigate={(pathname) => {
-              navigate(pathname);
-            }}
-            onRefreshSession={(forceRefresh) => {
-              return refreshAuth(forceRefresh);
-            }}
-            session={session}
-          />
-        ) : null}
-        {route.kind === "sign-up" ? (
-          <SignUpPage
-            authCapabilities={authCapabilities}
-            isAuthLoading={!session || !authCapabilities}
-            onNavigate={(pathname) => {
-              navigate(pathname);
-            }}
-            onRefreshSession={(forceRefresh) => {
-              return refreshAuth(forceRefresh);
-            }}
-            session={session}
-          />
-        ) : null}
-        {route.kind === "complete-account" ? (
-          <CompleteAccountPage
-            authCapabilities={authCapabilities}
-            onNavigate={(pathname) => {
-              navigate(pathname);
-            }}
-            onRefreshSession={(forceRefresh) => {
-              return refreshAuth(forceRefresh);
-            }}
-            session={session}
-          />
-        ) : null}
-        {route.kind === "my-profile" ? (
-          <MyProfilePage
-            onNavigate={(pathname) => {
-              navigate(pathname);
-            }}
-            onRefreshSession={(forceRefresh) => {
-              return refreshAuth(forceRefresh);
-            }}
-            session={session}
-          />
-        ) : null}
-        {route.kind === "appearance" ? <AccountPlaceholderPage title="Appearance" /> : null}
-        {route.kind === "direct-messages" || route.kind === "direct-message-thread" ? (
-          <DirectMessagesPage
-            onNavigate={(pathname) => {
-              navigate(pathname);
-            }}
-            onUnreadCountChange={setDirectMessagesUnreadCount}
-            selectedThreadId={route.kind === "direct-message-thread" ? route.threadId : null}
-            session={session}
-          />
-        ) : null}
-        {route.kind === "my-organisation" ? (
-          <MyOrganisationPage
-            authCapabilities={authCapabilities}
-            onNavigate={(pathname) => {
-              navigate(pathname);
-            }}
-            onRefreshSession={(forceRefresh) => {
-              return refreshAuth(forceRefresh);
-            }}
-            session={session}
-          />
-        ) : null}
-        {route.kind === "legacy-join" ? (
-          <LegacyJoinPage
-            meetingCode={route.meetingCode}
-            onNavigate={(pathname, replace) => {
-              navigate(pathname, { replace });
-            }}
-          />
-        ) : null}
-        {route.kind === "stage-lab" ? <MeetingStageLabPage search={window.location.search} /> : null}
-        {route.kind === "meeting" ? (
-          <MeetingRoomPage
-            authCapabilities={authCapabilities}
-            isAuthLoading={!session || !authCapabilities}
-            meetingCode={route.meetingCode}
-            onNavigate={(pathname, options) => {
-              navigate(pathname, options);
-            }}
-            onRefreshSession={(forceRefresh) => {
-              return refreshAuth(forceRefresh);
-            }}
-            session={session}
-          />
-        ) : null}
+        <Suspense
+          fallback={
+            route.kind === "meeting" ? (
+              <MeetingJoinLoader active meetingCode={route.meetingCode} onCancel={cancelPendingMeetingLaunch} />
+            ) : null
+          }
+        >
+          {route.kind === "home" ? (
+            <HomePage
+              onNavigate={(pathname) => {
+                navigate(pathname);
+              }}
+              onStartMeeting={handleStartMeeting}
+              startMeetingError={startMeetingError}
+              startMeetingPending={Boolean(pendingMeetingLaunch)}
+            />
+          ) : null}
+          {route.kind === "sign-in" ? (
+            <SignInPage
+              authCapabilities={authCapabilities}
+              isAuthLoading={!session || !authCapabilities}
+              onNavigate={(pathname) => {
+                navigate(pathname);
+              }}
+              onRefreshSession={(forceRefresh) => {
+                return refreshAuth(forceRefresh);
+              }}
+              session={session}
+            />
+          ) : null}
+          {route.kind === "sign-up" ? (
+            <SignUpPage
+              authCapabilities={authCapabilities}
+              isAuthLoading={!session || !authCapabilities}
+              onNavigate={(pathname) => {
+                navigate(pathname);
+              }}
+              onRefreshSession={(forceRefresh) => {
+                return refreshAuth(forceRefresh);
+              }}
+              session={session}
+            />
+          ) : null}
+          {route.kind === "complete-account" ? (
+            <CompleteAccountPage
+              authCapabilities={authCapabilities}
+              onNavigate={(pathname) => {
+                navigate(pathname);
+              }}
+              onRefreshSession={(forceRefresh) => {
+                return refreshAuth(forceRefresh);
+              }}
+              session={session}
+            />
+          ) : null}
+          {route.kind === "my-profile" ? (
+            <MyProfilePage
+              onNavigate={(pathname) => {
+                navigate(pathname);
+              }}
+              onRefreshSession={(forceRefresh) => {
+                return refreshAuth(forceRefresh);
+              }}
+              session={session}
+            />
+          ) : null}
+          {route.kind === "appearance" ? <AccountPlaceholderPage title="Appearance" /> : null}
+          {route.kind === "direct-messages" || route.kind === "direct-message-thread" ? (
+            <DirectMessagesPage
+              onNavigate={(pathname) => {
+                navigate(pathname);
+              }}
+              onUnreadCountChange={setDirectMessagesUnreadCount}
+              selectedThreadId={route.kind === "direct-message-thread" ? route.threadId : null}
+              session={session}
+            />
+          ) : null}
+          {route.kind === "my-organisation" ? (
+            <MyOrganisationPage
+              authCapabilities={authCapabilities}
+              onNavigate={(pathname) => {
+                navigate(pathname);
+              }}
+              onRefreshSession={(forceRefresh) => {
+                return refreshAuth(forceRefresh);
+              }}
+              session={session}
+            />
+          ) : null}
+          {route.kind === "legacy-join" ? (
+            <LegacyJoinPage
+              meetingCode={route.meetingCode}
+              onNavigate={(pathname, replace) => {
+                navigate(pathname, { replace });
+              }}
+            />
+          ) : null}
+          {route.kind === "stage-lab" ? <MeetingStageLabPage search={window.location.search} /> : null}
+          {route.kind === "meeting" ? (
+            <MeetingRoomPage
+              authCapabilities={authCapabilities}
+              isAuthLoading={!session || !authCapabilities}
+              meetingCode={route.meetingCode}
+              onNavigate={(pathname, options) => {
+                navigate(pathname, options);
+              }}
+              onRefreshSession={(forceRefresh) => {
+                return refreshAuth(forceRefresh);
+              }}
+              session={session}
+            />
+          ) : null}
+        </Suspense>
       </AppLayout>
 
       {pendingMeetingLaunch ? (

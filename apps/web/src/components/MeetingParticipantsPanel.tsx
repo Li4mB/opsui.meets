@@ -1,5 +1,6 @@
 import type { ParticipantState } from "@opsui/shared-types";
 import type { ReactNode } from "react";
+import { isTestRoomDummyParticipantId } from "../lib/test-room";
 import {
   CloseIcon,
   MicrophoneIcon,
@@ -65,10 +66,10 @@ export function MeetingParticipantsPanel(props: MeetingParticipantsPanelProps) {
                 key={participant.participantId}
                 participant={participant}
                 showHostLabel={isHostRole(participant.role)}
-                showRemoveAction={props.canManageMeeting}
+                showRemoveAction={props.canManageMeeting && !isTestRoomDummyParticipantId(participant.participantId)}
                 showYouLabel={participant.participantId === props.currentParticipantId}
                 onRemove={
-                  props.canManageMeeting
+                  props.canManageMeeting && !isTestRoomDummyParticipantId(participant.participantId)
                     ? () => {
                         props.onRemoveParticipant(participant.participantId);
                       }

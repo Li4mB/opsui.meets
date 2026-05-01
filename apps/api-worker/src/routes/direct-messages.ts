@@ -44,6 +44,11 @@ interface DirectMessageAttachmentSignPayload {
   files?: unknown;
 }
 
+interface DirectMessageThreadCreatePayload {
+  username?: unknown;
+  memberUserIds?: unknown;
+}
+
 interface DirectMessageSendPayload {
   text?: unknown;
   attachmentIds?: unknown;
@@ -164,7 +169,28 @@ export async function createOrGetDirectMessageThread(request: Request, env: Env)
   const actor = getActorContext(request);
   const userId = requireAuthenticatedUserId(request);
   const repositories = await getRepositories(env);
-  const payload = await parseJson<{ username: string }>(request);
+  const payload = await parseJson<DirectMessageThreadCreatePayload>(request);
+  const memberUserIds = parseGroupMemberUserIds(payload.memberUserIds);
+  if (memberUserIds.length) {
+    const thread = createGroupDirectMessageThread(repositories, userId, memberUserIds);
+    await repositories.commit();
+
+    const detail = buildThreadDetail(thread.id, userId, repositories);
+    if (!detail) {
+      throw new ApiError(500, "thread_unavailable", "The group chat could not be opened.");
+    }
+
+    const response = json(detail, { status: 201 });
+    recordApiMetric(env, {
+      route: "dm-thread-open",
+      status: response.status,
+      request,
+      outcome: "group_created",
+      workspaceId: actor.workspaceId,
+    });
+    return response;
+  }
+
   const username = requireNonEmptyString(payload.username, "username_required");
   const target = repositories.users.getByUsername(username);
 
@@ -638,6 +664,68 @@ function buildParticipantKey(userA: string, userB: string): string {
   return [userA, userB].sort((left, right) => left.localeCompare(right)).join(":");
 }
 
+function parseGroupMemberUserIds(value: unknown): string[] {
+  if (value === undefined) {
+    return [];
+  }
+
+  if (!Array.isArray(value)) {
+    throw new ApiError(400, "group_members_invalid", "Choose people before creating a group chat.");
+  }
+
+  const ids = value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
+
+  return Array.from(new Set(ids));
+}
+
+function createGroupDirectMessageThread(
+  repositories: Repositories,
+  currentUserId: string,
+  memberUserIds: string[],
+): { id: string } {
+  const targetUserIds = memberUserIds.filter((userId) => userId !== currentUserId);
+  if (targetUserIds.length < 2) {
+    throw new ApiError(400, "group_members_required", "Choose at least two people for a group chat.");
+  }
+
+  for (const memberUserId of targetUserIds) {
+    if (!repositories.users.getById(memberUserId)) {
+      throw new ApiError(404, "user_not_found", "One or more selected people could not be found.");
+    }
+  }
+
+  const now = new Date().toISOString();
+  const thread = repositories.directMessages.createThread({
+    id: crypto.randomUUID(),
+    threadKind: "group",
+    participantKey: `group:${crypto.randomUUID()}`,
+    createdAt: now,
+    updatedAt: now,
+    lastMessageAt: null,
+    lastMessagePreview: null,
+  });
+
+  for (const memberUserId of [currentUserId, ...targetUserIds]) {
+    repositories.directMessages.addThreadMember({
+      threadId: thread.id,
+      userId: memberUserId,
+      joinedAt: now,
+      lastReadAt: null,
+      lastReadMessageId: null,
+    });
+  }
+
+  repositories.audit.append({
+    actor: currentUserId,
+    action: "direct_message.group_created",
+    target: thread.id,
+  });
+
+  return thread;
+}
+
 function buildSearchResult(user: {
   id: string;
   username: string;
@@ -676,6 +764,18 @@ function buildThreadSummary(
     return null;
   }
 
+  if (thread.threadKind === "group") {
+    return {
+      id: thread.id,
+      threadKind: "group",
+      group: buildGroupInfo(threadId, currentUserId, repositories),
+      lastMessagePreview: thread.lastMessagePreview,
+      lastMessageAt: thread.lastMessageAt,
+      unreadCount: getUnreadCount(threadId, currentUserId, repositories),
+      updatedAt: thread.updatedAt,
+    };
+  }
+
   const participant = getOtherParticipant(threadId, currentUserId, repositories);
   if (!participant) {
     return null;
@@ -702,21 +802,12 @@ function buildThreadDetail(
   }
 
   const thread = repositories.directMessages.getThreadById(threadId);
-  const participant = getOtherParticipant(threadId, currentUserId, repositories);
-  if (!thread || !participant) {
+  if (!thread) {
     return null;
   }
 
-  return {
-    id: thread.id,
-    threadKind: "direct",
-    participant,
-    lastMessagePreview: thread.lastMessagePreview,
-    lastMessageAt: thread.lastMessageAt,
-    unreadCount: getUnreadCount(threadId, currentUserId, repositories),
-    updatedAt: thread.updatedAt,
-    createdAt: thread.createdAt,
-  };
+  const summary = buildThreadSummary(threadId, currentUserId, repositories);
+  return summary ? { ...summary, createdAt: thread.createdAt } : null;
 }
 
 function buildDirectMessageMessage(
@@ -793,6 +884,29 @@ function getOtherParticipant(
   }
 
   return buildSearchResult(otherUser);
+}
+
+function buildGroupInfo(
+  threadId: string,
+  currentUserId: string,
+  repositories: Repositories,
+) {
+  const memberUsers = repositories.directMessages
+    .listThreadMembers(threadId)
+    .map((membership) => repositories.users.getById(membership.userId))
+    .filter((user): user is NonNullable<typeof user> => Boolean(user));
+  const otherMembers = memberUsers
+    .filter((user) => user.id !== currentUserId)
+    .map((user) => buildSearchResult(user));
+  const displayName = otherMembers.length
+    ? otherMembers.map((member) => member.displayName).join(", ")
+    : "Group chat";
+
+  return {
+    displayName,
+    memberCount: memberUsers.length,
+    members: otherMembers,
+  };
 }
 
 function getUnreadCount(

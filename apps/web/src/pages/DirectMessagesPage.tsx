@@ -10,6 +10,7 @@ import type {
   SessionInfo,
 } from "@opsui/shared-types";
 import {
+  createDirectMessageGroupThread,
   fetchDirectMessageAttachmentBlob,
   getDirectMessageThread,
   listDirectMessageMessages,
@@ -53,6 +54,11 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<DirectMessageSearchResult[]>([]);
+  const [groupCreatorOpen, setGroupCreatorOpen] = useState(false);
+  const [groupSearchQuery, setGroupSearchQuery] = useState("");
+  const [groupSearchResults, setGroupSearchResults] = useState<DirectMessageSearchResult[]>([]);
+  const [groupSelectedMembers, setGroupSelectedMembers] = useState<DirectMessageSearchResult[]>([]);
+  const [isCreatingGroup, setIsCreatingGroup] = useState(false);
   const [isLoadingThread, setIsLoadingThread] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [hasLoadedThread, setHasLoadedThread] = useState(false);
@@ -189,6 +195,32 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
   }, [authenticated, searchQuery]);
 
   useEffect(() => {
+    if (!authenticated || !groupCreatorOpen) {
+      setGroupSearchResults([]);
+      return;
+    }
+
+    const query = groupSearchQuery.trim();
+    if (!query) {
+      setGroupSearchResults([]);
+      return;
+    }
+
+    let cancelled = false;
+    const timeout = window.setTimeout(async () => {
+      const results = await searchDirectMessageUsers(query);
+      if (!cancelled) {
+        setGroupSearchResults(results);
+      }
+    }, 200);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [authenticated, groupCreatorOpen, groupSearchQuery]);
+
+  useEffect(() => {
     if (!authenticated || !props.selectedThreadId || !messages.length) {
       return;
     }
@@ -239,6 +271,59 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
     setSearchQuery("");
     setSearchResults([]);
     props.onNavigate(`/direct-messages/${encodeURIComponent(nextThread.thread.id)}`);
+  }
+
+  function handleToggleGroupCreator() {
+    setFeedback(null);
+    setGroupCreatorOpen((current) => !current);
+    setGroupSearchQuery("");
+    setGroupSearchResults([]);
+  }
+
+  function handleToggleGroupMember(result: DirectMessageSearchResult) {
+    setFeedback(null);
+    setGroupSelectedMembers((current) => {
+      if (current.some((member) => member.userId === result.userId)) {
+        return current.filter((member) => member.userId !== result.userId);
+      }
+
+      return [...current, result];
+    });
+  }
+
+  async function handleCreateGroupThread() {
+    if (isCreatingGroup) {
+      return;
+    }
+
+    if (groupSelectedMembers.length < 2) {
+      setFeedback("Choose at least two people for a group chat.");
+      return;
+    }
+
+    setFeedback(null);
+    setIsCreatingGroup(true);
+    const result = await createDirectMessageGroupThread(
+      groupSelectedMembers.map((member) => member.userId),
+    );
+    setIsCreatingGroup(false);
+
+    if (!result.ok) {
+      setFeedback(result.message);
+      return;
+    }
+
+    const nextThreads = await loadDirectMessageThreads();
+    if (nextThreads.ok) {
+      setThreads(nextThreads.items);
+      props.onUnreadCountChange(sumUnreadCount(nextThreads.items));
+    }
+
+    setGroupCreatorOpen(false);
+    setGroupSearchQuery("");
+    setGroupSearchResults([]);
+    setGroupSelectedMembers([]);
+    props.onNavigate(`/direct-messages/${encodeURIComponent(result.thread.id)}`);
   }
 
   function handleComposerFilesChange(event: ChangeEvent<HTMLInputElement>) {
@@ -382,6 +467,12 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
   }
 
   const unreadTotal = sumUnreadCount(threads);
+  const groupCandidates = buildGroupCandidates({
+    query: groupSearchQuery,
+    results: groupSearchResults,
+    selected: groupSelectedMembers,
+    threads,
+  });
 
   return (
     <section className={`page page--direct-messages${props.selectedThreadId ? " page--direct-messages-thread" : ""}`} style={{ padding: 0 }}>
@@ -391,12 +482,123 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
           <div className="dm-sidebar__header">
             <div>
               <p className="dm-eyebrow">Inbox</p>
-              <h1 className="dm-title">Direct Messages</h1>
+              <div className="dm-title-row">
+                <button
+                  aria-label="Create group chat"
+                  aria-pressed={groupCreatorOpen}
+                  className="dm-create-group-btn"
+                  onClick={handleToggleGroupCreator}
+                  title="Create group chat"
+                  type="button"
+                >
+                  <PersonPlusIcon />
+                </button>
+                <h1 className="dm-title">Direct Messages</h1>
+              </div>
             </div>
             {unreadTotal > 0 ? (
               <span className="dm-unread-badge">{unreadTotal} unread</span>
             ) : null}
           </div>
+
+          {groupCreatorOpen ? (
+            <div className="dm-group-creator">
+              {groupSelectedMembers.length ? (
+                <div className="dm-group-creator__selected" aria-label="Selected group members">
+                  {groupSelectedMembers.map((member) => (
+                    <button
+                      className="dm-group-chip"
+                      key={member.userId}
+                      onClick={() => {
+                        handleToggleGroupMember(member);
+                      }}
+                      type="button"
+                    >
+                      <span>{member.displayName}</span>
+                      x
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="dm-group-creator__hint">Choose at least two people.</p>
+              )}
+
+              <div className="dm-search dm-group-search">
+                <span className="dm-search__icon">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8" />
+                    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                </span>
+                <input
+                  aria-label="Search people for group chat"
+                  className="dm-search__input"
+                  onChange={(event) => {
+                    setGroupSearchQuery(event.target.value);
+                  }}
+                  placeholder="Add people..."
+                  type="search"
+                  value={groupSearchQuery}
+                />
+              </div>
+
+              <div className="dm-group-candidates">
+                {groupCandidates.length ? (
+                  groupCandidates.map((result) => {
+                    const selected = groupSelectedMembers.some((member) => member.userId === result.userId);
+                    return (
+                      <button
+                        className={`dm-group-candidate${selected ? " is-selected" : ""}`}
+                        key={result.userId}
+                        onClick={() => {
+                          handleToggleGroupMember(result);
+                        }}
+                        type="button"
+                      >
+                        <DirectMessageAvatar
+                          displayName={result.displayName}
+                          isOnline={result.isOnline}
+                          size="md"
+                          visual={result.avatarVisual}
+                        />
+                        <div className="dm-search-result__info">
+                          <span className="dm-search-result__name">{result.displayName}</span>
+                          <span className="dm-search-result__username">@{result.username}</span>
+                        </div>
+                        <span className="dm-group-candidate__check">{selected ? "Selected" : "Add"}</span>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <p className="dm-group-creator__empty">
+                    {groupSearchQuery.trim() ? "No matching usernames." : "Existing chats appear here first."}
+                  </p>
+                )}
+              </div>
+
+              <div className="dm-group-creator__actions">
+                <button
+                  className="button button--subtle"
+                  onClick={() => {
+                    setGroupCreatorOpen(false);
+                  }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className="button button--primary"
+                  disabled={groupSelectedMembers.length < 2 || isCreatingGroup}
+                  onClick={() => {
+                    void handleCreateGroupThread();
+                  }}
+                  type="button"
+                >
+                  Create
+                </button>
+              </div>
+            </div>
+          ) : null}
 
           {/* Search */}
           <div className="dm-search">
@@ -468,15 +670,10 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
                   }}
                   type="button"
                 >
-                  <DirectMessageAvatar
-                    displayName={thread.participant.displayName}
-                    isOnline={thread.participant.isOnline}
-                    size="md"
-                    visual={thread.participant.avatarVisual}
-                  />
+                  <ThreadAvatar thread={thread} size="md" />
                   <div className="dm-thread-item__info">
                     <div className="dm-thread-item__top">
-                      <span className="dm-thread-item__name">{thread.participant.displayName}</span>
+                      <span className="dm-thread-item__name">{getThreadDisplayName(thread)}</span>
                       <span className="dm-thread-item__time">
                         {formatRelativeTime(thread.lastMessageAt ?? thread.updatedAt)}
                       </span>
@@ -507,20 +704,19 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
               {/* Conversation Header */}
               <div className="dm-conversation__header">
                 <div className="dm-conversation__user">
-                  <DirectMessageAvatar
-                    displayName={selectedThread?.participant.displayName ?? ""}
-                    isOnline={selectedThread?.participant.isOnline}
-                    size="lg"
-                    visual={selectedThread?.participant.avatarVisual}
-                  />
+                  {selectedThread ? (
+                    <ThreadAvatar thread={selectedThread} size="lg" />
+                  ) : (
+                    <DirectMessageAvatar displayName="" size="lg" />
+                  )}
                   <div className="dm-conversation__user-info">
                     <p className="dm-conversation__eyebrow">Conversation</p>
                     <div className="dm-conversation__name">
-                      {selectedThread?.participant.displayName ?? "Loading..."}
+                      {selectedThread ? getThreadDisplayName(selectedThread) : "Loading..."}
                     </div>
                     {selectedThread ? (
                       <div className="dm-conversation__username">
-                        @{selectedThread.participant.username}
+                        {getThreadSubtitle(selectedThread)}
                       </div>
                     ) : null}
                   </div>
@@ -633,7 +829,7 @@ export function DirectMessagesPage(props: DirectMessagesPageProps) {
                       onChange={(event) => {
                         setDraft(event.target.value);
                       }}
-                      placeholder={`Message @${selectedThread?.participant.username ?? "user"}...`}
+                      placeholder={getComposerPlaceholder(selectedThread)}
                       value={draft}
                     />
                     <span className="dm-composer__counter">
@@ -825,6 +1021,7 @@ function DirectMessageAttachmentCard(props: { attachment: DirectMessageAttachmen
           <div className="dm-message-image__preview">
             <img
               alt={props.attachment.filename}
+              className="dm-attachment-card__image"
               src={previewUrl}
             />
           </div>
@@ -833,7 +1030,7 @@ function DirectMessageAttachmentCard(props: { attachment: DirectMessageAttachmen
             <span style={{ fontSize: 11, color: "rgba(255,255,255,0.2)" }}>Loading…</span>
           </div>
         ) : null}
-        <div className="dm-message-image__info">
+        <div className="dm-message-image__info dm-attachment-card__meta">
           <div className="dm-message-image__filename">{props.attachment.filename}</div>
           <span className="dm-message-image__size">{formatBytes(props.attachment.sizeBytes)}</span>
           {loadError ? <span className="dm-message-image__size">{loadError}</span> : null}
@@ -914,6 +1111,115 @@ function DirectMessageAttachmentCard(props: { attachment: DirectMessageAttachmen
 }
 
 /* ── Helper Functions ────────────────────────────── */
+
+function PersonPlusIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M19 8v6" />
+      <path d="M22 11h-6" />
+    </svg>
+  );
+}
+
+function ThreadAvatar(props: {
+  thread: DirectMessageThreadSummary | DirectMessageThreadDetail;
+  size: "md" | "lg";
+}) {
+  if (props.thread.threadKind === "group") {
+    return <DirectMessageGroupAvatar size={props.size} />;
+  }
+
+  return (
+    <DirectMessageAvatar
+      displayName={props.thread.participant.displayName}
+      isOnline={props.thread.participant.isOnline}
+      size={props.size}
+      visual={props.thread.participant.avatarVisual}
+    />
+  );
+}
+
+function DirectMessageGroupAvatar(props: { size: "md" | "lg" }) {
+  return (
+    <div className={`dm-avatar dm-avatar--${props.size}`}>
+      <div className="dm-avatar__surface dm-avatar__surface--group">
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+          <circle cx="9" cy="7" r="4" />
+          <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+          <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function getThreadDisplayName(thread: DirectMessageThreadSummary | DirectMessageThreadDetail): string {
+  return thread.threadKind === "group" ? thread.group.displayName : thread.participant.displayName;
+}
+
+function getThreadSubtitle(thread: DirectMessageThreadSummary | DirectMessageThreadDetail): string {
+  return thread.threadKind === "group" ? `${thread.group.memberCount} members` : `@${thread.participant.username}`;
+}
+
+function getComposerPlaceholder(thread: DirectMessageThreadDetail | null): string {
+  if (!thread) {
+    return "Message user...";
+  }
+
+  return thread.threadKind === "group" ? "Message group..." : `Message @${thread.participant.username}...`;
+}
+
+function buildGroupCandidates(input: {
+  query: string;
+  results: DirectMessageSearchResult[];
+  selected: DirectMessageSearchResult[];
+  threads: DirectMessageThreadSummary[];
+}): DirectMessageSearchResult[] {
+  const existing = input.threads
+    .filter((thread): thread is Extract<DirectMessageThreadSummary, { threadKind: "direct" }> =>
+      thread.threadKind === "direct",
+    )
+    .map((thread) => thread.participant);
+  const existingIds = new Set(existing.map((member) => member.userId));
+  const source = input.query.trim() ? input.results : existing;
+  const merged = [...input.selected, ...source];
+  const unique = new Map<string, DirectMessageSearchResult>();
+
+  for (const member of merged) {
+    unique.set(member.userId, member);
+  }
+
+  return [...unique.values()].sort((left, right) => {
+    const leftExisting = existingIds.has(left.userId);
+    const rightExisting = existingIds.has(right.userId);
+    if (leftExisting !== rightExisting) {
+      return leftExisting ? -1 : 1;
+    }
+
+    return left.displayName.localeCompare(right.displayName);
+  });
+}
 
 function DirectMessageAvatar(props: {
   displayName: string;

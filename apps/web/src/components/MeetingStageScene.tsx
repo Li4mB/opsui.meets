@@ -19,12 +19,15 @@ export interface MeetingStageParticipantTile {
 }
 
 interface MeetingStageSceneProps {
+  activeSpeakerTile?: MeetingStageParticipantTile | null;
   immersiveSoloMode?: boolean;
   participantTiles: MeetingStageParticipantTile[];
   primaryScreenShare: MeetingStageShareTile | null;
+  speakerViewEnabled?: boolean;
+  suppressParticipantAudio?: boolean;
 }
 
-type StageLayoutMode = "grid" | "share-bottom" | "share-side";
+type StageLayoutMode = "grid" | "share-bottom" | "share-focus" | "share-side" | "speaker";
 
 interface StageLayout {
   columns: number;
@@ -33,6 +36,7 @@ interface StageLayout {
   gridWidth: number;
   mode: StageLayoutMode;
   overflowCount: number;
+  placeholderCount: number;
   railSize: number | null;
   rowCounts: number[];
   tileAspectRatio: number;
@@ -45,36 +49,65 @@ const DEFAULT_STAGE_HEIGHT = 720;
 const PARTICIPANT_TILE_ASPECT_RATIO = 16 / 9;
 const SOLO_STAGE_EDGE_BUFFER = 5;
 
+type StageOverflowTile = ReturnType<typeof createOverflowTile>;
+type StagePlaceholderTile = ReturnType<typeof createPlaceholderTile>;
+type StageTile = MeetingStageParticipantTile | StageOverflowTile | StagePlaceholderTile;
+
 export function MeetingStageScene(props: MeetingStageSceneProps) {
   const [canvasNode, setCanvasNode] = useState<HTMLDivElement | null>(null);
   const size = useObservedElementSize(canvasNode);
+  const selfTile = props.participantTiles.find((tile) => tile.isSelf) ?? null;
+  const fallbackSpeakerTile = props.participantTiles.find((tile) => !isSelfStageTile(tile, selfTile)) ?? null;
+  const activeSpeakerTile =
+    props.activeSpeakerTile && !isSelfStageTile(props.activeSpeakerTile, selfTile)
+      ? props.activeSpeakerTile
+      : fallbackSpeakerTile;
+  const shareFocusMode = Boolean(props.primaryScreenShare);
+  const speakerViewActive = Boolean(props.speakerViewEnabled && !shareFocusMode);
+  const stageParticipantTiles = speakerViewActive
+    ? activeSpeakerTile
+      ? [activeSpeakerTile]
+      : []
+    : props.participantTiles;
   const showImmersiveSoloStage = Boolean(
     props.immersiveSoloMode &&
       !props.primaryScreenShare &&
-      props.participantTiles.length === 1,
+      stageParticipantTiles.length === 1,
   );
   const layout = useMemo(
     () =>
       computeStageLayout({
         hasShare: Boolean(props.primaryScreenShare),
         height: size.height || DEFAULT_STAGE_HEIGHT,
-        participantCount: props.participantTiles.length,
+        participantCount: stageParticipantTiles.length,
+        speakerView: speakerViewActive,
         showImmersiveSoloStage,
         width: size.width || DEFAULT_STAGE_WIDTH,
       }),
-    [props.participantTiles.length, props.primaryScreenShare, showImmersiveSoloStage, size.height, size.width],
+    [
+      props.primaryScreenShare,
+      showImmersiveSoloStage,
+      size.height,
+      size.width,
+      speakerViewActive,
+      stageParticipantTiles.length,
+    ],
   );
   const supportingStage = Boolean(props.primaryScreenShare);
-  const visibleParticipants = props.participantTiles.slice(0, layout.visibleParticipantCount);
-  const stageTiles = layout.overflowCount
-    ? [...visibleParticipants, createOverflowTile(layout.overflowCount)]
-    : visibleParticipants;
+  const visibleParticipants = stageParticipantTiles.slice(0, layout.visibleParticipantCount);
+  const placeholderTiles = Array.from({ length: layout.placeholderCount }, (_, index) =>
+    createPlaceholderTile(index),
+  );
+  const stageTiles: StageTile[] = layout.overflowCount
+    ? [...visibleParticipants, createOverflowTile(layout.overflowCount), ...placeholderTiles]
+    : [...visibleParticipants, ...placeholderTiles];
   const stageRows = useMemo(
     () => partitionStageTiles(stageTiles, layout.rowCounts),
     [layout.rowCounts, stageTiles],
   );
   const canvasStyle = buildCanvasStyle(layout);
   const tilesStyle = buildTilesStyle(layout);
+  const showSelfPip = Boolean(selfTile && (speakerViewActive || shareFocusMode));
 
   return (
     <div
@@ -82,7 +115,9 @@ export function MeetingStageScene(props: MeetingStageSceneProps) {
       data-stage-columns={String(layout.columns)}
       data-stage-layout={layout.mode}
       data-stage-overflow-count={String(layout.overflowCount)}
+      data-stage-placeholder-count={String(layout.placeholderCount)}
       data-stage-row-count={String(layout.rowCounts.length)}
+      data-stage-speaker-view={String(speakerViewActive)}
       data-stage-tile-width={String(Math.round(layout.tileWidth))}
       data-stage-visible-count={String(layout.visibleParticipantCount)}
       data-stage-viewport-height={String(Math.round(size.height || DEFAULT_STAGE_HEIGHT))}
@@ -99,42 +134,65 @@ export function MeetingStageScene(props: MeetingStageSceneProps) {
         />
       ) : null}
 
-      <div
-        className={`stage-tiles${supportingStage ? " stage-tiles--supporting" : ""}`}
-        style={tilesStyle}
-      >
-        {stageRows.map((row, rowIndex) => (
-          <div
-            className="stage-tiles__row"
-            data-stage-row={String(rowIndex + 1)}
-            data-stage-row-size={String(row.length)}
-            key={`row-${rowIndex}-${row.length}`}
-          >
-            {row.map((tile, index) =>
-              isOverflowTile(tile) ? (
-                <OverflowTile
-                  count={tile.overflowCount}
-                  key={`overflow-${rowIndex}-${tile.overflowCount}-${index}`}
-                  supporting={supportingStage}
-                />
-              ) : (
-                <MediaTile
-                  audioEnabled={tile.audioEnabled}
-                  audioTrack={tile.audioTrack}
-                  displayName={tile.displayName}
-                  immersive={showImmersiveSoloStage}
-                  isSelf={tile.isSelf}
-                  key={`${tile.participantId ?? tile.displayName}-${rowIndex}-${index}`}
-                  participantId={tile.participantId}
-                  supporting={supportingStage}
-                  videoEnabled={tile.videoEnabled}
-                  videoTrack={tile.videoTrack}
-                />
-              ),
-            )}
-          </div>
-        ))}
-      </div>
+      {!shareFocusMode && stageRows.length ? (
+        <div
+          className={`stage-tiles${supportingStage ? " stage-tiles--supporting" : ""}`}
+          style={tilesStyle}
+        >
+          {stageRows.map((row, rowIndex) => (
+            <div
+              className="stage-tiles__row"
+              data-stage-row={String(rowIndex + 1)}
+              data-stage-row-size={String(row.length)}
+              key={`row-${rowIndex}-${row.length}`}
+            >
+              {row.map((tile, index) =>
+                isOverflowTile(tile) ? (
+                  <OverflowTile
+                    count={tile.overflowCount}
+                    key={`overflow-${rowIndex}-${tile.overflowCount}-${index}`}
+                    supporting={supportingStage}
+                  />
+                ) : isPlaceholderTile(tile) ? (
+                  <PlaceholderTile key={`${tile.placeholderId}-${rowIndex}-${index}`} />
+                ) : (
+                  <MediaTile
+                    audioEnabled={tile.audioEnabled}
+                    audioTrack={tile.audioTrack}
+                    displayName={tile.displayName}
+                    immersive={showImmersiveSoloStage}
+                    isSelf={tile.isSelf}
+                    key={`${tile.participantId ?? tile.displayName}-${rowIndex}-${index}`}
+                    participantId={tile.participantId}
+                    supporting={supportingStage}
+                    suppressAudioPlayback={Boolean(props.suppressParticipantAudio)}
+                    videoEnabled={tile.videoEnabled}
+                    videoTrack={tile.videoTrack}
+                  />
+                ),
+              )}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {speakerViewActive && !activeSpeakerTile ? <EmptySpeakerStage /> : null}
+
+      {shareFocusMode ? (
+        <StagePipStack
+          activeSpeakerTile={activeSpeakerTile}
+          placement="bottom-left"
+          selfTile={selfTile}
+          showSelf={Boolean(selfTile)}
+        />
+      ) : showSelfPip ? (
+        <StagePipStack
+          activeSpeakerTile={null}
+          placement="bottom-right"
+          selfTile={selfTile}
+          showSelf
+        />
+      ) : null}
     </div>
   );
 }
@@ -147,6 +205,7 @@ function MediaTile(props: {
   isSelf?: boolean;
   participantId?: string | null;
   supporting?: boolean;
+  suppressAudioPlayback?: boolean;
   videoEnabled: boolean;
   videoTrack?: MediaStreamTrack | null;
 }) {
@@ -171,18 +230,19 @@ function MediaTile(props: {
       return;
     }
 
-    if (props.audioEnabled && props.audioTrack) {
+    if (!props.suppressAudioPlayback && props.audioEnabled && props.audioTrack) {
       audioRef.current.srcObject = new MediaStream([props.audioTrack]);
       void audioRef.current.play().catch(() => {});
       return;
     }
 
     audioRef.current.srcObject = null;
-  }, [props.audioEnabled, props.audioTrack, props.isSelf]);
+  }, [props.audioEnabled, props.audioTrack, props.isSelf, props.suppressAudioPlayback]);
 
   return (
     <article
       className={`participant-tile participant-tile--media${props.videoEnabled && props.videoTrack ? "" : " participant-tile--muted"}${props.immersive ? " participant-tile--immersive" : ""}${props.supporting ? " participant-tile--supporting" : ""}`}
+      data-stage-participant-id={props.participantId ?? ""}
       data-stage-role="participant"
     >
       <div className="participant-tile__media-shell">
@@ -205,6 +265,108 @@ function MediaTile(props: {
           <div className="participant-tile__nameplate">
             <strong>{props.displayName}</strong>
           </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function EmptySpeakerStage() {
+  return (
+    <div className="speaker-stage-empty" data-stage-role="speaker-empty">
+      <div className="participant-tile__avatar participant-tile__avatar--ghost">O</div>
+      <div className="participant-tile__meta">
+        <strong>Waiting for a speaker</strong>
+        <span>Other participants will appear here when available.</span>
+      </div>
+    </div>
+  );
+}
+
+export function StagePipStack(props: {
+  activeSpeakerTile: MeetingStageParticipantTile | null;
+  placement: "bottom-left" | "bottom-right";
+  selfTile: MeetingStageParticipantTile | null;
+  showSelf: boolean;
+}) {
+  const showSelfMini = Boolean(props.showSelf && props.selfTile && props.activeSpeakerTile);
+  const showSelfNormal = Boolean(props.showSelf && props.selfTile && !props.activeSpeakerTile);
+
+  return (
+    <div className={`stage-pip-stack stage-pip-stack--${props.placement}`}>
+      {showSelfMini && props.selfTile ? (
+        <MeetingStagePip kind="self" size="mini" tile={props.selfTile} />
+      ) : null}
+      {props.activeSpeakerTile ? (
+        <MeetingStagePip kind="active" size="normal" tile={props.activeSpeakerTile} />
+      ) : null}
+      {showSelfNormal && props.selfTile ? (
+        <MeetingStagePip kind="self" size="normal" tile={props.selfTile} />
+      ) : null}
+    </div>
+  );
+}
+
+export function MeetingStagePip(props: {
+  kind: "active" | "self";
+  size: "mini" | "normal";
+  tile: MeetingStageParticipantTile;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const role = props.kind === "self" ? "self-pip" : "active-speaker-pip";
+  const label = props.kind === "self" ? "Your camera" : "Active speaker";
+
+  useEffect(() => {
+    if (!videoRef.current) {
+      return;
+    }
+
+    if (props.tile.videoEnabled && props.tile.videoTrack) {
+      videoRef.current.srcObject = new MediaStream([props.tile.videoTrack]);
+      return;
+    }
+
+    videoRef.current.srcObject = null;
+  }, [props.tile.videoEnabled, props.tile.videoTrack]);
+
+  return (
+    <article
+      aria-label={label}
+      className={`meeting-stage-pip meeting-stage-pip--${props.kind} meeting-stage-pip--${props.size}`}
+      data-stage-participant-id={props.tile.participantId ?? ""}
+      data-stage-role={role}
+    >
+      <div className="meeting-stage-pip__media">
+        <video
+          autoPlay
+          className="meeting-stage-pip__video"
+          muted
+          playsInline
+          ref={videoRef}
+        />
+        {!props.tile.videoEnabled || !props.tile.videoTrack ? (
+          <div className="meeting-stage-pip__placeholder">
+            <div className="participant-tile__avatar">{getInitials(props.tile.displayName)}</div>
+          </div>
+        ) : null}
+        <div className="meeting-stage-pip__nameplate">
+          <strong>{props.tile.displayName}</strong>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function PlaceholderTile() {
+  return (
+    <article
+      aria-hidden="true"
+      className="participant-tile participant-tile--placeholder"
+      data-stage-role="placeholder"
+    >
+      <div className="participant-tile__placeholder participant-tile__placeholder--brand">
+        <div className="participant-tile__avatar participant-tile__avatar--brand">
+          <img alt="" draggable={false} src="/OpsUIMeets-Logo.png" />
         </div>
       </div>
     </article>
@@ -293,6 +455,7 @@ function computeStageLayout(input: {
   hasShare: boolean;
   height: number;
   participantCount: number;
+  speakerView: boolean;
   showImmersiveSoloStage: boolean;
   width: number;
 }): StageLayout {
@@ -301,14 +464,15 @@ function computeStageLayout(input: {
   const height = Math.max(220, input.height);
   const gap = getStageGap(width);
 
-  if (!participantCount) {
+  if (input.hasShare) {
     return {
-      columns: 1,
+      columns: 0,
       gap,
       gridHeight: 0,
       gridWidth: 0,
-      mode: input.hasShare ? "share-bottom" : "grid",
+      mode: "share-focus",
       overflowCount: 0,
+      placeholderCount: 0,
       railSize: null,
       rowCounts: [],
       tileAspectRatio: PARTICIPANT_TILE_ASPECT_RATIO,
@@ -317,18 +481,27 @@ function computeStageLayout(input: {
     };
   }
 
-  if (!input.hasShare) {
-    return getGridLayout({
+  if (!participantCount) {
+    return {
+      columns: 1,
       gap,
-      height,
-      participantCount,
-      width,
-    });
+      gridHeight: 0,
+      gridWidth: 0,
+      mode: input.speakerView ? "speaker" : "grid",
+      overflowCount: 0,
+      placeholderCount: 0,
+      railSize: null,
+      rowCounts: [],
+      tileAspectRatio: PARTICIPANT_TILE_ASPECT_RATIO,
+      tileWidth: 0,
+      visibleParticipantCount: 0,
+    };
   }
 
-  return getShareLayout({
+  return getGridLayout({
     gap,
     height,
+    mode: input.speakerView ? "speaker" : "grid",
     participantCount,
     width,
   });
@@ -337,70 +510,36 @@ function computeStageLayout(input: {
 function getGridLayout(input: {
   gap: number;
   height: number;
+  mode?: "grid" | "speaker";
   participantCount: number;
   width: number;
 }): StageLayout {
-  const maxColumns = getGridColumnLimit(input.participantCount, input.width);
-  let bestLayout: {
-    columns: number;
-    gridHeight: number;
-    gridWidth: number;
-    rowCounts: number[];
-    score: number;
-    tileWidth: number;
-  } | null = null;
-
-  for (let columns = 1; columns <= maxColumns; columns += 1) {
-    const rowCounts = buildBalancedRowCounts(input.participantCount, columns);
-    const candidate = evaluateGridCandidate({
-      gap: input.gap,
-      height: input.height,
-      maxTileWidth: getGridTileWidthCap(input.participantCount, input.width, input.height),
-      rowCounts,
-      width: input.width,
-    });
-
-    if (!candidate) {
-      continue;
-    }
-
-    const maxRowItems = Math.max(...rowCounts);
-    const minRowItems = Math.min(...rowCounts);
-    const rows = rowCounts.length;
-    const verticalBiasPenalty = Math.max(0, rows - maxRowItems) * 12_000;
-    const horizontalBiasPenalty = Math.max(0, maxRowItems - rows - 1) * 8_000;
-    const rowPenalty = (rows - 1) * 3_600;
-    const imbalancePenalty = (maxRowItems - minRowItems) * 4_000;
-    const score =
-      candidate.tileWidth * candidate.tileHeight -
-      verticalBiasPenalty -
-      horizontalBiasPenalty -
-      rowPenalty -
-      imbalancePenalty;
-
-    if (!bestLayout || score > bestLayout.score) {
-      bestLayout = {
-        columns,
-        gridHeight: candidate.gridHeight,
-        gridWidth: candidate.gridWidth,
-        rowCounts,
-        score,
-        tileWidth: candidate.tileWidth,
-      };
-    }
-  }
+  const matrix = getGridMatrix(input.participantCount);
+  const rowCounts = Array.from({ length: matrix.rows }, () => matrix.columns);
+  const candidate = evaluateGridCandidate({
+    gap: input.gap,
+    height: input.height,
+    maxTileWidth:
+      input.participantCount <= 1
+        ? getSoloGridTileWidthCap(input.width, input.height)
+        : Number.POSITIVE_INFINITY,
+    rowCounts,
+    width: input.width,
+  });
+  const renderedSlots = matrix.columns * matrix.rows;
 
   return {
-    columns: bestLayout?.columns ?? 1,
+    columns: matrix.columns,
     gap: input.gap,
-    gridHeight: bestLayout?.gridHeight ?? 0,
-    gridWidth: bestLayout?.gridWidth ?? 0,
-    mode: "grid",
+    gridHeight: candidate?.gridHeight ?? 0,
+    gridWidth: candidate?.gridWidth ?? 0,
+    mode: input.mode ?? "grid",
     overflowCount: 0,
+    placeholderCount: Math.max(0, renderedSlots - input.participantCount),
     railSize: null,
-    rowCounts: bestLayout?.rowCounts ?? [],
+    rowCounts,
     tileAspectRatio: PARTICIPANT_TILE_ASPECT_RATIO,
-    tileWidth: bestLayout?.tileWidth ?? 0,
+    tileWidth: candidate?.tileWidth ?? 0,
     visibleParticipantCount: input.participantCount,
   };
 }
@@ -518,6 +657,7 @@ function getShareBottomLayout(input: {
         gridWidth: Math.min(input.width, 320),
         mode: "share-bottom",
         overflowCount: 0,
+        placeholderCount: 0,
         railSize: null,
         rowCounts: [1],
         tileAspectRatio: PARTICIPANT_TILE_ASPECT_RATIO,
@@ -536,6 +676,7 @@ function getShareBottomLayout(input: {
       gridWidth: chosenLayout.gridWidth,
       mode: "share-bottom",
       overflowCount: 0,
+      placeholderCount: 0,
       railSize: null,
       rowCounts: chosenLayout.rowCounts,
       tileAspectRatio: PARTICIPANT_TILE_ASPECT_RATIO,
@@ -616,34 +757,47 @@ function getStageGap(width: number) {
   return 16;
 }
 
-function getGridColumnLimit(participantCount: number, width: number) {
-  const widthLimit = width >= 1320 ? 4 : width >= 920 ? 3 : width >= 620 ? 2 : 1;
-  const countLimit =
-    participantCount <= 2 ? 2 : participantCount <= 4 ? 2 : participantCount <= 9 ? 3 : 4;
-  return Math.min(participantCount, widthLimit, countLimit);
-}
-
-function getGridTileWidthCap(participantCount: number, width: number, height: number) {
+function getGridMatrix(participantCount: number) {
   if (participantCount <= 1) {
-    return Math.min(
-      Math.max(0, width - SOLO_STAGE_EDGE_BUFFER * 2),
-      Math.max(0, height * PARTICIPANT_TILE_ASPECT_RATIO),
-    );
+    return {
+      columns: 1,
+      rows: 1,
+    };
   }
 
   if (participantCount <= 2) {
-    return Math.min(520, width * 0.44);
+    return {
+      columns: 2,
+      rows: 1,
+    };
   }
 
-  if (participantCount <= 4) {
-    return Math.min(420, width * 0.34);
+  if (participantCount <= 3) {
+    return {
+      columns: 3,
+      rows: 1,
+    };
   }
 
-  if (participantCount <= 6) {
-    return Math.min(320, width * 0.28);
+  if (participantCount <= 12) {
+    return {
+      columns: 3,
+      rows: Math.ceil(participantCount / 3),
+    };
   }
 
-  return Math.min(280, width * 0.24);
+  const columns = Math.ceil(participantCount / 4);
+  return {
+    columns,
+    rows: Math.ceil(participantCount / columns),
+  };
+}
+
+function getSoloGridTileWidthCap(width: number, height: number) {
+  return Math.min(
+    Math.max(0, width - SOLO_STAGE_EDGE_BUFFER * 2),
+    Math.max(0, height * PARTICIPANT_TILE_ASPECT_RATIO),
+  );
 }
 
 function getSupportingTileWidthCap(displayedCells: number, width: number) {
@@ -698,10 +852,7 @@ function buildBalancedRowCounts(itemCount: number, columns: number) {
   return rowCounts;
 }
 
-function partitionStageTiles<T>(
-  items: T[],
-  rowCounts: number[],
-) {
+function partitionStageTiles<T>(items: T[], rowCounts: number[]) {
   if (!rowCounts.length) {
     return items.length ? [items] : [];
   }
@@ -759,10 +910,35 @@ function createOverflowTile(overflowCount: number) {
   };
 }
 
-function isOverflowTile(
-  tile: MeetingStageParticipantTile | ReturnType<typeof createOverflowTile>,
-): tile is ReturnType<typeof createOverflowTile> {
+function createPlaceholderTile(index: number) {
+  return {
+    kind: "placeholder" as const,
+    placeholderId: `stage-placeholder-${index + 1}`,
+  };
+}
+
+function isOverflowTile(tile: StageTile): tile is StageOverflowTile {
   return "kind" in tile && tile.kind === "overflow";
+}
+
+function isPlaceholderTile(tile: StageTile): tile is StagePlaceholderTile {
+  return "kind" in tile && tile.kind === "placeholder";
+}
+
+function isSelfStageTile(tile: MeetingStageParticipantTile, selfTile: MeetingStageParticipantTile | null) {
+  if (tile.isSelf) {
+    return true;
+  }
+
+  if (!selfTile) {
+    return false;
+  }
+
+  if (tile.participantId && selfTile.participantId) {
+    return tile.participantId === selfTile.participantId;
+  }
+
+  return false;
 }
 
 function clampValue(value: number, min: number, max: number) {

@@ -82,7 +82,7 @@ export interface UserPasswordCredentialRecord {
 
 export interface DirectMessageThreadRecord {
   id: string;
-  threadKind: "direct";
+  threadKind: "direct" | "group";
   participantKey: string;
   createdAt: string;
   updatedAt: string;

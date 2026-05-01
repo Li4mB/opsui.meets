@@ -1,5 +1,7 @@
 import type { MeetingDetail, ParticipantState, RecordingSummary } from "@opsui/shared-types";
 import { formatMeetingCodeLabel } from "../lib/meeting-code";
+import { isTestRoomDummyParticipantId } from "../lib/test-room";
+import type { StageViewMode } from "./MeetingMediaStage";
 import { CloseIcon, LinkIcon, RefreshIcon } from "./MeetingRoomIcons";
 
 interface MeetingInfoPanelProps {
@@ -21,6 +23,7 @@ interface MeetingInfoPanelProps {
   onRemoveParticipant(participantId: string): void;
   onSignIn(): void;
   onStartMeetingNow(): void;
+  onToggleStageView(): void;
   onToggleLock(): void;
   onToggleMuteAll(): void;
   onToggleRecording(): void;
@@ -28,6 +31,7 @@ interface MeetingInfoPanelProps {
   serviceMessage: string | null;
   sessionAuthenticated: boolean;
   showStartMeetingAction: boolean;
+  stageViewMode: StageViewMode;
 }
 
 export function MeetingInfoPanel(props: MeetingInfoPanelProps) {
@@ -85,6 +89,14 @@ export function MeetingInfoPanel(props: MeetingInfoPanelProps) {
               </span>
               Refresh
             </button>
+            <button
+              aria-pressed={props.stageViewMode === "speaker"}
+              className="button button--ghost"
+              onClick={props.onToggleStageView}
+              type="button"
+            >
+              Change View
+            </button>
             {!props.sessionAuthenticated ? (
               <button className="button button--ghost" onClick={props.onSignIn} type="button">
                 Sign In
@@ -113,7 +125,7 @@ export function MeetingInfoPanel(props: MeetingInfoPanelProps) {
                 key={participant.participantId}
                 onAdmit={null}
                 onRemove={
-                  props.meeting && props.canManageMeeting
+                  props.meeting && props.canManageMeeting && !isTestRoomDummyParticipantId(participant.participantId)
                     ? () => {
                         props.onRemoveParticipant(participant.participantId);
                       }

@@ -143,6 +143,98 @@ test("a brief offline interruption recovers without removing the participant fro
   await expect(page.getByRole("button", { name: "Leave" })).toBeVisible();
 });
 
+test("a single heartbeat transport failure does not flash the meeting service interruption warning", async ({ page }) => {
+  await signInThroughUi(page, "liam@example.com");
+  await page.goto("/ops-signin");
+  await expectDirectJoin(page);
+
+  let resolveHeartbeatFailure: (() => void) | undefined;
+  const heartbeatFailure = new Promise<void>((resolve) => {
+    resolveHeartbeatFailure = resolve;
+  });
+  let releaseRoomRefresh: (() => void) | undefined;
+  const roomRefreshGate = new Promise<void>((resolve) => {
+    releaseRoomRefresh = resolve;
+  });
+  let failedHeartbeat = false;
+  let holdNextRoomRefresh = false;
+  let heldRoomRefresh = false;
+
+  await page.route("**/v1/rooms/resolve/*/state", async (route) => {
+    if (holdNextRoomRefresh && !heldRoomRefresh) {
+      heldRoomRefresh = true;
+      await roomRefreshGate;
+    }
+
+    await route.continue();
+  });
+
+  await page.route("**/v1/meetings/*/participants/*/heartbeat", async (route) => {
+    if (!failedHeartbeat) {
+      failedHeartbeat = true;
+      holdNextRoomRefresh = true;
+      await route.abort("failed");
+      resolveHeartbeatFailure?.();
+      return;
+    }
+
+    await route.continue();
+  });
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event("focus"));
+  });
+  await heartbeatFailure;
+  await page.waitForTimeout(500);
+
+  await expect(page.getByText("Connection to meeting services was interrupted.")).toHaveCount(0);
+  releaseRoomRefresh?.();
+
+  await expect(page.getByRole("button", { name: "Leave" })).toBeVisible();
+  await page.waitForTimeout(4_300);
+  await expect(page.getByText("Connection to meeting services was interrupted.")).toHaveCount(0);
+
+  await page.unroute("**/v1/meetings/*/participants/*/heartbeat");
+  await page.unroute("**/v1/rooms/resolve/*/state");
+});
+
+test("a failed meeting-code lookup does not break later meeting creation", async ({ page }) => {
+  await signInThroughUi(page, "liam@example.com");
+  await page.goto("/");
+
+  await page.getByRole("textbox", { name: "Enter meeting code" }).fill("ops-definitely-missing");
+  await page.getByRole("button", { name: "Join" }).click();
+
+  await expect(page.getByRole("heading", { name: "That meeting code does not exist." })).toBeVisible();
+  await expect(page.getByText("Meeting services are temporarily unavailable.")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Back Home" }).click();
+  await page.getByRole("button", { name: "Start Meeting" }).click();
+
+  await expect(page).toHaveURL(/\/ops-/);
+  await expectDirectJoin(page);
+  await expect(page.getByText("Meeting services are temporarily unavailable.")).toHaveCount(0);
+  await expect(page.getByText("Connection to meeting services was interrupted.")).toHaveCount(0);
+});
+
+test("a failed meeting-code lookup does not break later valid meeting join", async ({ page }) => {
+  await signInThroughUi(page, "liam@example.com");
+  await page.goto("/");
+
+  await page.getByRole("textbox", { name: "Enter meeting code" }).fill("ops-not-real");
+  await page.getByRole("button", { name: "Join" }).click();
+
+  await expect(page.getByRole("heading", { name: "That meeting code does not exist." })).toBeVisible();
+  await page.getByRole("button", { name: "Back Home" }).click();
+
+  await page.getByRole("textbox", { name: "Enter meeting code" }).fill("ops-signin");
+  await page.getByRole("button", { name: "Join" }).click();
+
+  await expect(page).toHaveURL(/\/ops-signin$/);
+  await expectDirectJoin(page);
+  await expect(page.getByText("Meeting services are temporarily unavailable.")).toHaveCount(0);
+});
+
 async function signInThroughUi(page: Page, email: string) {
   await page.goto("/sign-in");
   await page.getByRole("textbox", { name: "Mock auth email" }).fill(email);

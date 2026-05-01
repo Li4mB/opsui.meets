@@ -74,7 +74,7 @@ export interface DirectMessagesRepositoryContract {
   getThreadMember(threadId: string, userId: string): DirectMessageThreadMemberRecord | null;
   updateThread(
     threadId: string,
-    patch: Partial<Omit<DirectMessageThreadRecord, "id" | "participantKey" | "threadKind">>,
+    patch: Partial<Omit<DirectMessageThreadRecord, "id" | "participantKey">>,
   ): DirectMessageThreadRecord | null;
   createMessage(message: DirectMessageMessageRecord): DirectMessageMessageRecord;
   listMessagesByThread(threadId: string): DirectMessageMessageRecord[];

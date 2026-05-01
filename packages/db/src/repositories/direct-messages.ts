@@ -64,7 +64,7 @@ export class DirectMessagesRepository {
 
   updateThread(
     threadId: string,
-    patch: Partial<Omit<DirectMessageThreadRecord, "id" | "participantKey" | "threadKind">>,
+    patch: Partial<Omit<DirectMessageThreadRecord, "id" | "participantKey">>,
   ): DirectMessageThreadRecord | null {
     const thread = this.getStore().directMessageThreads.find((entry) => entry.id === threadId) ?? null;
     if (!thread) {

@@ -17,9 +17,15 @@ export function AnimatedBackground() {
     let animationId: number;
     let time = 0;
 
+    const dpr = window.devicePixelRatio || 1;
+
     const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
     };
 
     resize();
@@ -64,18 +70,21 @@ export function AnimatedBackground() {
     }
 
     const draw = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, w, h);
       time += 0.003;
 
       for (const line of lines) {
         ctx.beginPath();
-        ctx.lineWidth = line.width;
+        ctx.lineWidth = Math.max(1, line.width * dpr);
         ctx.lineCap = "round";
 
-        const yBase = line.yBase * canvas.height;
+        const yBase = line.yBase * h;
 
-        for (let x = 0; x <= canvas.width; x += 3) {
-          const xNorm = x / canvas.width;
+        for (let x = 0; x <= w; x += 1) {
+          const xNorm = x / w;
           const wave1 =
             Math.sin(xNorm * line.frequency * Math.PI + time * line.speed + line.phase) * line.amplitude;
           const wave2 =
@@ -84,7 +93,7 @@ export function AnimatedBackground() {
             ) *
             line.amplitude *
             0.5;
-          const y = yBase + (wave1 + wave2) * canvas.height;
+          const y = yBase + (wave1 + wave2) * h;
 
           if (x === 0) {
             ctx.moveTo(x, y);
@@ -94,7 +103,7 @@ export function AnimatedBackground() {
         }
 
         // Apply edge fade via gradient
-        const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0);
+        const gradient = ctx.createLinearGradient(0, 0, w, 0);
         gradient.addColorStop(0, `rgba(255, 255, 255, 0)`);
         gradient.addColorStop(0.1, `rgba(255, 255, 255, ${line.opacity})`);
         gradient.addColorStop(0.5, `rgba(255, 255, 255, ${line.opacity * 1.2})`);

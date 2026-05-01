@@ -4,16 +4,20 @@ import {
   type MeetingStageParticipantTile,
   type MeetingStageShareTile,
 } from "../components/MeetingStageScene";
+import { MeetingToolStageShell, type StageViewMode } from "../components/MeetingMediaStage";
 
 interface MeetingStageLabPageProps {
   search: string;
 }
+
+const MAX_STAGE_LAB_PARTICIPANTS = 32;
 
 export function MeetingStageLabPage(props: MeetingStageLabPageProps) {
   const initialState = useMemo(() => parseInitialLabState(props.search), [props.search]);
   const [participantCount, setParticipantCount] = useState(initialState.participantCount);
   const [shareActive, setShareActive] = useState(initialState.shareActive);
   const [shareOwner, setShareOwner] = useState<"self" | "remote">(initialState.shareOwner);
+  const [stageViewMode, setStageViewMode] = useState<StageViewMode>(initialState.stageViewMode);
 
   const participantTiles = useMemo(
     () => buildLabParticipants(participantCount),
@@ -32,6 +36,12 @@ export function MeetingStageLabPage(props: MeetingStageLabPageProps) {
       isSelf: shareOwner === "self",
     };
   }, [participantTiles, shareActive, shareOwner]);
+  const selfTile = participantTiles.find((tile) => tile.isSelf) ?? null;
+  const selectedSpeakerTile = participantTiles[initialState.speakerIndex] ?? null;
+  const activeSpeakerTile =
+    selectedSpeakerTile && !selectedSpeakerTile.isSelf
+      ? selectedSpeakerTile
+      : participantTiles.find((tile) => !tile.isSelf) ?? null;
 
   return (
     <section className="stage-lab" data-stage-lab-root="">
@@ -57,7 +67,7 @@ export function MeetingStageLabPage(props: MeetingStageLabPageProps) {
           <button
             className="chip-button"
             onClick={() => {
-              setParticipantCount((current) => Math.min(12, current + 1));
+              setParticipantCount((current) => Math.min(MAX_STAGE_LAB_PARTICIPANTS, current + 1));
             }}
             type="button"
           >
@@ -71,6 +81,15 @@ export function MeetingStageLabPage(props: MeetingStageLabPageProps) {
             type="button"
           >
             {shareActive ? "Stop share" : "Start share"}
+          </button>
+          <button
+            className={`chip-button${stageViewMode === "speaker" ? "" : " chip-button--muted"}`}
+            onClick={() => {
+              setStageViewMode((current) => (current === "speaker" ? "grid" : "speaker"));
+            }}
+            type="button"
+          >
+            Speaker view
           </button>
           <button
             className={`chip-button${shareOwner === "self" ? "" : " chip-button--muted"}`}
@@ -96,14 +115,28 @@ export function MeetingStageLabPage(props: MeetingStageLabPageProps) {
       <div className="stage-lab__summary" role="status">
         <span>{participantCount} participants</span>
         <span>{shareActive ? `${shareOwner === "self" ? "Self" : "Remote"} share active` : "No active share"}</span>
+        <span>{stageViewMode === "speaker" ? "Speaker view" : "Grid view"}</span>
+        {initialState.tool === "whiteboard" ? <span>Whiteboard active</span> : null}
       </div>
 
       <div className="stage-lab__surface">
-        <MeetingStageScene
-          immersiveSoloMode
-          participantTiles={participantTiles}
-          primaryScreenShare={primaryScreenShare}
-        />
+        {initialState.tool === "whiteboard" ? (
+          <div className="meeting-stage-runtime meeting-stage-runtime--tool-open">
+            <MeetingToolStageShell
+              activeSpeakerTile={activeSpeakerTile}
+              selfTile={selfTile}
+              toolStage={<div aria-label="Whiteboard" className="meeting-whiteboard meeting-whiteboard--lab" />}
+            />
+          </div>
+        ) : (
+          <MeetingStageScene
+            activeSpeakerTile={activeSpeakerTile}
+            immersiveSoloMode
+            participantTiles={participantTiles}
+            primaryScreenShare={primaryScreenShare}
+            speakerViewEnabled={stageViewMode === "speaker"}
+          />
+        )}
       </div>
     </section>
   );
@@ -119,6 +152,7 @@ function buildLabParticipants(participantCount: number): MeetingStageParticipant
       audioEnabled,
       displayName,
       isSelf: index === 0,
+      participantId: `stage-lab-participant-${index + 1}`,
       videoEnabled,
     };
   });
@@ -128,12 +162,19 @@ function parseInitialLabState(search: string) {
   const params = new URLSearchParams(search);
   const rawParticipants = Number.parseInt(params.get("participants") ?? "4", 10);
   const participantCount = Number.isFinite(rawParticipants)
-    ? Math.min(12, Math.max(1, rawParticipants))
+    ? Math.min(MAX_STAGE_LAB_PARTICIPANTS, Math.max(1, rawParticipants))
     : 4;
+  const rawSpeakerIndex = Number.parseInt(params.get("speaker") ?? "1", 10);
+  const speakerIndex = Number.isFinite(rawSpeakerIndex)
+    ? Math.min(participantCount - 1, Math.max(0, rawSpeakerIndex))
+    : 1;
 
   return {
     participantCount,
     shareActive: params.get("share") === "1",
     shareOwner: params.get("shareOwner") === "self" ? "self" : "remote",
+    speakerIndex,
+    stageViewMode: params.get("view") === "speaker" ? "speaker" : "grid",
+    tool: params.get("tool") === "whiteboard" ? "whiteboard" : null,
   } as const;
 }
