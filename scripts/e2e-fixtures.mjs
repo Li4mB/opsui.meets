@@ -49,6 +49,119 @@ const apiServer = http.createServer(async (request, response) => {
     return;
   }
 
+  if (request.method === "GET" && url.pathname === "/v1/recordings") {
+    const userId = getRequestUserId(request);
+    pruneExpiredFixtureRecordings();
+    sendJson(request, response, 200, {
+      items: Array.from(state.recordingLibrary.values())
+        .filter((recording) => recording.ownerUserId === userId)
+        .sort((left, right) => Date.parse(right.createdAt ?? right.startedAt) - Date.parse(left.createdAt ?? left.startedAt))
+        .map((recording) => withFixtureRecordingUrls(recording)),
+    });
+    return;
+  }
+
+  const recordingUploadMatch = url.pathname.match(/^\/v1\/meetings\/([^/]+)\/recordings\/upload$/);
+  if (request.method === "POST" && recordingUploadMatch) {
+    const meeting = state.meetings.get(recordingUploadMatch[1]);
+    if (!meeting) {
+      sendJson(request, response, 404, { error: "meeting_not_found" });
+      return;
+    }
+
+    const formData = await readMultipartFormData(request);
+    const file = formData.files.get("file");
+    if (!file || !file.buffer.length) {
+      sendJson(request, response, 400, { error: "recording_file_required" });
+      return;
+    }
+
+    const createdAt = new Date().toISOString();
+    const recordingId = `recording_upload_${randomUUID()}`;
+    const recording = {
+      id: recordingId,
+      meetingInstanceId: meeting.id,
+      provider: "browser-screen",
+      status: "stopped",
+      contentType: file.contentType || "video/webm",
+      createdAt,
+      durationMs: Number(formData.fields.get("durationMs") ?? 0) || 0,
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString(),
+      filename: sanitizeFixtureFilename(formData.fields.get("filename") ?? file.filename ?? "recording.webm"),
+      ownerUserId: getRequestUserId(request),
+      saved: false,
+      sizeBytes: file.buffer.length,
+      startedAt: normalizeFixtureIso(formData.fields.get("startedAt"), createdAt),
+      stoppedAt: normalizeFixtureIso(formData.fields.get("stoppedAt"), createdAt),
+      title: formData.fields.get("title")?.trim() || meeting.title,
+    };
+
+    state.recordingLibrary.set(recording.id, recording);
+    state.recordingUploads.set(recording.id, {
+      buffer: file.buffer,
+      contentType: recording.contentType,
+      uploadedAt: createdAt,
+    });
+    sendJson(request, response, 201, withFixtureRecordingUrls(recording));
+    return;
+  }
+
+  const recordingContentMatch = url.pathname.match(/^\/v1\/recordings\/([^/]+)\/content$/);
+  if (request.method === "GET" && recordingContentMatch) {
+    const recording = state.recordingLibrary.get(recordingContentMatch[1]);
+    const userId = getRequestUserId(request);
+    if (!recording || recording.ownerUserId !== userId) {
+      sendJson(request, response, 404, { error: "recording_not_found" });
+      return;
+    }
+
+    const uploaded = state.recordingUploads.get(recording.id);
+    if (!uploaded) {
+      sendJson(request, response, 404, { error: "recording_unavailable" });
+      return;
+    }
+
+    writeCorsHeaders(request, response);
+    response.writeHead(200, {
+      "cache-control": "private, no-store",
+      "content-disposition": `${url.searchParams.get("download") === "1" ? "attachment" : "inline"}; filename="${sanitizeFixtureFilename(recording.filename ?? "recording.webm")}"`,
+      "content-length": String(uploaded.buffer.length),
+      "content-type": uploaded.contentType || recording.contentType || "video/webm",
+    });
+    response.end(uploaded.buffer);
+    return;
+  }
+
+  const recordingItemMatch = url.pathname.match(/^\/v1\/recordings\/([^/]+)$/);
+  if (request.method === "PATCH" && recordingItemMatch) {
+    const recording = state.recordingLibrary.get(recordingItemMatch[1]);
+    const userId = getRequestUserId(request);
+    if (!recording || recording.ownerUserId !== userId) {
+      sendJson(request, response, 404, { error: "recording_not_found" });
+      return;
+    }
+
+    const body = await readJsonBody(request);
+    recording.saved = Boolean(body?.saved);
+    recording.expiresAt = recording.saved ? null : new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString();
+    sendJson(request, response, 200, withFixtureRecordingUrls(recording));
+    return;
+  }
+
+  if (request.method === "DELETE" && recordingItemMatch) {
+    const recording = state.recordingLibrary.get(recordingItemMatch[1]);
+    const userId = getRequestUserId(request);
+    if (!recording || recording.ownerUserId !== userId) {
+      sendJson(request, response, 404, { error: "recording_not_found" });
+      return;
+    }
+
+    state.recordingLibrary.delete(recording.id);
+    state.recordingUploads.delete(recording.id);
+    sendJson(request, response, 200, { ok: true });
+    return;
+  }
+
   const directMessageUploadMatch = url.pathname.match(/^\/__uploads\/([^/]+)$/);
   if (request.method === "PUT" && directMessageUploadMatch) {
     const attachment = getFixtureDirectMessageAttachment(directMessageUploadMatch[1]);
@@ -1569,6 +1682,8 @@ function createInitialState() {
     nextWorkspaceNumber: 1,
     pendingOidcSessions: new Map(),
     participants: new Map(),
+    recordingLibrary: new Map(),
+    recordingUploads: new Map(),
     recordings: new Map(),
     rooms: new Map(),
     users: new Map(),
@@ -1629,6 +1744,11 @@ function createInitialState() {
     title: "Auth Redirect Room",
   });
 
+  const testMeeting = Array.from(nextState.meetings.values()).find((meeting) => meeting.title === "OpsUI Test Meeting");
+  if (testMeeting) {
+    seedFixtureRecording(nextState, testMeeting);
+  }
+
   return nextState;
 }
 
@@ -1663,6 +1783,33 @@ function seedRoom(nextState, input) {
     meetingInstanceId: meeting.id,
     provider: "mock",
     status: "idle",
+  });
+}
+
+function seedFixtureRecording(nextState, meeting) {
+  const createdAt = new Date().toISOString();
+  const recording = {
+    id: "recording_fixture_screen",
+    meetingInstanceId: meeting.id,
+    provider: "browser-screen",
+    status: "stopped",
+    contentType: "video/webm",
+    createdAt,
+    durationMs: 5_000,
+    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60_000).toISOString(),
+    filename: "fixture-screen-recording.webm",
+    ownerUserId: "guest_anonymous",
+    saved: false,
+    sizeBytes: 23,
+    startedAt: new Date(Date.now() - 5_000).toISOString(),
+    stoppedAt: createdAt,
+    title: "Fixture Screen Recording",
+  };
+  nextState.recordingLibrary.set(recording.id, recording);
+  nextState.recordingUploads.set(recording.id, {
+    buffer: Buffer.from("fixture screen recording"),
+    contentType: recording.contentType,
+    uploadedAt: createdAt,
   });
 }
 
@@ -1894,6 +2041,34 @@ function getCurrentSession(request) {
   }
 
   return session;
+}
+
+function getRequestUserId(request) {
+  const headerUserId = typeof request.headers["x-user-id"] === "string" ? request.headers["x-user-id"].trim() : "";
+  return headerUserId || getCurrentSession(request).actor.userId;
+}
+
+function withFixtureRecordingUrls(recording) {
+  return {
+    ...recording,
+    contentUrl: `http://${HOST}:${API_PORT}/v1/recordings/${encodeURIComponent(recording.id)}/content`,
+    downloadUrl: `http://${HOST}:${API_PORT}/v1/recordings/${encodeURIComponent(recording.id)}/content?download=1`,
+  };
+}
+
+function pruneExpiredFixtureRecordings() {
+  const now = Date.now();
+  for (const recording of Array.from(state.recordingLibrary.values())) {
+    if (recording.saved || !recording.expiresAt) {
+      continue;
+    }
+
+    const expiresAt = Date.parse(recording.expiresAt);
+    if (Number.isFinite(expiresAt) && expiresAt <= now) {
+      state.recordingLibrary.delete(recording.id);
+      state.recordingUploads.delete(recording.id);
+    }
+  }
 }
 
 function createGuestSession() {
@@ -2740,7 +2915,7 @@ function writeCorsHeaders(request, response) {
     "Access-Control-Allow-Headers",
     "content-type, idempotency-key, x-idempotency-key, x-user-id, x-user-email, x-workspace-id, x-workspace-role, x-session-type",
   );
-  response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, OPTIONS");
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   response.setHeader("Access-Control-Max-Age", "86400");
 }
 
@@ -2773,6 +2948,62 @@ function readJsonBody(request) {
   });
 }
 
+async function readMultipartFormData(request) {
+  const contentType = request.headers["content-type"] ?? "";
+  const boundaryMatch = String(contentType).match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  const boundary = boundaryMatch?.[1] ?? boundaryMatch?.[2] ?? "";
+  const body = await readBinaryBody(request);
+  const fields = new Map();
+  const files = new Map();
+  if (!boundary) {
+    return { fields, files };
+  }
+
+  const raw = body.toString("latin1");
+  const parts = raw.split(`--${boundary}`);
+  for (const part of parts) {
+    if (!part || part === "--\r\n" || part === "--") {
+      continue;
+    }
+
+    const normalizedPart = part.startsWith("\r\n") ? part.slice(2) : part;
+    const headerEnd = normalizedPart.indexOf("\r\n\r\n");
+    if (headerEnd < 0) {
+      continue;
+    }
+
+    const rawHeaders = normalizedPart.slice(0, headerEnd);
+    let rawContent = normalizedPart.slice(headerEnd + 4);
+    if (rawContent.endsWith("\r\n")) {
+      rawContent = rawContent.slice(0, -2);
+    }
+    if (rawContent.endsWith("--")) {
+      rawContent = rawContent.slice(0, -2);
+    }
+
+    const disposition = rawHeaders.match(/content-disposition:\s*form-data;([^\r\n]+)/i)?.[1] ?? "";
+    const name = disposition.match(/name="([^"]+)"/i)?.[1] ?? "";
+    if (!name) {
+      continue;
+    }
+
+    const filename = disposition.match(/filename="([^"]*)"/i)?.[1] ?? null;
+    const contentTypeValue = rawHeaders.match(/content-type:\s*([^\r\n]+)/i)?.[1]?.trim() ?? "";
+    if (filename !== null) {
+      files.set(name, {
+        buffer: Buffer.from(rawContent, "latin1"),
+        contentType: contentTypeValue,
+        filename,
+      });
+      continue;
+    }
+
+    fields.set(name, rawContent);
+  }
+
+  return { fields, files };
+}
+
 function readBinaryBody(request) {
   return new Promise((resolve) => {
     const chunks = [];
@@ -2783,6 +3014,15 @@ function readBinaryBody(request) {
       resolve(Buffer.concat(chunks));
     });
   });
+}
+
+function normalizeFixtureIso(value, fallback) {
+  if (typeof value !== "string" || !value.trim()) {
+    return fallback;
+  }
+
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : fallback;
 }
 
 function listen(server, port, label) {

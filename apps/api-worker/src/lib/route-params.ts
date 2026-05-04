@@ -120,6 +120,33 @@ export function getMeetingRecordingPath(pathname: string): { meetingInstanceId: 
   return { meetingInstanceId: match.groups.meetingInstanceId };
 }
 
+export function getMeetingRecordingUploadPath(pathname: string): { meetingInstanceId: string } | null {
+  const match = pathname.match(/^\/v1\/meetings\/(?<meetingInstanceId>[^/]+)\/recordings\/upload$/);
+  if (!match?.groups?.meetingInstanceId) {
+    return null;
+  }
+
+  return { meetingInstanceId: match.groups.meetingInstanceId };
+}
+
+export function getRecordingContentPath(pathname: string): { recordingId: string } | null {
+  const match = pathname.match(/^\/v1\/recordings\/(?<recordingId>[^/]+)\/content$/);
+  if (!match?.groups?.recordingId) {
+    return null;
+  }
+
+  return { recordingId: match.groups.recordingId };
+}
+
+export function getRecordingItemPath(pathname: string): { recordingId: string } | null {
+  const match = pathname.match(/^\/v1\/recordings\/(?<recordingId>[^/]+)$/);
+  if (!match?.groups?.recordingId) {
+    return null;
+  }
+
+  return { recordingId: match.groups.recordingId };
+}
+
 export function getMeetingMediaSessionPath(pathname: string): { meetingInstanceId: string } | null {
   const match = pathname.match(/^\/v1\/meetings\/(?<meetingInstanceId>[^/]+)\/media-session$/);
   if (!match?.groups?.meetingInstanceId) {

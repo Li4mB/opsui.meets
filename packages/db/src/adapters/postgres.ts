@@ -58,6 +58,9 @@ type MutationName =
   | "participants.muteAll"
   | "participants.endMeeting"
   | "recordings.upsert"
+  | "recordings.updateSaved"
+  | "recordings.deleteById"
+  | "recordings.pruneExpired"
   | "templates.create"
   | "actionItems.create"
   | "actionItems.complete"
@@ -151,6 +154,9 @@ export async function createPostgresRepositoryContext(
     "participants.muteAll": participants.muteAll.bind(participants),
     "participants.endMeeting": participants.endMeeting.bind(participants),
     "recordings.upsert": recordings.upsert.bind(recordings),
+    "recordings.updateSaved": recordings.updateSaved.bind(recordings),
+    "recordings.deleteById": recordings.deleteById.bind(recordings),
+    "recordings.pruneExpired": recordings.pruneExpired.bind(recordings),
     "templates.create": templates.create.bind(templates),
     "actionItems.create": actionItems.create.bind(actionItems),
     "actionItems.complete": actionItems.complete.bind(actionItems),
@@ -328,6 +334,30 @@ export async function createPostgresRepositoryContext(
   recordings.upsert = trackMutation("recordings.upsert", rawMutations["recordings.upsert"], mutationLog, () => {
     dirty = true;
   });
+  recordings.updateSaved = trackMutation(
+    "recordings.updateSaved",
+    rawMutations["recordings.updateSaved"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  recordings.deleteById = trackMutation(
+    "recordings.deleteById",
+    rawMutations["recordings.deleteById"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
+  recordings.pruneExpired = trackMutation(
+    "recordings.pruneExpired",
+    rawMutations["recordings.pruneExpired"],
+    mutationLog,
+    () => {
+      dirty = true;
+    },
+  );
   templates.create = trackMutation("templates.create", rawMutations["templates.create"], mutationLog, () => {
     dirty = true;
   });

@@ -48,7 +48,16 @@ import { testPostMeetingHook } from "./routes/post-meeting-hook-test";
 import { getWorkspacePolicy, updateWorkspacePolicy } from "./routes/policies";
 import { resolveRoom } from "./routes/room-resolve";
 import { getRoomState } from "./routes/room-state";
-import { startRecording, stopRecording } from "./routes/recordings";
+import {
+  deleteRecording,
+  getRecordingContent,
+  listRecordings,
+  pruneExpiredRecordings,
+  startRecording,
+  stopRecording,
+  updateRecordingSaved,
+  uploadBrowserRecording,
+} from "./routes/recordings";
 import { createRoom, listRooms } from "./routes/rooms";
 import { createTemplate } from "./routes/templates-create";
 import { listTemplates } from "./routes/templates";
@@ -78,6 +87,9 @@ import {
   getMeetingMuteAllPath,
   getMeetingParticipantModerationPath,
   getMeetingRecordingPath,
+  getMeetingRecordingUploadPath,
+  getRecordingContentPath,
+  getRecordingItemPath,
   getMeetingDetailPath,
   getMeetingJoinPath,
   getMeetingMediaSessionPath,
@@ -206,7 +218,18 @@ export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
         return withCors(routeResponse, request);
       }
 
+      if (request.method === "GET" && url.pathname === "/v1/recordings") {
+        routeResponse = await listRecordings(request, env);
+        return withCors(routeResponse, request);
+      }
+
       if (request.method === "GET") {
+        const recordingContentPath = getRecordingContentPath(url.pathname);
+        if (recordingContentPath) {
+          routeResponse = await getRecordingContent(request, recordingContentPath.recordingId, env);
+          return withCors(routeResponse, request);
+        }
+
         const directMessageThreadPath = getDirectMessageThreadPath(url.pathname);
         if (directMessageThreadPath) {
           routeResponse = await getDirectMessageThread(request, directMessageThreadPath.threadId, env);
@@ -417,6 +440,12 @@ export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
           return withCors(routeResponse, request);
         }
 
+        const recordingUploadPath = getMeetingRecordingUploadPath(url.pathname);
+        if (recordingUploadPath) {
+          routeResponse = await uploadBrowserRecording(request, recordingUploadPath.meetingInstanceId, env);
+          return withCors(routeResponse, request);
+        }
+
         const mediaSessionPath = getMeetingMediaSessionPath(url.pathname);
         if (mediaSessionPath) {
           routeResponse = await createMeetingMediaSession(request, mediaSessionPath.meetingInstanceId, env);
@@ -432,6 +461,22 @@ export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
             directMessageAttachmentContentPath.attachmentId,
             env,
           );
+          return withCors(routeResponse, request);
+        }
+      }
+
+      if (request.method === "PATCH") {
+        const recordingItemPath = getRecordingItemPath(url.pathname);
+        if (recordingItemPath) {
+          routeResponse = await updateRecordingSaved(request, recordingItemPath.recordingId, env);
+          return withCors(routeResponse, request);
+        }
+      }
+
+      if (request.method === "DELETE") {
+        const recordingItemPath = getRecordingItemPath(url.pathname);
+        if (recordingItemPath) {
+          routeResponse = await deleteRecording(request, recordingItemPath.recordingId, env);
           return withCors(routeResponse, request);
         }
       }
@@ -475,5 +520,8 @@ export default Sentry.withSentry<Env>((env) => getSentryOptions(env), {
       });
       return withCors(response, request);
     }
+  },
+  async scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+    await pruneExpiredRecordings(env);
   },
 } satisfies ExportedHandler<Env>);

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
 /**
- * Animated canvas background with sweeping curved white lines and subtle radial glows.
+ * Animated canvas background with sweeping curved white lines.
  * Extracted from the OpsUI Meets front-page design for reuse across pages.
  */
 export function AnimatedBackground() {
@@ -9,6 +9,12 @@ export function AnimatedBackground() {
 
   useEffect(() => {
     const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    // Register canvas for LiquidGlassCard to access
+    if (typeof window !== "undefined") {
+      (window as any).__bgCanvas = canvas;
+    }
     if (!canvas) return;
 
     const ctx = canvas.getContext("2d");
@@ -126,52 +132,16 @@ export function AnimatedBackground() {
   }, []);
 
   return (
-    <>
-      <canvas
-        ref={canvasRef}
-        style={{
-          position: "fixed",
-          inset: 0,
-          width: "100%",
-          height: "100%",
-          pointerEvents: "none",
-          zIndex: 0,
-        }}
-      />
-      {/* Subtle radial glows */}
-      <div
-        style={{
-          position: "fixed",
-          inset: 0,
-          pointerEvents: "none",
-          zIndex: 1,
-        }}
-      >
-        <div
-          style={{
-            position: "absolute",
-            top: "33%",
-            left: "25%",
-            width: 600,
-            height: 400,
-            background: "rgba(255, 255, 255, 0.01)",
-            borderRadius: "50%",
-            filter: "blur(150px)",
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            bottom: "25%",
-            right: "33%",
-            width: 400,
-            height: 400,
-            background: "rgba(255, 255, 255, 0.008)",
-            borderRadius: "50%",
-            filter: "blur(120px)",
-          }}
-        />
-      </div>
-    </>
+    <canvas
+      ref={canvasRef}
+      style={{
+        position: "fixed",
+        inset: 0,
+        width: "100%",
+        height: "100%",
+        pointerEvents: "none",
+        zIndex: 0,
+      }}
+    />
   );
 }

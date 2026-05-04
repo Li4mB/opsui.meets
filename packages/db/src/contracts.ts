@@ -155,6 +155,11 @@ export interface ParticipantsRepositoryContract {
 export interface RecordingsRepositoryContract {
   upsert(recording: RecordingSummary): RecordingSummary;
   getByMeetingInstanceId(meetingInstanceId: string): RecordingSummary | null;
+  getById(recordingId: string): RecordingSummary | null;
+  listByOwnerUserId(ownerUserId: string): RecordingSummary[];
+  updateSaved(recordingId: string, ownerUserId: string, saved: boolean): RecordingSummary | null;
+  deleteById(recordingId: string, ownerUserId?: string): RecordingSummary | null;
+  pruneExpired(now?: Date): string[];
 }
 
 export interface TemplatesRepositoryContract {

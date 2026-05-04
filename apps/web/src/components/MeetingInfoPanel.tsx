@@ -4,6 +4,8 @@ import { isTestRoomDummyParticipantId } from "../lib/test-room";
 import type { StageViewMode } from "./MeetingMediaStage";
 import { CloseIcon, LinkIcon, RefreshIcon } from "./MeetingRoomIcons";
 
+export type LocalRecordingControlState = "idle" | "starting" | "recording" | "stopping";
+
 interface MeetingInfoPanelProps {
   actionMessage: string | null;
   activeParticipants: ParticipantState[];
@@ -28,6 +30,7 @@ interface MeetingInfoPanelProps {
   onToggleMuteAll(): void;
   onToggleRecording(): void;
   recording: RecordingSummary | null;
+  localRecordingState: LocalRecordingControlState;
   serviceMessage: string | null;
   sessionAuthenticated: boolean;
   showStartMeetingAction: boolean;
@@ -36,6 +39,10 @@ interface MeetingInfoPanelProps {
 
 export function MeetingInfoPanel(props: MeetingInfoPanelProps) {
   const totalParticipants = props.activeParticipants.length + props.lobbyParticipants.length;
+  const recordingDetail = getRecordingDetail(props.localRecordingState, props.recording);
+  const recordingButtonLabel = getRecordingButtonLabel(props.localRecordingState);
+  const recordingButtonDisabled =
+    props.isActionBusy || props.localRecordingState === "starting" || props.localRecordingState === "stopping";
 
   return (
     <section className="panel-card meeting-drawer-panel meeting-info-panel">
@@ -60,7 +67,7 @@ export function MeetingInfoPanel(props: MeetingInfoPanelProps) {
             <Detail label="Code" value={formatMeetingCodeLabel(props.meetingCode)} />
             <Detail label="Identity" value={props.identityLabel} />
             <Detail label="Joined" value={props.joinState} />
-            <Detail label="Recording" value={props.recording?.status ?? "idle"} />
+            <Detail label="Recording" value={recordingDetail} />
             <Detail label="Participants" value={String(totalParticipants)} />
             <Detail label="Active" value={String(props.activeParticipants.length)} />
           </div>
@@ -97,6 +104,16 @@ export function MeetingInfoPanel(props: MeetingInfoPanelProps) {
             >
               Change View
             </button>
+            {props.meeting && !props.canManageMeeting ? (
+              <button
+                className="button button--ghost"
+                disabled={recordingButtonDisabled}
+                onClick={props.onToggleRecording}
+                type="button"
+              >
+                {recordingButtonLabel}
+              </button>
+            ) : null}
             {!props.sessionAuthenticated ? (
               <button className="button button--ghost" onClick={props.onSignIn} type="button">
                 Sign In
@@ -187,11 +204,11 @@ export function MeetingInfoPanel(props: MeetingInfoPanelProps) {
               </button>
               <button
                 className="button button--secondary"
-                disabled={props.isActionBusy}
+                disabled={recordingButtonDisabled}
                 onClick={props.onToggleRecording}
                 type="button"
               >
-                {props.recording?.status === "recording" ? "Stop Recording" : "Start Recording"}
+                {recordingButtonLabel}
               </button>
               <button
                 className="button button--danger"
@@ -207,6 +224,41 @@ export function MeetingInfoPanel(props: MeetingInfoPanelProps) {
       </div>
     </section>
   );
+}
+
+function getRecordingDetail(
+  localRecordingState: LocalRecordingControlState,
+  recording: RecordingSummary | null,
+): string {
+  if (localRecordingState === "starting") {
+    return "starting";
+  }
+
+  if (localRecordingState === "recording") {
+    return "recording";
+  }
+
+  if (localRecordingState === "stopping") {
+    return "uploading";
+  }
+
+  return recording?.status ?? "idle";
+}
+
+function getRecordingButtonLabel(localRecordingState: LocalRecordingControlState): string {
+  if (localRecordingState === "starting") {
+    return "Starting...";
+  }
+
+  if (localRecordingState === "recording") {
+    return "Stop Recording";
+  }
+
+  if (localRecordingState === "stopping") {
+    return "Uploading...";
+  }
+
+  return "Start Recording";
 }
 
 function Detail(props: { label: string; value: string }) {

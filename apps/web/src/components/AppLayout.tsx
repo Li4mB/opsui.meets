@@ -54,6 +54,16 @@ export function AppLayout(props: AppLayoutProps) {
       href: "/",
       label: "Home",
     },
+    {
+      active: props.currentPath === "/styles",
+      href: "/styles",
+      label: "Styles",
+    },
+    {
+      active: props.currentPath === "/recordings",
+      href: "/recordings",
+      label: "Recordings",
+    },
     ...(!signedIn
       ? [
           {

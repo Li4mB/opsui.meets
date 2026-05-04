@@ -14,7 +14,7 @@ import type {
 } from "@opsui/shared-types";
 import { MeetingConversationPanel } from "../components/MeetingConversationPanel";
 import { MeetingControlButton } from "../components/MeetingControlButton";
-import { MeetingInfoPanel } from "../components/MeetingInfoPanel";
+import { MeetingInfoPanel, type LocalRecordingControlState } from "../components/MeetingInfoPanel";
 import { MeetingJoinLoader } from "../components/MeetingJoinLoader";
 import { MeetingMediaStage, type MediaConnectionPhase, type StageViewMode } from "../components/MeetingMediaStage";
 import { MeetingToolsLauncher } from "../components/MeetingToolsLauncher";
@@ -43,6 +43,13 @@ import {
 } from "../lib/commands";
 import { REALTIME_BASE_URL } from "../lib/config";
 import { rotateJoinSessionId } from "../lib/join-session";
+import {
+  type CapturedRecording,
+  isLocalScreenRecordingSupported,
+  startLocalScreenRecording,
+  type LocalScreenRecordingSession,
+  uploadMeetingRecording,
+} from "../lib/local-recordings";
 import { formatMeetingCodeLabel } from "../lib/meeting-code";
 import { getMeetingShareUrl, loadMeetingRoomData, type MeetingRoomData } from "../lib/meetings";
 import {
@@ -117,6 +124,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   const [participantId, setParticipantId] = useState<string | null>(null);
   const [activeMeetingTool, setActiveMeetingTool] = useState<ActiveMeetingTool>(null);
   const [stageViewMode, setStageViewMode] = useState<StageViewMode>("grid");
+  const [localRecordingState, setLocalRecordingState] = useState<LocalRecordingControlState>("idle");
   const [isToolsLauncherOpen, setIsToolsLauncherOpen] = useState(false);
   const [liveStageParticipantCount, setLiveStageParticipantCount] = useState<number | null>(null);
   const [liveMediaByParticipantId, setLiveMediaByParticipantId] = useState<Record<string, ParticipantMediaIndicators>>(
@@ -127,6 +135,8 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     REALTIME_BASE_URL ? "disconnected" : "unavailable",
   );
   const activeMeetingSessionRef = useRef<{ meetingId: string; participantId: string } | null>(null);
+  const localRecordingSessionRef = useRef<LocalScreenRecordingSession | null>(null);
+  const isMountedRef = useRef(true);
   const autoJoinKeyRef = useRef<string | null>(null);
   const drawerSwitchTimeoutRef = useRef<number | null>(null);
   const lastLeaveRequestKeyRef = useRef<string | null>(null);
@@ -162,6 +172,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
 
   useEffect(() => {
     return () => {
+      isMountedRef.current = false;
       if (drawerSwitchTimeoutRef.current) {
         window.clearTimeout(drawerSwitchTimeoutRef.current);
       }
@@ -175,11 +186,32 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
       if (pendingServiceMessageTimeoutRef.current) {
         window.clearTimeout(pendingServiceMessageTimeoutRef.current);
       }
+      const activeRecordingSession = localRecordingSessionRef.current;
+      localRecordingSessionRef.current = null;
+      if (activeRecordingSession) {
+        void activeRecordingSession.stop();
+      }
     };
   }, []);
 
   function isActiveMeetingScope(scopeId: number): boolean {
     return meetingScopeRef.current === scopeId;
+  }
+
+  function stopLocalRecordingForRoomReset() {
+    const activeRecordingSession = localRecordingSessionRef.current;
+    if (!activeRecordingSession) {
+      return;
+    }
+
+    const activeMeetingId = loadState.status === "ready" ? loadState.data.meeting?.id ?? null : null;
+    const scopeId = meetingScopeRef.current;
+    localRecordingSessionRef.current = null;
+    setLocalRecordingState("idle");
+    void activeRecordingSession.stop();
+    if (activeMeetingId) {
+      syncRecordingCommand(() => stopRecording(activeMeetingId), scopeId);
+    }
   }
 
   const clearMeetingSessionRecovery = useEffectEvent(() => {
@@ -302,6 +334,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
   });
 
   const resetMeetingSessionState = useEffectEvent((options?: { clearGuestDisplayName?: boolean }) => {
+    stopLocalRecordingForRoomReset();
     closeDrawers();
     setJoinState("idle");
     setMediaConnectionPhase("idle");
@@ -312,6 +345,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     setParticipantId(null);
     setActiveMeetingTool(null);
     setStageViewMode("grid");
+    setLocalRecordingState("idle");
     setIsToolsLauncherOpen(false);
     setLiveStageParticipantCount(null);
     setLiveMediaByParticipantId({});
@@ -456,6 +490,7 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     meetingCodeRef.current = props.meetingCode;
     if (previousMeetingCode !== props.meetingCode) {
       leaveActiveMeetingSession({ rotateJoinSession: true });
+      stopLocalRecordingForRoomReset();
     }
 
     invalidateMeetingScope();
@@ -472,6 +507,8 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     setIsJoinLoaderMounted(true);
     setParticipantId(null);
     setActiveMeetingTool(null);
+    setStageViewMode("grid");
+    setLocalRecordingState("idle");
     setIsToolsLauncherOpen(false);
     setLiveStageParticipantCount(null);
     setLiveMediaByParticipantId({});
@@ -1154,6 +1191,105 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
     setActionMessage("Meeting started.");
   }
 
+  function watchLocalRecordingSession(session: LocalScreenRecordingSession, scopeId: number, meetingId: string) {
+    session.done
+      .then(async (capturedRecording) => {
+        const wasCurrentSession = localRecordingSessionRef.current?.id === session.id;
+        if (wasCurrentSession) {
+          localRecordingSessionRef.current = null;
+          syncRecordingCommand(() => stopRecording(meetingId), scopeId);
+        }
+
+        if (isMountedRef.current && (wasCurrentSession || isActiveMeetingScope(scopeId))) {
+          setLocalRecordingState("stopping");
+          setActionMessage("Uploading recording...");
+        }
+
+        const uploadResult = await uploadMeetingRecording(meetingId, capturedRecording);
+        if (!isMountedRef.current || (!wasCurrentSession && !isActiveMeetingScope(scopeId))) {
+          return;
+        }
+
+        setLocalRecordingState("idle");
+        setActionMessage(uploadResult.ok ? getLocalRecordingUploadedMessage(capturedRecording) : uploadResult.error);
+        scheduleRoomRefresh({ immediate: true, scopeId });
+      })
+      .catch(() => {
+        const wasCurrentSession = localRecordingSessionRef.current?.id === session.id;
+        if (wasCurrentSession) {
+          localRecordingSessionRef.current = null;
+          syncRecordingCommand(() => stopRecording(meetingId), scopeId);
+        }
+
+        if (!isMountedRef.current || (!wasCurrentSession && !isActiveMeetingScope(scopeId))) {
+          return;
+        }
+
+        setLocalRecordingState("idle");
+        setActionMessage("Recording stopped, but the video could not be prepared for upload.");
+      });
+  }
+
+  function syncRecordingCommand(action: () => Promise<boolean>, scopeId: number) {
+    void action().then((ok) => {
+      if (ok && isMountedRef.current && isActiveMeetingScope(scopeId)) {
+        scheduleRoomRefresh({ immediate: true, scopeId });
+      }
+    });
+  }
+
+  async function handleToggleRecording() {
+    if (!meeting) {
+      return;
+    }
+
+    if (localRecordingState === "starting" || localRecordingState === "stopping") {
+      return;
+    }
+
+    const activeRecordingSession = localRecordingSessionRef.current;
+    const scopeId = meetingScopeRef.current;
+    if (activeRecordingSession) {
+      setLocalRecordingState("stopping");
+      setActionMessage("Preparing recording...");
+      void activeRecordingSession.stop();
+      return;
+    }
+
+    if (!isLocalScreenRecordingSupported()) {
+      setActionMessage("Screen recording is not supported in this browser.");
+      return;
+    }
+
+    setLocalRecordingState("starting");
+    setActionMessage("Choose a screen, window, or tab to record.");
+
+    try {
+      const session = await startLocalScreenRecording({
+        meetingCode: props.meetingCode,
+        title: `Meeting ${formatMeetingCodeLabel(props.meetingCode)}`,
+      });
+
+      if (!isMountedRef.current || !isActiveMeetingScope(scopeId)) {
+        void session.stop();
+        return;
+      }
+
+      localRecordingSessionRef.current = session;
+      watchLocalRecordingSession(session, scopeId, meeting.id);
+      setLocalRecordingState("recording");
+      setActionMessage("Recording started. Your selected screen is being captured.");
+      syncRecordingCommand(() => startRecording(meeting.id), scopeId);
+    } catch (error) {
+      if (!isMountedRef.current || !isActiveMeetingScope(scopeId)) {
+        return;
+      }
+
+      setLocalRecordingState("idle");
+      setActionMessage(getLocalRecordingStartFailureMessage(error));
+    }
+  }
+
   function toggleDrawer(nextDrawer: Exclude<ActiveDrawer, null>) {
     setIsToolsLauncherOpen(false);
 
@@ -1712,20 +1848,10 @@ export function MeetingRoomPage(props: MeetingRoomPageProps) {
                 );
               }}
               onToggleRecording={() => {
-                if (!meeting) {
-                  return;
-                }
-
-                void runAction(
-                  () =>
-                    recording?.status === "recording"
-                      ? stopRecording(meeting.id)
-                      : startRecording(meeting.id),
-                  recording?.status === "recording" ? "Recording stopped." : "Recording started.",
-                  "Recording update failed.",
-                );
+                void handleToggleRecording();
               }}
               recording={recording}
+              localRecordingState={localRecordingState}
               serviceMessage={serviceMessage}
               sessionAuthenticated={Boolean(props.session?.authenticated)}
               showStartMeetingAction={!meeting && Boolean(props.session?.authenticated)}
@@ -2298,6 +2424,23 @@ function getChatDisabledReason(input: {
   }
 
   return null;
+}
+
+function getLocalRecordingUploadedMessage(recording: CapturedRecording): string {
+  const seconds = Math.max(1, Math.round(recording.durationMs / 1_000));
+  return `Recording uploaded to Recordings (${seconds}s).`;
+}
+
+function getLocalRecordingStartFailureMessage(error: unknown): string {
+  if (error instanceof DOMException && error.name === "NotAllowedError") {
+    return "Recording cancelled.";
+  }
+
+  if (error instanceof DOMException && error.name === "NotFoundError") {
+    return "No screen source was available to record.";
+  }
+
+  return "Recording could not be started.";
 }
 
 function isInMeetingPresence(

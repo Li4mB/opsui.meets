@@ -31,11 +31,17 @@ const MyOrganisationPage = lazy(() =>
 const MyProfilePage = lazy(() =>
   import("./pages/MyProfilePage").then((module) => ({ default: module.MyProfilePage })),
 );
+const RecordingsPage = lazy(() =>
+  import("./pages/RecordingsPage").then((module) => ({ default: module.RecordingsPage })),
+);
 const SignInPage = lazy(() =>
   import("./pages/SignInPage").then((module) => ({ default: module.SignInPage })),
 );
 const SignUpPage = lazy(() =>
   import("./pages/SignUpPage").then((module) => ({ default: module.SignUpPage })),
+);
+const StylesPage = lazy(() =>
+  import("./pages/StylesPage").then((module) => ({ default: module.StylesPage })),
 );
 
 export function App() {
@@ -318,6 +324,8 @@ export function App() {
             />
           ) : null}
           {route.kind === "appearance" ? <AccountPlaceholderPage title="Appearance" /> : null}
+          {route.kind === "styles" ? <StylesPage /> : null}
+          {route.kind === "recordings" ? <RecordingsPage /> : null}
           {route.kind === "direct-messages" || route.kind === "direct-message-thread" ? (
             <DirectMessagesPage
               onNavigate={(pathname) => {
